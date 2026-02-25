@@ -1,0 +1,41 @@
+version: "2.0"
+name: "lock-payment"
+description: "Lock around payment processing to prevent double-spend"
+tags: ["lock", "payment"]
+
+trigger:
+  http:
+    method: POST
+    path: /api/public/pay
+
+steps:
+  - id: acquire
+    action: lock
+    title: "Acquire payment lock"
+    config:
+      key: "payment-{{ trigger.body.order_id }}"
+      timeout: "30s"
+
+  - id: process
+    action: log
+    title: "Process payment"
+    depends_on: [acquire]
+    config:
+      message: "Processing payment for order {{ trigger.body.order_id }}"
+
+  - id: release
+    action: unlock
+    title: "Release payment lock"
+    depends_on: [process]
+    config:
+      key: "payment-{{ trigger.body.order_id }}"
+
+  - id: respond
+    action: response
+    title: "Return result"
+    depends_on: [release]
+    config:
+      status: 200
+      body:
+        status: "paid"
+        order_id: "{{ trigger.body.order_id }}"

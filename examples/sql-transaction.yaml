@@ -1,0 +1,76 @@
+version: "2.0"
+name: "sql-transaction"
+description: "SQL transaction: begin, insert order + items, commit (rollback on error)"
+tags: ["sql", "transaction"]
+
+trigger:
+  http:
+    method: POST
+    path: /api/public/orders
+
+steps:
+  - id: begin
+    action: sql.begin
+    title: "Begin transaction"
+    config:
+      dsn: "{{ env.DATABASE_URL }}"
+      name: "order_tx"
+
+  - id: insert_order
+    action: sql.exec
+    title: "Insert order"
+    depends_on: [begin]
+    config:
+      tx: "order_tx"
+      query: "INSERT INTO orders (customer_id, total) VALUES ($1, $2) RETURNING id"
+      params:
+        - "{{ trigger.body.customer_id }}"
+        - "{{ trigger.body.total }}"
+    on_error:
+      goto: rollback
+
+  - id: insert_item
+    action: sql.exec
+    title: "Insert order item"
+    depends_on: [insert_order]
+    config:
+      tx: "order_tx"
+      query: "INSERT INTO order_items (order_id, product_id, quantity) VALUES ($1, $2, $3)"
+      params:
+        - "{{ steps.insert_order.output.last_insert_id }}"
+        - "{{ trigger.body.product_id }}"
+        - "{{ trigger.body.quantity }}"
+    on_error:
+      goto: rollback
+
+  - id: commit
+    action: sql.commit
+    title: "Commit transaction"
+    depends_on: [insert_item]
+    config:
+      name: "order_tx"
+
+  - id: respond
+    action: response
+    title: "Return success"
+    depends_on: [commit]
+    config:
+      status: 201
+      body:
+        status: "created"
+        order_id: "{{ steps.insert_order.output.last_insert_id }}"
+
+  - id: rollback
+    action: sql.rollback
+    title: "Rollback on error"
+    config:
+      name: "order_tx"
+
+  - id: error_respond
+    action: response
+    title: "Return error"
+    depends_on: [rollback]
+    config:
+      status: 500
+      body:
+        error: "order creation failed"

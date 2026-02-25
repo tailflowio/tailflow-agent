@@ -1,0 +1,28 @@
+version: "2.0"
+name: "sql-users"
+description: "Query users from PostgreSQL and return as HTTP response"
+tags: ["sql", "api"]
+
+trigger:
+  http:
+    method: GET
+    path: /api/public/users
+
+steps:
+  - id: fetch
+    action: sql.query
+    title: "Fetch active users"
+    config:
+      dsn: "{{ env.DATABASE_URL }}"
+      query: "SELECT id, name, email FROM users WHERE status = $1 ORDER BY name"
+      params: ["active"]
+
+  - id: respond
+    action: response
+    title: "Return users"
+    depends_on: [fetch]
+    config:
+      status: 200
+      body:
+        users: "{{ steps.fetch.output.rows }}"
+        count: "{{ steps.fetch.output.count }}"

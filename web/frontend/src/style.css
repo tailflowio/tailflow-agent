@@ -1,0 +1,183 @@
+@import '@vue-flow/core/dist/style.css';
+@import '@vue-flow/core/dist/theme-default.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Dark theme (default) ── */
+:root {
+  --g-0: #000000;
+  --g-1: #121212;
+  --g-2: #1a1a1a;
+  --g-3: #212121;
+  --g-4: #272727;
+  --g-5: #2d2d2d;
+  --g-6: #363636;
+  --g-7: #444444;
+  --g-8: #5c5c5c;
+  --g-9: #737373;
+  --g-10: #8a8a8a;
+  --g-11: #a3a3a3;
+  --g-12: #d4d4d4;
+  --g-13: #ededed;
+  --g-14: #f5f5f5;
+  --g-15: #ffffff;
+  --c-green: 80 165 120;
+  --c-red: 195 90 90;
+  --c-amber: 195 158 55;
+  color-scheme: dark;
+}
+
+/* ── Light theme ── */
+:root.light {
+  --g-0: #eaeaea;
+  --g-1: #f2f2f2;
+  --g-2: #f8f8f8;
+  --g-3: #f5f5f5;
+  --g-4: #f0f0f0;
+  --g-5: #efefef;
+  --g-6: #e6e6e6;
+  --g-7: #c0c0c0;
+  --g-8: #888888;
+  --g-9: #666666;
+  --g-10: #444444;
+  --g-11: #2a2a2a;
+  --g-12: #1a1a1a;
+  --g-13: #141414;
+  --g-14: #1a1a1a;
+  --g-15: #1a1a1a;
+  --c-green: 55 140 95;
+  --c-red: 175 75 75;
+  --c-amber: 170 135 45;
+  color-scheme: light;
+}
+
+/* ── Light mode: elevated cards ── */
+:root.light .lm-card {
+  background: #ffffff;
+  border-color: rgba(0, 0, 0, 0.06);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+:root.light .lm-card > .lm-sticky {
+  background: #ffffff;
+}
+
+body {
+  background: var(--g-1);
+  color: var(--g-13);
+}
+
+/* ── Vue Flow ── */
+.vue-flow { background: var(--g-2) !important; }
+.vue-flow__background { background: var(--g-2) !important; }
+.vue-flow__edge-path { stroke: var(--g-6) !important; stroke-width: 1.5 !important; }
+.vue-flow__edge.animated .vue-flow__edge-path {
+  stroke: var(--g-8) !important;
+  stroke-dasharray: 5;
+  animation: dashmove .4s linear infinite;
+}
+@keyframes dashmove { to { stroke-dashoffset: -10; } }
+
+.vue-flow__handle {
+  background: var(--g-7) !important;
+  border: none !important;
+  width: 5px !important;
+  height: 5px !important;
+}
+.vue-flow__controls {
+  background: var(--g-3) !important;
+  border: 1px solid var(--g-6) !important;
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.15) !important;
+}
+.vue-flow__controls-button {
+  background: transparent !important;
+  border-color: var(--g-6) !important;
+  color: var(--g-9) !important;
+  fill: var(--g-9) !important;
+}
+.vue-flow__controls-button:hover {
+  background: var(--g-5) !important;
+  color: var(--g-12) !important;
+  fill: var(--g-12) !important;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--g-6); border-radius: 9px; }
+::-webkit-scrollbar-thumb:hover { background: var(--g-7); }
+
+/* ── Animations ── */
+@keyframes enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.anim-enter { animation: enter .15s ease-out both; }
+
+@keyframes glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(128,128,128,.06); }
+  50% { box-shadow: 0 0 16px 2px rgba(128,128,128,.04); }
+}
+.anim-glow { animation: glow 2.5s ease-in-out infinite; }
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.85); }
+}
+.pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.anim-fadeup { animation: fadeUp .5s ease both; }
+
+@keyframes float-1 {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-20px) rotate(5deg); }
+}
+@keyframes float-2 {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-15px) rotate(-3deg); }
+}
+@keyframes float-3 {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-25px) rotate(7deg); }
+}
+.float-1 { animation: float-1 6s ease-in-out infinite; }
+.float-2 { animation: float-2 7s ease-in-out infinite; }
+.float-3 { animation: float-3 8s ease-in-out infinite; }
+
+/* ── Delay utilities ── */
+.delay-1 { animation-delay: 100ms; }
+.delay-2 { animation-delay: 200ms; }
+.delay-3 { animation-delay: 300ms; }
+.delay-4 { animation-delay: 400ms; }
+.delay-5 { animation-delay: 500ms; }
+.delay-6 { animation-delay: 600ms; }
+
+/* ── Status online with pulse ring ── */
+.status-online {
+  position: relative;
+}
+.status-online::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 9999px;
+  border: 2px solid currentColor;
+  opacity: 0;
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+/* ── YAML syntax ── */
+.yaml-block { color: var(--g-10); }
+.yaml-key { color: var(--g-13); }
+.yaml-colon { color: var(--g-8); }
+.yaml-str { color: rgb(var(--c-green)); }
+.yaml-num { color: rgb(var(--c-amber)); }
+.yaml-bool { color: rgb(var(--c-amber)); }
+.yaml-null { color: var(--g-8); font-style: italic; }
+.yaml-dash { color: var(--g-8); }

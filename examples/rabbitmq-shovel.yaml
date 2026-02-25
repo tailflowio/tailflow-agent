@@ -1,0 +1,54 @@
+version: "2.0"
+name: "rabbitmq-shovel"
+description: "Shovel messages between RabbitMQ queues: replay dead-letter or forward cross-server"
+tags: ["example", "rabbitmq"]
+
+params:
+  - name: count
+    type: int
+    default: 100
+
+trigger:
+  http:
+    method: POST
+    path: /shovel
+
+steps:
+  # --- Use case 1: replay failed messages from DLQ on the same server ---
+
+  - id: replay-dlq
+    action: rabbitmq.shovel
+    title: "Replay dead-letter messages"
+    config:
+      source_url: "{{ env.RABBITMQ_URL }}"
+      source_queue: "orders.dlq"
+      dest_url: "{{ env.RABBITMQ_URL }}"
+      dest_exchange: ""
+      dest_routing_key: "orders"
+      count: "{{ params.count }}"
+      timeout: 30s
+
+  # --- Use case 2: forward messages to another server ---
+
+  - id: forward-cross-server
+    action: rabbitmq.shovel
+    title: "Forward messages to remote server"
+    depends_on: [replay-dlq]
+    config:
+      source_url: "{{ env.RABBITMQ_SOURCE_URL }}"
+      source_queue: "outbox"
+      dest_url: "{{ env.RABBITMQ_DEST_URL }}"
+      dest_exchange: ""
+      dest_routing_key: "inbox"
+      count: "{{ params.count }}"
+      timeout: 30s
+
+  - id: respond
+    action: response
+    title: "Return results"
+    depends_on: [replay-dlq, forward-cross-server]
+    config:
+      status: 200
+      body:
+        replayed: "{{ steps.replay-dlq.output.count }}"
+        forwarded: "{{ steps.forward-cross-server.output.count }}"

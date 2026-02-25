@@ -1,0 +1,94 @@
+version: "2.0"
+name: "array-operations"
+description: "Demonstrates array actions: sort, filter, map, uniq, pick, and concat"
+tags: ["example", "array"]
+
+steps:
+  - id: prepare
+    action: set
+    title: "Prepare sample data"
+    config:
+      products:
+        - name: "Laptop"
+          price: 999
+          category: "electronics"
+        - name: "Keyboard"
+          price: 79
+          category: "electronics"
+        - name: "Desk"
+          price: 349
+          category: "furniture"
+        - name: "Monitor"
+          price: 449
+          category: "electronics"
+        - name: "Chair"
+          price: 299
+          category: "furniture"
+      tags:
+        - "sale"
+        - "new"
+        - "sale"
+        - "featured"
+        - "new"
+
+  - id: sort_by_price
+    action: array.sort
+    title: "Sort products by price (ascending)"
+    depends_on: [prepare]
+    config:
+      items: "{{ vars.products }}"
+      key: "price"
+      order: "asc"
+
+  - id: filter_electronics
+    action: array.filter
+    title: "Filter electronics only"
+    depends_on: [prepare]
+    config:
+      items: "{{ vars.products }}"
+      expression: "item.category == 'electronics'"
+
+  - id: map_names
+    action: array.map
+    title: "Extract product names"
+    depends_on: [prepare]
+    config:
+      items: "{{ vars.products }}"
+      expression: "item.name"
+
+  - id: unique_tags
+    action: array.uniq
+    title: "Deduplicate tags"
+    depends_on: [prepare]
+    config:
+      items: "{{ vars.tags }}"
+
+  - id: pick_top3
+    action: array.pick
+    title: "Pick top 3 cheapest"
+    depends_on: [sort_by_price]
+    config:
+      items: "{{ steps.sort_by_price.output.items }}"
+      count: 3
+
+  - id: concat_lists
+    action: array.concat
+    title: "Concat electronics + unique tags"
+    depends_on: [map_names, unique_tags]
+    config:
+      arrays:
+        - "{{ steps.map_names.output.items }}"
+        - "{{ steps.unique_tags.output.items }}"
+
+  - id: summary
+    action: log
+    title: "Summary"
+    depends_on: [sort_by_price, filter_electronics, map_names, unique_tags, pick_top3, concat_lists]
+    config:
+      message: |
+        Sorted: {{ steps.sort_by_price.output.items }}
+        Electronics: {{ steps.filter_electronics.output.items }}
+        Names: {{ steps.map_names.output.items }}
+        Unique tags: {{ steps.unique_tags.output.items }}
+        Top 3 cheapest: {{ steps.pick_top3.output.items }}
+        Concatenated: {{ steps.concat_lists.output.items }}

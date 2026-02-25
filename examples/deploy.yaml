@@ -1,0 +1,53 @@
+version: "2.0"
+name: "deploy-service"
+description: "Build, test, and deploy a microservice"
+tags: ["deploy", "ci"]
+author: "team@company.com"
+
+params:
+  - name: environment
+    type: string
+    required: true
+    default: "staging"
+  - name: dry_run
+    type: bool
+    default: true
+
+env:
+  API_BASE: "https://api.{{ params.environment }}.example.com"
+
+steps:
+  - id: checkout
+    action: log
+    title: "Checkout code"
+    config:
+      message: "Checking out code..."
+
+  - id: build
+    action: log
+    title: "Build binary"
+    depends_on: [checkout]
+    config:
+      message: "Building for {{ params.environment }}..."
+
+  - id: test
+    action: log
+    title: "Run tests"
+    depends_on: [checkout]
+    config:
+      message: "Running tests..."
+
+  - id: deploy
+    action: log
+    title: "Deploy to {{ params.environment }}"
+    when: "params.dry_run == false"
+    depends_on: [build, test]
+    config:
+      message: "Deploying to {{ params.environment }}..."
+
+  - id: notify
+    action: log
+    title: "Notify team"
+    depends_on: [deploy]
+    config:
+      message: "Deploy complete on {{ params.environment }}"

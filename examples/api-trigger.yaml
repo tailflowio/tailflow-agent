@@ -1,0 +1,43 @@
+version: "2.0"
+name: "create-user"
+description: "API endpoint to create a user"
+tags: ["api", "trigger"]
+
+trigger:
+  http:
+    method: POST
+    path: /users
+
+steps:
+  - id: validate
+    action: js
+    title: "Validate input"
+    config:
+      script: |
+        let body = trigger.body;
+        if (!body || !body.email) throw new Error("email required");
+        return body;
+
+  - id: process
+    action: js
+    title: "Process user"
+    depends_on: [validate]
+    config:
+      script: |
+        let user = {
+          id: "usr_" + Math.random().toString(36).substr(2, 9),
+          email: steps.validate.output.email,
+          created: new Date().toISOString()
+        };
+        return user;
+
+  - id: respond
+    action: response
+    title: "Send response"
+    depends_on: [process]
+    config:
+      status: 201
+      body:
+        id: "{{ steps.process.output.id }}"
+        email: "{{ steps.process.output.email }}"
+        message: "User created"

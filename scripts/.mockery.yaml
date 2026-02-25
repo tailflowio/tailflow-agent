@@ -1,0 +1,21 @@
+with-expecter: true
+mockName: "{{.InterfaceName}}"
+outpkg: "fake{{.PackageName}}"
+filename: "{{.InterfaceName | snakecase}}.go"
+dir: "internal/fake/fake{{.PackageName}}"
+packages:
+  github.com/tailflow/tailflow/internal/lock:
+    interfaces:
+      Locker:
+      Deduplicator:
+  github.com/tailflow/tailflow/internal/action:
+    interfaces:
+      Action:
+  github.com/tailflow/tailflow/internal/store:
+    interfaces:
+      ExecutionStore:
+  github.com/tailflow/tailflow/internal/runtime:
+    interfaces:
+      Locker:
+      DBPool:
+      TxRegistry:

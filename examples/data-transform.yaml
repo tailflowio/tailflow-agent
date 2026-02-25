@@ -1,0 +1,84 @@
+version: "2.0"
+name: "data-transform"
+description: "Transform data using JSON encode/decode, templates, objects, and math"
+tags: ["example", "data", "json", "template", "math"]
+
+params:
+  - name: price
+    type: float
+    default: 49.99
+  - name: quantity
+    type: int
+    default: 3
+  - name: currency
+    type: string
+    default: "EUR"
+
+steps:
+  - id: build_order
+    action: object
+    title: "Build order object"
+    config:
+      product: "Widget Pro"
+      price: "{{ params.price }}"
+      quantity: "{{ params.quantity }}"
+      currency: "{{ params.currency }}"
+
+  - id: compute_total
+    action: math
+    title: "Compute total price"
+    depends_on: [build_order]
+    config:
+      expression: "{{ steps.build_order.output.price }} * {{ steps.build_order.output.quantity }}"
+
+  - id: compute_tax
+    action: math
+    title: "Compute tax (20%)"
+    depends_on: [compute_total]
+    config:
+      expression: "{{ steps.compute_total.output.result }} * 0.20"
+
+  - id: encode_payload
+    action: json.encode
+    title: "Encode order as JSON"
+    depends_on: [build_order, compute_total, compute_tax]
+    config:
+      data:
+        product: "{{ steps.build_order.output.product }}"
+        quantity: "{{ steps.build_order.output.quantity }}"
+        subtotal: "{{ steps.compute_total.output.result }}"
+        tax: "{{ steps.compute_tax.output.result }}"
+        currency: "{{ steps.build_order.output.currency }}"
+
+  - id: decode_payload
+    action: json.decode
+    title: "Decode JSON back to object"
+    depends_on: [encode_payload]
+    config:
+      data: "{{ steps.encode_payload.output.json }}"
+
+  - id: render_receipt
+    action: template
+    title: "Render receipt from template"
+    depends_on: [decode_payload]
+    config:
+      template: |
+        === RECEIPT ===
+        Product:  {{ data.product }}
+        Quantity: {{ data.quantity }}
+        Subtotal: {{ data.subtotal }} {{ data.currency }}
+        Tax:      {{ data.tax }} {{ data.currency }}
+        ===============
+      data:
+        product: "{{ steps.decode_payload.output.product }}"
+        quantity: "{{ steps.decode_payload.output.quantity }}"
+        subtotal: "{{ steps.decode_payload.output.subtotal }}"
+        tax: "{{ steps.decode_payload.output.tax }}"
+        currency: "{{ steps.decode_payload.output.currency }}"
+
+  - id: done
+    action: log
+    title: "Print receipt"
+    depends_on: [render_receipt]
+    config:
+      message: "{{ steps.render_receipt.output.result }}"

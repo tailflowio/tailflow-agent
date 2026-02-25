@@ -1,0 +1,61 @@
+version: "2.0"
+name: "file-operations"
+description: "Read and write files (self-hosted only)"
+tags: ["example", "file", "selfhosted"]
+
+params:
+  - name: filename
+    type: string
+    default: "output.json"
+    pattern: "[a-zA-Z0-9._-]+"
+
+steps:
+  - id: build_data
+    action: set
+    title: "Build data to write"
+    config:
+      report:
+        generated_at: "{{ now() }}"
+        items:
+          - id: 1
+            status: "ok"
+          - id: 2
+            status: "warning"
+          - id: 3
+            status: "ok"
+
+  - id: encode
+    action: json.encode
+    title: "Encode report as JSON"
+    depends_on: [build_data]
+    config:
+      data: "{{ vars.report }}"
+
+  - id: write_file
+    action: file.write
+    title: "Write report to file"
+    depends_on: [encode]
+    config:
+      path: "/tmp/{{ params.filename }}"
+      content: "{{ steps.encode.output.json }}"
+
+  - id: read_back
+    action: file.read
+    title: "Read file back"
+    depends_on: [write_file]
+    config:
+      path: "/tmp/{{ params.filename }}"
+
+  - id: decode
+    action: json.decode
+    title: "Decode file content"
+    depends_on: [read_back]
+    config:
+      data: "{{ steps.read_back.output.content }}"
+
+  - id: done
+    action: log
+    title: "Verify round-trip"
+    depends_on: [decode]
+    config:
+      message: "File written and read back: {{ steps.decode.output.generated_at }} — {{ steps.decode.output.items }}"

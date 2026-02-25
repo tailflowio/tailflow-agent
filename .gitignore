@@ -1,0 +1,33 @@
+# Binaries
+bin/
+/tailsafe
+/tailflow
+/debug-export-server
+*.exe
+
+# Go
+coverage.out
+*.test
+
+# Frontend
+web/frontend/node_modules/
+web/frontend/dist/
+web/dist
+node_modules/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Personal examples (not pushed to GitHub)
+personal_examples/
+
+# Claude Code local settings
+.claude/settings.local.json

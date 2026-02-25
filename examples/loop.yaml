@@ -1,0 +1,88 @@
+version: "2.0"
+name: "loop-example"
+description: "Demonstrates the loop action iterating over a list of users"
+tags: ["example", "loop"]
+
+params:
+  - name: team
+    type: string
+    default: "engineering"
+
+steps:
+  - id: prepare_users
+    action: set
+    title: "Prepare user list"
+    config:
+      users:
+        - name: "Alice"
+          role: "backend"
+        - name: "Bob"
+          role: "frontend"
+        - name: "Charlie"
+          role: "devops"
+
+  - id: loop_users
+    action: loop
+    title: "Iterate over users"
+    depends_on: [prepare_users]
+    config:
+      items: "{{ vars.users }}"
+      as: "user"
+      index: "i"
+
+  - id: process_users
+    action: loop
+    title: "Process users"
+    depends_on: [prepare_users]
+    config:
+      items: "{{ vars.users }}"
+      as: "user"
+      index: "i"
+      concurrency: 2
+      action: exec
+      action_config:
+        command: ["sh", "-c", "echo Hello {{ loop.user.name }}"]
+
+  - id: pipeline_users
+    action: loop
+    title: "Pipeline over users"
+    depends_on: [loop_users]
+    config:
+      items: "{{ vars.users }}"
+      as: "user"
+      index: "i"
+      concurrency: 2
+      actions:
+        - action: js
+          title: "test"
+          config:
+            script: |
+              return { greeting: "Hello {{ loop.user.name }}" }
+        - action: js
+          config:
+            script: |
+              return { message: "{{ loop.prev.greeting }} ({{ loop.user.role }})" }
+
+  - id: log_last
+    action: log
+    title: "Log last user"
+    depends_on: [loop_users]
+    config:
+      message: "Last user processed: {{ vars.user.name }} ({{ vars.user.role }}) — {{ steps.loop_users.output.iterations }} total"
+
+  - id: summary
+    action: js
+    title: "Build summary"
+    depends_on: [loop_users]
+    config:
+      script: |
+        const items = steps.loop_users.output.items;
+        const names = items.map(u => u.name).join(', ');
+        return { team: params.team, members: names, count: items.length };
+
+  - id: done
+    action: log
+    title: "Done"
+    depends_on: [summary, process_users, pipeline_users]
+    config:
+      message: "Team {{ steps.summary.output.team }}: {{ steps.summary.output.members }} ({{ steps.summary.output.count }} members)"

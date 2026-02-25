@@ -1,0 +1,57 @@
+version: "2.0"
+name: "kv-store"
+description: "Key-value store operations: set, get, and delete"
+tags: ["example", "kv"]
+
+trigger:
+  http:
+    method: POST
+    path: /counter
+
+steps:
+  - id: get_current
+    action: kv.get
+    title: "Get current counter value"
+    config:
+      key: "counter:{{ trigger.body.name ?? 'default' }}"
+
+  - id: compute_next
+    action: math
+    title: "Increment counter"
+    depends_on: [get_current]
+    config:
+      expression: "{{ steps.get_current.output.value ?? 0 }} + 1"
+
+  - id: save_counter
+    action: kv.set
+    title: "Save new counter value"
+    depends_on: [compute_next]
+    config:
+      key: "counter:{{ trigger.body.name ?? 'default' }}"
+      value: "{{ steps.compute_next.output.result }}"
+
+  - id: check_reset
+    action: condition
+    title: "Check if reset requested"
+    depends_on: [save_counter]
+    config:
+      expression: "{{ trigger.body.reset ?? false }} == true"
+
+  - id: delete_counter
+    action: kv.delete
+    title: "Reset counter"
+    depends_on: [check_reset]
+    when: "steps.check_reset.output.result == true"
+    config:
+      key: "counter:{{ trigger.body.name ?? 'default' }}"
+
+  - id: respond
+    action: response
+    title: "Return counter value"
+    depends_on: [check_reset, delete_counter]
+    config:
+      status: 200
+      body:
+        name: "{{ trigger.body.name ?? 'default' }}"
+        value: "{{ steps.compute_next.output.result }}"
+        reset: "{{ trigger.body.reset ?? false }}"

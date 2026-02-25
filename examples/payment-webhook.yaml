@@ -1,0 +1,72 @@
+version: "2.0"
+name: "payment-flow"
+description: "Initie un paiement puis attend le callback du provider"
+tags: ["webhook", "payment"]
+
+trigger:
+  http:
+    method: POST
+    path: /payments
+
+steps:
+  - id: validate
+    action: js
+    title: "Valider la demande"
+    config:
+      script: |
+        let body = trigger.body;
+        if (!body || !body.amount) throw new Error("amount required");
+        if (!body.currency) throw new Error("currency required");
+        return {
+          order_id: "ord_" + Math.random().toString(36).substr(2, 9),
+          amount: body.amount,
+          currency: body.currency,
+        };
+
+  - id: call-provider
+    action: js
+    title: "Appeler le provider de paiement"
+    depends_on: [validate]
+    config:
+      script: |
+        let order = steps.validate.output;
+        // Simule un appel API au provider
+        return {
+          provider_tx: "tx_" + Math.random().toString(36).substr(2, 12),
+          order_id: order.order_id,
+          status: "pending",
+        };
+
+  - id: wait-callback
+    action: wait.webhook
+    title: "Attendre le callback du provider"
+    depends_on: [call-provider]
+    config:
+      path: /payment-callback
+      timeout: 10m
+
+  - id: process-result
+    action: js
+    title: "Traiter le resultat"
+    depends_on: [wait-callback]
+    config:
+      script: |
+        let callback = steps["wait-callback"].output;
+        let provider = steps["call-provider"].output;
+        let success = callback.body && callback.body.status === "paid";
+        return {
+          order_id: provider.order_id,
+          provider_tx: provider.provider_tx,
+          payment_status: success ? "confirmed" : "failed",
+          callback_body: callback.body,
+        };
+
+  - id: respond
+    action: response
+    title: "Repondre au client"
+    depends_on: [process-result]
+    config:
+      status: 200
+      body:
+        order_id: "{{ steps.process-result.output.order_id }}"
+        status: "{{ steps.process-result.output.payment_status }}"

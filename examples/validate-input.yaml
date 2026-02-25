@@ -1,0 +1,40 @@
+version: "2.0"
+name: "validate-input"
+description: "Validate HTTP body and respond with errors or success"
+tags: ["validation", "api"]
+
+trigger:
+  http:
+    method: POST
+    path: /api/public/register
+
+steps:
+  - id: check
+    action: validate
+    title: "Validate request body"
+    config:
+      data: "{{ trigger.body }}"
+      rules:
+        email: "required,email"
+        name: "required,min=2,max=100"
+
+  - id: fail
+    action: response
+    title: "Return validation errors"
+    depends_on: [check]
+    condition: "{{ steps.check.output.valid == false }}"
+    config:
+      status: 400
+      body:
+        error: "validation_failed"
+        errors: "{{ steps.check.output.errors }}"
+
+  - id: ok
+    action: response
+    title: "Return success"
+    depends_on: [check]
+    condition: "{{ steps.check.output.valid == true }}"
+    config:
+      status: 200
+      body:
+        message: "Registration successful"

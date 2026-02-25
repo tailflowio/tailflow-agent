@@ -1,0 +1,30 @@
+version: "2.0"
+name: "hello-world"
+description: "A simple hello world workflow"
+tags: ["example"]
+
+params:
+  - name: name
+    type: string
+    default: "World"
+
+steps:
+  - id: greet
+    action: log
+    title: "Say hello"
+    config:
+      message: "Hello, {{ params.name }}!"
+
+  - id: set_result
+    action: set
+    title: "Set result"
+    depends_on: [greet]
+    config:
+      greeting: "Hello, {{ params.name }}!"
+
+  - id: done
+    action: log
+    title: "Done"
+    depends_on: [set_result]
+    config:
+      message: "Workflow complete! Greeting: {{ vars.greeting }}"

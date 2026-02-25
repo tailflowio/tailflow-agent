@@ -1,0 +1,50 @@
+version: "2.0"
+name: "order-confirmation"
+description: "Cree une commande puis attend la confirmation via RabbitMQ"
+tags: ["rabbitmq", "order"]
+
+trigger:
+  http:
+    method: POST
+    path: /orders
+
+steps:
+  - id: validate-input
+    action: validate
+    title: "Valider la demande"
+    config:
+      data: "{{ trigger.body }}"
+      rules:
+        product: "required"
+
+  - id: create-order
+    action: set
+    title: "Creer la commande"
+    depends_on: [validate-input]
+    config:
+      order_id: "{{ uuid() }}"
+      product: "{{ trigger.body.product }}"
+      quantity: "{{ trigger.body.quantity ?? 1 }}"
+      status: "pending"
+
+  - id: wait-confirmation
+    action: wait.rabbitmq
+    title: "Attendre la confirmation"
+    depends_on: [create-order]
+    config:
+      url: "{{ env.RABBITMQ_URL }}"
+      queue: "order.confirmations"
+      match: "order_id"
+      match_value: "{{ vars.order_id }}"
+      timeout: "5m"
+
+  - id: respond
+    action: response
+    title: "Repondre au client"
+    depends_on: [wait-confirmation]
+    config:
+      status: 200
+      body:
+        order_id: "{{ vars.order_id }}"
+        product: "{{ vars.product }}"
+        payment_status: "{{ steps.wait-confirmation.output.body.status }}"

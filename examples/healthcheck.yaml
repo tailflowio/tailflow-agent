@@ -1,0 +1,85 @@
+version: "2.0"
+name: "healthcheck-free"
+description: "Check if free.fr is up every 5 minutes, send alert email after 3 consecutive failures"
+tags: ["example", "healthcheck", "schedule", "error_policy"]
+
+trigger:
+  schedule:
+    cron: "*/1 * * * *"
+
+steps:
+  - id: init
+    action: set
+    title: "Initialize failure counter"
+    config:
+      failures: 0
+
+  - id: check_server
+    action: http
+    title: "Check free.fr"
+    depends_on: [init]
+    error_policy: continue
+    timeout: "10s"
+    retry:
+      max_attempts: 1
+      delay: "2s"
+    config:
+      url: "https://free.fr"
+      method: GET
+
+  - id: evaluate
+    action: js
+    title: "Evaluate health status"
+    depends_on: [check_server]
+    config:
+      script: |
+        var status = steps.check_server.status;
+        var failures = vars.failures || 0;
+        if (status === "failed") {
+          failures = failures + 1;
+          return { healthy: false, failures: failures, message: "free.fr is DOWN (" + failures + " consecutive)" };
+        }
+        return { healthy: true, failures: 0, message: "free.fr is UP" };
+
+  - id: update_counter
+    action: set
+    title: "Update failure counter"
+    depends_on: [evaluate]
+    config:
+      failures: "{{ steps.evaluate.output.failures }}"
+
+  - id: log_status
+    action: log
+    title: "Log health status"
+    depends_on: [update_counter]
+    config:
+      message: "{{ steps.evaluate.output.message }}"
+
+  - id: send_alert
+    action: http
+    title: "Send alert email (via Mailgun)"
+    depends_on: [log_status]
+    when: "vars.failures >= 3"
+    error_policy: continue
+    config:
+      url: "https://api.mailgun.net/v3/{{ env.MAILGUN_DOMAIN }}/messages"
+      method: POST
+      headers:
+        Authorization: "Basic {{ env.MAILGUN_API_KEY }}"
+        Content-Type: "application/x-www-form-urlencoded"
+      body: "from=healthcheck@{{ env.MAILGUN_DOMAIN }}&to={{ env.ALERT_EMAIL }}&subject=ALERT: free.fr is DOWN&text=free.fr has been down for {{ vars.failures }} consecutive checks."
+
+  - id: reset_after_alert
+    action: set
+    title: "Reset counter after alert"
+    depends_on: [send_alert]
+    when: "vars.failures >= 3"
+    config:
+      failures: 0
+
+  - id: done
+    action: log
+    title: "Check complete"
+    depends_on: [log_status, reset_after_alert]
+    config:
+      message: "Healthcheck complete — failures: {{ vars.failures }}"

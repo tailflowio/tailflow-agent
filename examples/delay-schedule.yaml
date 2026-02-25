@@ -1,0 +1,52 @@
+version: "2.0"
+name: "delay-schedule"
+description: "Demonstrates delay and schedule actions for timed workflows"
+tags: ["example", "delay", "schedule"]
+
+trigger:
+  http:
+    method: POST
+    path: /delayed-task
+
+steps:
+  - id: ack
+    action: log
+    title: "Acknowledge request"
+    config:
+      message: "Task received, processing in 2 seconds..."
+
+  - id: wait
+    action: delay
+    title: "Wait before processing"
+    depends_on: [ack]
+    config:
+      duration: "2s"
+
+  - id: process
+    action: set
+    title: "Process the task"
+    depends_on: [wait]
+    config:
+      result: "completed"
+      processed_at: "{{ now() }}"
+
+  - id: schedule_followup
+    action: schedule
+    title: "Schedule a follow-up in 1 minute"
+    depends_on: [process]
+    config:
+      delay: "1m"
+      params:
+        followup: true
+        original_time: "{{ vars.processed_at }}"
+
+  - id: respond
+    action: response
+    title: "Return result"
+    depends_on: [schedule_followup]
+    config:
+      status: 200
+      body:
+        status: "{{ vars.result }}"
+        processed_at: "{{ vars.processed_at }}"
+        followup_scheduled: true

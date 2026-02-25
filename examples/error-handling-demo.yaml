@@ -1,0 +1,92 @@
+version: "2.0"
+name: "error-handling-demo"
+description: "Demonstrates structured errors, workflow on_error, and loop error_policy (saas-compatible)"
+tags: ["example", "error-handling"]
+
+trigger:
+  http:
+    method: POST
+    path: /process-orders
+
+on_error:
+  - id: notify_failure
+    action: log
+    title: "Log workflow failure"
+    config:
+      level: error
+      message: "Workflow failed"
+
+  - id: capture_error_details
+    action: set
+    title: "Flag workflow as failed"
+    config:
+      workflow_failed: true
+
+steps:
+  - id: process_orders
+    action: loop
+    title: "Process each order"
+    config:
+      items: "{{ trigger.body.orders }}"
+      as: order
+      index: i
+      concurrency: 3
+      error_policy: continue
+      actions:
+        - action: http
+          title: "Send order callback"
+          config:
+            method: POST
+            url: "{{ loop.order.callback_url }}"
+            body:
+              order_id: "{{ loop.order.id }}"
+              amount: "{{ loop.order.amount }}"
+            expect:
+              status: 200
+
+  - id: build_summary
+    action: set
+    title: "Build results summary"
+    depends_on: [process_orders]
+    config:
+      total: "{{ steps.process_orders.output.iterations }}"
+      failed: "{{ steps.process_orders.output.failed }}"
+      succeeded: "{{ steps.process_orders.output.succeeded }}"
+
+  - id: call_unreachable_api
+    action: http
+    title: "Call unreachable API"
+    depends_on: [build_summary]
+    timeout: "1s"
+    error_policy: continue
+    config:
+      method: GET
+      url: "http://192.0.2.1/this-will-timeout"
+    on_error:
+      - id: handle_timeout
+        action: condition
+        title: "Check timeout"
+        config:
+          if: "steps.call_unreachable_api.error.code == 'timeout'"
+          then: "timeout confirmed"
+          else: "unexpected error"
+
+      - id: log_timeout
+        action: log
+        title: "Log API failure"
+        config:
+          level: warn
+          message: "API call failed: {{ steps.call_unreachable_api.error.message }}"
+
+  - id: respond
+    action: response
+    title: "Send response"
+    depends_on: [build_summary, call_unreachable_api]
+    config:
+      status: 200
+      body:
+        status: "processed"
+        total: "{{ vars.total }}"
+        failed: "{{ vars.failed }}"
+        succeeded: "{{ vars.succeeded }}"
+        timeout_branch: "{{ steps.handle_timeout.output.branch }}"

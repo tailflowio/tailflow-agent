@@ -1,0 +1,30 @@
+version: "2.0"
+name: parallel-exec
+
+steps:
+  - id: start
+    action: log
+    title: Start
+    config:
+      message: "Launching two parallel tasks..."
+
+  - id: task_a
+    action: exec
+    title: Task A (5s)
+    depends_on: [start]
+    config:
+      command: ["sh", "-c", "for i in 1 2 3 4 5; do echo \"[A] step $i/5\"; sleep 1; done"]
+
+  - id: task_b
+    action: exec
+    title: Task B (5s)
+    depends_on: [start]
+    config:
+      command: ["sh", "-c", "for i in 1 2 3 4 5; do echo \"[B] step $i/5\"; sleep 1; done"]
+
+  - id: finish
+    action: log
+    title: Finish
+    depends_on: [task_a, task_b]
+    config:
+      message: "Both tasks completed!"

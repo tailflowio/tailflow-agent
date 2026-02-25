@@ -1,0 +1,33 @@
+version: "2.0"
+name: goto-loop
+description: Demonstrates conditional goto to create loops in the DAG
+
+steps:
+  - id: init
+    action: set
+    config: { count: 0 }
+
+  - id: increment
+    action: js
+    depends_on: [init]
+    config:
+      script: "return { count: vars.count + 1 };"
+
+  - id: update
+    action: set
+    depends_on: [increment]
+    config: { count: "{{ steps.increment.output.count }}" }
+
+  - id: check
+    action: log
+    depends_on: [update]
+    config: { message: "Count is {{ vars.count }}" }
+    goto:
+      target: increment
+      when: "vars.count < 3"
+      max_iterations: 10
+
+  - id: done
+    action: log
+    depends_on: [check]
+    config: { message: "Final count: {{ vars.count }}" }

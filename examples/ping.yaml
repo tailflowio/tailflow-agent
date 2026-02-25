@@ -1,0 +1,20 @@
+version: "2.0"
+name: "ping"
+description: "Ping a host"
+tags: ["example", "network"]
+revision: "1.0.0"
+
+params:
+  - name: host
+    type: string
+    required: true
+    default: "google.fr"
+    pattern: "[a-zA-Z0-9._-]+"
+
+steps:
+  - id: ping
+    action: exec
+    title: "Ping {{ params.host }}"
+    config:
+      command: "ping {{ params.host }}"
+      stream: true

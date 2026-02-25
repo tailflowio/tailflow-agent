@@ -1,0 +1,60 @@
+version: "2.0"
+name: "string-hash"
+description: "String manipulation with regex matching, replacement, and hashing"
+tags: ["example", "string", "hash"]
+
+params:
+  - name: text
+    type: string
+    default: "Order REF-2024-001 shipped to john.doe@example.com on 2024-12-15"
+
+steps:
+  - id: extract_emails
+    action: string.match_all
+    title: "Extract email addresses"
+    config:
+      input: "{{ params.text }}"
+      pattern: "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+
+  - id: extract_refs
+    action: string.match_all
+    title: "Extract order references"
+    config:
+      input: "{{ params.text }}"
+      pattern: "REF-\\d{4}-\\d{3}"
+
+  - id: redact_email
+    action: string.replace
+    title: "Redact email addresses"
+    config:
+      input: "{{ params.text }}"
+      pattern: "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+      replacement: "[REDACTED]"
+
+  - id: hash_email
+    action: hash
+    title: "Hash the extracted email (SHA256)"
+    depends_on: [extract_emails]
+    config:
+      input: "{{ steps.extract_emails.output.matches[0] }}"
+      algorithm: "sha256"
+
+  - id: hash_md5
+    action: hash
+    title: "Hash the extracted email (MD5)"
+    depends_on: [extract_emails]
+    config:
+      input: "{{ steps.extract_emails.output.matches[0] }}"
+      algorithm: "md5"
+
+  - id: done
+    action: log
+    title: "Results"
+    depends_on: [extract_emails, extract_refs, redact_email, hash_email, hash_md5]
+    config:
+      message: |
+        Emails found: {{ steps.extract_emails.output.matches }}
+        References found: {{ steps.extract_refs.output.matches }}
+        Redacted text: {{ steps.redact_email.output.result }}
+        SHA256: {{ steps.hash_email.output.hash }}
+        MD5: {{ steps.hash_md5.output.hash }}
