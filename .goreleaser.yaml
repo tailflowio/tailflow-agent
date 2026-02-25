@@ -6,8 +6,7 @@ git:
 
 before:
   hooks:
-    - npm --prefix web/frontend ci
-    - npm --prefix web/frontend run build
+    - bash -c "cd web/frontend && npm install && npx vite build"
     - go mod tidy
 
 builds:
