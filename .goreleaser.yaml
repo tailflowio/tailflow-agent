@@ -1,0 +1,57 @@
+version: 2
+
+git:
+  tag_sort: -version:refname
+  prerelease_suffix: "-"
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: ./cmd/tailflow
+    binary: tailflow
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}} -X main.date={{.Date}}
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+
+brews:
+  - repository:
+      owner: tailflowio
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/tailflowio/tailflow-agent"
+    description: "TailFlow workflow engine"
+    license: "MIT"
+    install: |
+      bin.install "tailflow"
+    test: |
+      system "#{bin}/tailflow", "--version"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+release:
+  github:
+    owner: tailflowio
+    name: tailflow-agent
+  name_template: "{{ .Tag }}"
