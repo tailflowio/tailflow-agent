@@ -6,6 +6,8 @@ git:
 
 before:
   hooks:
+    - npm --prefix web/frontend ci
+    - npm --prefix web/frontend run build
     - go mod tidy
 
 builds:
