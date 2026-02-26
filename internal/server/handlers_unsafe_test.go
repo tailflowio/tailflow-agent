@@ -27,6 +27,10 @@ func TestHandlersUnsafe(t *testing.T) {
 	suite.Run(t, new(HandlersUnsafeTestSuite))
 }
 
+func (s *HandlersUnsafeTestSuite) SetupTest() {
+	// required by convention
+}
+
 func newTestServerWithTrigger(t *testing.T) *Server {
 	t.Helper()
 
@@ -71,7 +75,7 @@ steps:
 	action.RegisterBuiltins(reg)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	exec := engine.NewExecutor(reg, bus, logger)
+	exec := engine.NewExecutor(reg, bus, logger, wf.Sensitive)
 
 	return New(Config{
 		Port:           0,

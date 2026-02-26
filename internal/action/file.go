@@ -70,6 +70,7 @@ func (a *FileWriteAction) Execute(ctx *ActionContext) (any, error) {
 
 	// Ensure parent directory exists
 	dir := filepath.Dir(path)
+
 	err := os.MkdirAll(dir, 0o755)
 	if err != nil {
 		return nil, fmt.Errorf("file.write: create dir: %w", err)

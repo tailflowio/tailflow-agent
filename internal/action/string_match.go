@@ -41,17 +41,24 @@ func (a *StringMatchAllAction) Execute(ctx *ActionContext) (any, error) {
 		// If pattern has capture groups, return first capture group
 		for _, m := range re.FindAllStringSubmatch(input, -1) {
 			val := m[1]
-			if !seen[val] {
-				seen[val] = true
-				results = append(results, val)
+
+			if seen[val] {
+				continue
 			}
+
+			seen[val] = true
+
+			results = append(results, val)
 		}
 	} else {
 		for _, m := range re.FindAllString(input, -1) {
-			if !seen[m] {
-				seen[m] = true
-				results = append(results, m)
+			if seen[m] {
+				continue
 			}
+
+			seen[m] = true
+
+			results = append(results, m)
 		}
 	}
 

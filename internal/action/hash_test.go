@@ -24,7 +24,7 @@ func (s *HashActionTestSuite) TestMissingInput() {
 	s.Contains(err.Error(), "input")
 }
 
-func (s *HashActionTestSuite) TestExecute() {
+func (s *HashActionTestSuite) TestExecute_SHA256() {
 	a := NewHashAction()
 	ctx := newTestContext(map[string]any{"input": "hello world"})
 

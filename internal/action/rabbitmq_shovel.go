@@ -8,6 +8,69 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
+type shovelSourceChan interface {
+	Get(queue string, autoAck bool) (amqp.Delivery, bool, error)
+}
+
+type shovelConfirmation interface {
+	Wait() bool
+}
+
+type shovelDestChan interface {
+	Confirm(noWait bool) error
+	PublishWithDeferredConfirm(exchange, key string, mandatory, immediate bool, msg amqp.Publishing) (shovelConfirmation, error)
+}
+
+type shovelConnector interface {
+	Channel() (shovelRawChan, error)
+	Close() error
+}
+
+type shovelRawChan interface {
+	Get(queue string, autoAck bool) (amqp.Delivery, bool, error)
+	Confirm(noWait bool) error
+	PublishWithDeferredConfirm(exchange, key string, mandatory, immediate bool, msg amqp.Publishing) (*amqp.DeferredConfirmation, error)
+	Close() error
+}
+
+type realShovelConn struct {
+	channelFn func() (shovelRawChan, error)
+	closeFn   func() error
+}
+
+func (r *realShovelConn) Channel() (shovelRawChan, error) { return r.channelFn() }
+func (r *realShovelConn) Close() error                    { return r.closeFn() }
+
+var shovelDialFn = func(url string) (shovelConnector, error) {
+	c, err := amqp.Dial(url)
+	if err != nil {
+		return nil, err
+	}
+
+	return &realShovelConn{
+		channelFn: func() (shovelRawChan, error) {
+			ch, err := c.Channel()
+			if err != nil {
+				return nil, err
+			}
+
+			return ch, nil
+		},
+		closeFn: c.Close,
+	}, nil
+}
+
+type realShovelDest struct{ ch shovelRawChan }
+
+func (d *realShovelDest) Confirm(noWait bool) error { return d.ch.Confirm(noWait) }
+func (d *realShovelDest) PublishWithDeferredConfirm(
+	exchange, key string, mandatory, immediate bool, msg amqp.Publishing,
+) (shovelConfirmation, error) {
+	return d.ch.PublishWithDeferredConfirm(exchange, key, mandatory, immediate, msg)
+}
+
+var openShovelChannelsFn = openShovelChannelsImpl
+
 type RabbitMQShovelAction struct{}
 
 func NewRabbitMQShovelAction() Action { return &RabbitMQShovelAction{} }
@@ -31,7 +94,7 @@ func (a *RabbitMQShovelAction) Validate(ctx *ActionContext) error {
 func (a *RabbitMQShovelAction) Execute(ctx *ActionContext) (any, error) {
 	cfg := parseShovelConfig(ctx)
 
-	sourceCh, destCh, cleanup, err := openShovelChannels(cfg)
+	sourceCh, destCh, cleanup, err := openShovelChannelsFn(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -87,8 +150,8 @@ func parseShovelConfig(ctx *ActionContext) shovelConfig {
 	return cfg
 }
 
-func openShovelChannels(cfg shovelConfig) (*amqp.Channel, *amqp.Channel, func(), error) {
-	sourceConn, err := amqp.Dial(cfg.sourceURL)
+func openShovelChannelsImpl(cfg shovelConfig) (shovelSourceChan, shovelDestChan, func(), error) {
+	sourceConn, err := shovelDialFn(cfg.sourceURL)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("rabbitmq.shovel: dial source: %w", err)
 	}
@@ -101,10 +164,11 @@ func openShovelChannels(cfg shovelConfig) (*amqp.Channel, *amqp.Channel, func(),
 
 	destConn := sourceConn
 	if cfg.destURL != cfg.sourceURL {
-		destConn, err = amqp.Dial(cfg.destURL)
+		destConn, err = shovelDialFn(cfg.destURL)
 		if err != nil {
 			sourceCh.Close()
 			sourceConn.Close()
+
 			return nil, nil, nil, fmt.Errorf("rabbitmq.shovel: dial dest: %w", err)
 		}
 	}
@@ -132,13 +196,13 @@ func openShovelChannels(cfg shovelConfig) (*amqp.Channel, *amqp.Channel, func(),
 		sourceConn.Close()
 	}
 
-	return sourceCh, destCh, cleanup, nil
+	return sourceCh, &realShovelDest{ch: destCh}, cleanup, nil
 }
 
 func runShovelLoop(
 	ctx *ActionContext,
-	sourceCh *amqp.Channel,
-	destCh *amqp.Channel,
+	sourceCh shovelSourceChan,
+	destCh shovelDestChan,
 	cfg shovelConfig,
 ) (any, error) {
 	var succeeded, failed int
@@ -160,40 +224,64 @@ func runShovelLoop(
 			break
 		}
 
-		pub := buildPublishing(msg, cfg.stripHeaders)
-
-		confirmation, err := destCh.PublishWithDeferredConfirm("", cfg.destQueue, false, false, pub)
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("msg %d: publish error: %v", i+1, err))
-			_ = msg.Nack(false, true)
+		transferred := processMessage(ctx, destCh, msg, cfg, i, &errs)
+		if transferred {
+			succeeded++
+		} else {
 			failed++
-
-			continue
 		}
-
-		if !confirmation.Wait() {
-			errs = append(errs, fmt.Sprintf("msg %d: broker nacked", i+1))
-			_ = msg.Nack(false, true)
-			failed++
-
-			continue
-		}
-
-		err = msg.Ack(false)
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("msg %d: source ack failed: %v", i+1, err))
-			failed++
-
-			continue
-		}
-
-		succeeded++
 
 		if ctx.EmitLog != nil {
 			ctx.EmitLog(fmt.Sprintf("shoveled %d/%d", succeeded+failed, cfg.count))
 		}
 	}
 
+	return buildShovelOutput(succeeded, failed, errs), nil
+}
+
+func processMessage(
+	_ *ActionContext,
+	destCh shovelDestChan,
+	msg amqp.Delivery,
+	cfg shovelConfig,
+	idx int,
+	errs *[]string,
+) bool {
+	pub := buildPublishing(msg, cfg.stripHeaders)
+
+	confirmation, err := destCh.PublishWithDeferredConfirm("", cfg.destQueue, false, false, pub)
+	if err != nil {
+		*errs = append(*errs, fmt.Sprintf("msg %d: publish error: %v", idx+1, err))
+		nackMessage(msg, idx, errs)
+
+		return false
+	}
+
+	if !confirmation.Wait() {
+		*errs = append(*errs, fmt.Sprintf("msg %d: broker nacked", idx+1))
+		nackMessage(msg, idx, errs)
+
+		return false
+	}
+
+	err = msg.Ack(false)
+	if err != nil {
+		*errs = append(*errs, fmt.Sprintf("msg %d: source ack failed: %v", idx+1, err))
+
+		return false
+	}
+
+	return true
+}
+
+func nackMessage(msg amqp.Delivery, idx int, errs *[]string) {
+	nackErr := msg.Nack(false, true)
+	if nackErr != nil {
+		*errs = append(*errs, fmt.Sprintf("msg %d: nack failed: %v", idx+1, nackErr))
+	}
+}
+
+func buildShovelOutput(succeeded, failed int, errs []string) map[string]any {
 	output := map[string]any{
 		"total":     succeeded + failed,
 		"succeeded": succeeded,
@@ -204,7 +292,7 @@ func runShovelLoop(
 		output["errors"] = errs
 	}
 
-	return output, nil
+	return output
 }
 
 func buildPublishing(msg amqp.Delivery, stripHeaders bool) amqp.Publishing {

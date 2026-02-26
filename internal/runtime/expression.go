@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -18,40 +19,55 @@ func NewExprEvaluator() *ExprEvaluator {
 	return &ExprEvaluator{}
 }
 
-// builtinOptions returns expr options for built-in functions available in all expressions.
 func builtinOptions() []expr.Option {
+	opts := make([]expr.Option, 0, 8)
+	opts = append(opts, identityOptions()...)
+	opts = append(opts, cliOptions()...)
+	opts = append(opts, dateOptions()...)
+
+	return opts
+}
+
+func identityOptions() []expr.Option {
 	return []expr.Option{
-		// Identity
 		expr.Function("uuid", func(params ...any) (any, error) {
 			return uuid.New().String(), nil
 		}),
+	}
+}
 
-		// CLI helpers
+func cliOptions() []expr.Option {
+	return []expr.Option{
 		// flag("--id", value) → "--id value" if value is non-empty, "" otherwise
 		expr.Function("flag", func(params ...any) (any, error) {
 			if len(params) < 2 {
-				return nil, fmt.Errorf("flag requires 2 arguments: flag name, value")
+				return nil, errors.New("flag requires 2 arguments: flag name, value")
 			}
+
 			name, ok := params[0].(string)
 			if !ok {
 				return nil, fmt.Errorf("flag: first argument must be a string, got %T", params[0])
 			}
+
 			val := fmt.Sprintf("%v", params[1])
 			if val == "" || val == "<nil>" {
 				return "", nil
 			}
+
 			return name + " " + val, nil
 		}),
 
 		// bflag("-v", true) → "-v" if truthy, "" otherwise
 		expr.Function("bflag", func(params ...any) (any, error) {
 			if len(params) < 2 {
-				return nil, fmt.Errorf("bflag requires 2 arguments: flag name, bool")
+				return nil, errors.New("bflag requires 2 arguments: flag name, bool")
 			}
+
 			name, ok := params[0].(string)
 			if !ok {
 				return nil, fmt.Errorf("bflag: first argument must be a string, got %T", params[0])
 			}
+
 			switch v := params[1].(type) {
 			case bool:
 				if v {
@@ -65,126 +81,175 @@ func builtinOptions() []expr.Option {
 			default:
 				return name, nil
 			}
+
 			return "", nil
 		}),
+	}
+}
 
-		// Date/time — all dates are RFC3339 strings
+func dateOptions() []expr.Option {
+	opts := make([]expr.Option, 0, 8)
+	opts = append(opts, dateNowOptions()...)
+	opts = append(opts, dateFormatOptions()...)
+	opts = append(opts, dateArithOptions()...)
+
+	return opts
+}
+
+func dateNowOptions() []expr.Option {
+	return []expr.Option{
 		// now() or now("Europe/Paris")
 		expr.Function("now", func(params ...any) (any, error) {
 			t := time.Now()
+
 			if len(params) > 0 {
 				tz, ok := params[0].(string)
 				if !ok {
 					return nil, fmt.Errorf("now: argument must be a timezone string, got %T", params[0])
 				}
+
 				loc, err := time.LoadLocation(tz)
 				if err != nil {
 					return nil, fmt.Errorf("now: invalid timezone %q: %w", tz, err)
 				}
+
 				t = t.In(loc)
 			} else {
 				t = t.UTC()
 			}
+
 			return t.Format(time.RFC3339), nil
 		}),
 		// tz("2026-02-13T18:00:00Z", "Europe/Paris")
 		expr.Function("tz", func(params ...any) (any, error) {
 			if len(params) < 2 {
-				return nil, fmt.Errorf("tz requires 2 arguments: date string, timezone")
+				return nil, errors.New("tz requires 2 arguments: date string, timezone")
 			}
+
 			dateStr, ok := params[0].(string)
 			if !ok {
 				return nil, fmt.Errorf("tz: first argument must be a string, got %T", params[0])
 			}
+
 			tzStr, ok := params[1].(string)
 			if !ok {
 				return nil, fmt.Errorf("tz: second argument must be a timezone string, got %T", params[1])
 			}
+
 			t, err := parseDate(dateStr)
 			if err != nil {
 				return nil, fmt.Errorf("tz: %w", err)
 			}
+
 			loc, err := time.LoadLocation(tzStr)
 			if err != nil {
 				return nil, fmt.Errorf("tz: invalid timezone %q: %w", tzStr, err)
 			}
+
 			return t.In(loc).Format(time.RFC3339), nil
 		}),
+	}
+}
+
+func dateFormatOptions() []expr.Option {
+	return []expr.Option{
 		expr.Function("formatDate", func(params ...any) (any, error) {
 			if len(params) < 2 {
-				return nil, fmt.Errorf("formatDate requires 2 arguments: date string, format")
+				return nil, errors.New("formatDate requires 2 arguments: date string, format")
 			}
+
 			dateStr, ok := params[0].(string)
 			if !ok {
 				return nil, fmt.Errorf("formatDate: first argument must be a string, got %T", params[0])
 			}
+
 			format, ok := params[1].(string)
 			if !ok {
 				return nil, fmt.Errorf("formatDate: second argument must be a string, got %T", params[1])
 			}
+
 			t, err := parseDate(dateStr)
 			if err != nil {
 				return nil, fmt.Errorf("formatDate: %w", err)
 			}
+
 			return t.Format(dateFormat(format)), nil
-		}),
-		expr.Function("addDate", func(params ...any) (any, error) {
-			if len(params) < 2 {
-				return nil, fmt.Errorf("addDate requires 2 arguments: date string, duration string")
-			}
-			dateStr, ok := params[0].(string)
-			if !ok {
-				return nil, fmt.Errorf("addDate: first argument must be a string, got %T", params[0])
-			}
-			durStr, ok := params[1].(string)
-			if !ok {
-				return nil, fmt.Errorf("addDate: second argument must be a string, got %T", params[1])
-			}
-			t, err := parseDate(dateStr)
-			if err != nil {
-				return nil, fmt.Errorf("addDate: %w", err)
-			}
-			d, err := time.ParseDuration(durStr)
-			if err != nil {
-				return nil, fmt.Errorf("addDate: invalid duration %q: %w", durStr, err)
-			}
-			return t.Add(d).Format(time.RFC3339), nil
-		}),
-		expr.Function("diffDate", func(params ...any) (any, error) {
-			if len(params) < 2 {
-				return nil, fmt.Errorf("diffDate requires 2 arguments: date1, date2")
-			}
-			d1, ok := params[0].(string)
-			if !ok {
-				return nil, fmt.Errorf("diffDate: first argument must be a string, got %T", params[0])
-			}
-			d2, ok := params[1].(string)
-			if !ok {
-				return nil, fmt.Errorf("diffDate: second argument must be a string, got %T", params[1])
-			}
-			t1, err := parseDate(d1)
-			if err != nil {
-				return nil, fmt.Errorf("diffDate: %w", err)
-			}
-			t2, err := parseDate(d2)
-			if err != nil {
-				return nil, fmt.Errorf("diffDate: %w", err)
-			}
-			return t1.Sub(t2).Seconds(), nil
 		}),
 		expr.Function("unixTime", func(params ...any) (any, error) {
 			if len(params) == 0 {
 				return time.Now().Unix(), nil
 			}
+
 			dateStr, ok := params[0].(string)
 			if !ok {
 				return nil, fmt.Errorf("unixTime: argument must be a string, got %T", params[0])
 			}
+
 			t, err := parseDate(dateStr)
 			if err != nil {
 				return nil, fmt.Errorf("unixTime: %w", err)
 			}
+
 			return t.Unix(), nil
+		}),
+	}
+}
+
+func dateArithOptions() []expr.Option {
+	return []expr.Option{
+		expr.Function("addDate", func(params ...any) (any, error) {
+			if len(params) < 2 {
+				return nil, errors.New("addDate requires 2 arguments: date string, duration string")
+			}
+
+			dateStr, ok := params[0].(string)
+			if !ok {
+				return nil, fmt.Errorf("addDate: first argument must be a string, got %T", params[0])
+			}
+
+			durStr, ok := params[1].(string)
+			if !ok {
+				return nil, fmt.Errorf("addDate: second argument must be a string, got %T", params[1])
+			}
+
+			t, err := parseDate(dateStr)
+			if err != nil {
+				return nil, fmt.Errorf("addDate: %w", err)
+			}
+
+			d, err := time.ParseDuration(durStr)
+			if err != nil {
+				return nil, fmt.Errorf("addDate: invalid duration %q: %w", durStr, err)
+			}
+
+			return t.Add(d).Format(time.RFC3339), nil
+		}),
+		expr.Function("diffDate", func(params ...any) (any, error) {
+			if len(params) < 2 {
+				return nil, errors.New("diffDate requires 2 arguments: date1, date2")
+			}
+
+			d1, ok := params[0].(string)
+			if !ok {
+				return nil, fmt.Errorf("diffDate: first argument must be a string, got %T", params[0])
+			}
+
+			d2, ok := params[1].(string)
+			if !ok {
+				return nil, fmt.Errorf("diffDate: second argument must be a string, got %T", params[1])
+			}
+
+			t1, err := parseDate(d1)
+			if err != nil {
+				return nil, fmt.Errorf("diffDate: %w", err)
+			}
+
+			t2, err := parseDate(d2)
+			if err != nil {
+				return nil, fmt.Errorf("diffDate: %w", err)
+			}
+
+			return t1.Sub(t2).Seconds(), nil
 		}),
 	}
 }
@@ -202,6 +267,7 @@ func parseDate(s string) (time.Time, error) {
 			return t, nil
 		}
 	}
+
 	return time.Time{}, fmt.Errorf("cannot parse date %q", s)
 }
 
@@ -225,6 +291,7 @@ func dateFormat(f string) string {
 
 func (e *ExprEvaluator) Eval(expression string, ctx map[string]any) (any, error) {
 	opts := append(builtinOptions(), expr.Env(ctx))
+
 	program, err := expr.Compile(expression, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("compile expression %q: %w", expression, err)
@@ -247,11 +314,13 @@ func normalizeResult(v any) any {
 		for i, item := range val {
 			val[i] = normalizeResult(item)
 		}
+
 		return val
 	case map[string]any:
 		for k, item := range val {
 			val[k] = normalizeResult(item)
 		}
+
 		return val
 	default:
 		return v
@@ -323,7 +392,9 @@ func (e *ExprEvaluator) resolveStringValue(s string, ctx map[string]any) (any, e
 	if !strings.Contains(s, "{{") {
 		return s, nil
 	}
-	if m := pureTemplateRegex.FindStringSubmatch(s); m != nil {
+
+	m := pureTemplateRegex.FindStringSubmatch(s)
+	if m != nil {
 		return e.Eval(m[1], ctx)
 	}
 

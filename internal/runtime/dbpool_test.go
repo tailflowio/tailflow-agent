@@ -14,6 +14,9 @@ func TestDBPool(t *testing.T) {
 	suite.Run(t, new(DBPoolTestSuite))
 }
 
+func (s *DBPoolTestSuite) SetupTest() { // required by convention
+}
+
 func (s *DBPoolTestSuite) TestDetectDriver_Postgres() {
 	d, err := detectDriver("postgres://user:pass@localhost:5432/db")
 	s.NoError(err)

@@ -16,7 +16,7 @@ func TestConditionAction(t *testing.T) {
 
 func (s *ConditionActionTestSuite) SetupTest() {}
 
-func (s *ConditionActionTestSuite) TestTrue() {
+func (s *ConditionActionTestSuite) TestTrue_ReturnsThenBranch() {
 	a := NewConditionAction()
 	ctx := newTestContext(map[string]any{
 		"if":   "true",
@@ -32,7 +32,7 @@ func (s *ConditionActionTestSuite) TestTrue() {
 	s.Equal("yes", m["value"])
 }
 
-func (s *ConditionActionTestSuite) TestFalse() {
+func (s *ConditionActionTestSuite) TestFalse_ReturnsElseBranch() {
 	a := NewConditionAction()
 	ctx := newTestContext(map[string]any{
 		"if":   "false",
@@ -64,4 +64,37 @@ func (s *ConditionActionTestSuite) TestValidateMissingIf() {
 	a := NewConditionAction()
 	err := a.Validate(newTestContext(map[string]any{}))
 	s.Error(err)
+}
+
+func (s *ConditionActionTestSuite) TestValidateOK() {
+	a := NewConditionAction()
+	err := a.Validate(newTestContext(map[string]any{"if": "true"}))
+	s.NoError(err)
+}
+
+func (s *ConditionActionTestSuite) TestExecuteInvalidExpression() {
+	a := NewConditionAction()
+	ctx := newTestContext(map[string]any{
+		"if": "!!!invalid",
+	})
+	_, err := a.Execute(ctx)
+	s.Error(err)
+	s.Contains(err.Error(), "condition")
+}
+
+func (s *ConditionActionTestSuite) TestFalseWithoutElseValue() {
+	a := NewConditionAction()
+	ctx := newTestContext(map[string]any{
+		"if":   "false",
+		"then": "yes",
+		// no "else" key
+	})
+
+	out, err := a.Execute(ctx)
+	s.Require().NoError(err)
+	m := out.(map[string]any)
+	s.Equal(false, m["result"])
+	s.Equal("else", m["branch"])
+	_, hasValue := m["value"]
+	s.False(hasValue)
 }

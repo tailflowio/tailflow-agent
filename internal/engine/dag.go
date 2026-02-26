@@ -27,12 +27,10 @@ func BuildDAG(steps []parser.Step) (*DAG, error) {
 		Nodes: make(map[string]*DAGNode, len(steps)),
 	}
 
-	// Create nodes
 	for _, s := range steps {
 		dag.Nodes[s.ID] = &DAGNode{Step: s}
 	}
 
-	// Build edges
 	for _, s := range steps {
 		node := dag.Nodes[s.ID]
 		if len(s.DependsOn) == 0 {
@@ -63,9 +61,19 @@ func BuildDAG(steps []parser.Step) (*DAG, error) {
 
 	dag.Order = order
 
-	// Validate goto references
-	orderIndex := make(map[string]int, len(order))
-	for i, id := range order {
+	err = validateGotos(dag, steps)
+	if err != nil {
+		return nil, err
+	}
+
+	return dag, nil
+}
+
+// validateGotos checks that all goto references point to known steps that
+// appear earlier in topological order, and applies default max-iterations.
+func validateGotos(dag *DAG, steps []parser.Step) error {
+	orderIndex := make(map[string]int, len(dag.Order))
+	for i, id := range dag.Order {
 		orderIndex[id] = i
 	}
 
@@ -75,11 +83,11 @@ func BuildDAG(steps []parser.Step) (*DAG, error) {
 		}
 
 		if _, ok := dag.Nodes[s.Goto.Target]; !ok {
-			return nil, fmt.Errorf("step %q goto references unknown step %q", s.ID, s.Goto.Target)
+			return fmt.Errorf("step %q goto references unknown step %q", s.ID, s.Goto.Target)
 		}
 
 		if orderIndex[s.Goto.Target] >= orderIndex[s.ID] {
-			return nil, fmt.Errorf("step %q goto target %q must be topologically before it", s.ID, s.Goto.Target)
+			return fmt.Errorf("step %q goto target %q must be topologically before it", s.ID, s.Goto.Target)
 		}
 
 		if s.Goto.MaxIterations <= 0 {
@@ -87,7 +95,7 @@ func BuildDAG(steps []parser.Step) (*DAG, error) {
 		}
 	}
 
-	return dag, nil
+	return nil
 }
 
 // topoSort performs Kahn's algorithm for topological sorting.
@@ -124,67 +132,4 @@ func topoSort(dag *DAG) ([]string, error) {
 	}
 
 	return order, nil
-}
-
-// FindLoopBody computes the set of nodes that form the loop body between
-// targetID and gotoID. It is the intersection of forward-reachable nodes from
-// target and backward-reachable nodes from gotoStep.
-func FindLoopBody(dag *DAG, targetID, gotoID string) []string {
-	// BFS forward from target → all descendants (+ itself)
-	forward := map[string]bool{targetID: true}
-
-	queue := []string{targetID}
-	for len(queue) > 0 {
-		id := queue[0]
-		queue = queue[1:]
-
-		for _, child := range dag.Nodes[id].Children {
-			if !forward[child.Step.ID] {
-				forward[child.Step.ID] = true
-
-				queue = append(queue, child.Step.ID)
-			}
-		}
-	}
-
-	// BFS backward from gotoStep → all ancestors (+ itself)
-	backward := map[string]bool{gotoID: true}
-
-	queue = []string{gotoID}
-	for len(queue) > 0 {
-		id := queue[0]
-		queue = queue[1:]
-
-		for _, parent := range dag.Nodes[id].Parents {
-			if !backward[parent.Step.ID] {
-				backward[parent.Step.ID] = true
-
-				queue = append(queue, parent.Step.ID)
-			}
-		}
-	}
-
-	// Intersection
-	var body []string
-
-	for id := range forward {
-		if backward[id] {
-			body = append(body, id)
-		}
-	}
-
-	return body
-}
-
-// loopInDegree counts the number of parents of stepID that are within the bodySet.
-func loopInDegree(dag *DAG, bodySet map[string]bool, stepID string) int {
-	count := 0
-
-	for _, parent := range dag.Nodes[stepID].Parents {
-		if bodySet[parent.Step.ID] {
-			count++
-		}
-	}
-
-	return count
 }

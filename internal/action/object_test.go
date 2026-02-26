@@ -16,7 +16,7 @@ func TestObjectAction(t *testing.T) {
 
 func (s *ObjectActionTestSuite) SetupTest() {}
 
-func (s *ObjectActionTestSuite) TestKeys() {
+func (s *ObjectActionTestSuite) TestKeys_PassthroughConfig() {
 	a := NewObjectAction()
 	ctx := newTestContext(map[string]any{
 		"name":   "Alice",
@@ -49,7 +49,7 @@ func (s *ObjectActionTestSuite) TestKeysIgnoresMode() {
 	s.False(hasMode)
 }
 
-func (s *ObjectActionTestSuite) TestMerge() {
+func (s *ObjectActionTestSuite) TestMerge_LastWins() {
 	a := NewObjectAction()
 	ctx := newTestContext(map[string]any{
 		"mode": "merge",
@@ -102,5 +102,25 @@ func (s *ObjectActionTestSuite) TestValidateMergeMissingObjects() {
 func (s *ObjectActionTestSuite) TestValidateKeysModeOK() {
 	a := NewObjectAction()
 	err := a.Validate(newTestContext(map[string]any{"name": "test"}))
+	s.NoError(err)
+}
+
+func (s *ObjectActionTestSuite) TestMergeObjectsNotArray() {
+	a := NewObjectAction()
+	ctx := newTestContext(map[string]any{
+		"mode":    "merge",
+		"objects": "not-an-array",
+	})
+	_, err := a.Execute(ctx)
+	s.Error(err)
+	s.Contains(err.Error(), "'objects' must be an array")
+}
+
+func (s *ObjectActionTestSuite) TestValidateMergeOK() {
+	a := NewObjectAction()
+	err := a.Validate(newTestContext(map[string]any{
+		"mode":    "merge",
+		"objects": []any{},
+	}))
 	s.NoError(err)
 }

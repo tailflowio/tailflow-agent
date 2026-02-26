@@ -24,22 +24,21 @@ builds:
       - -s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}} -X main.date={{.Date}}
 
 archives:
-  - format: tar.gz
+  - formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
 
-brews:
-  - repository:
+homebrew_casks:
+  - name: tailflow
+    directory: Casks
+    repository:
       owner: tailflowio
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    directory: Formula
+    url:
+      verified: github.com/tailflowio/tailflow-agent
     homepage: "https://github.com/tailflowio/tailflow-agent"
     description: "TailFlow workflow engine"
     license: "MIT"
-    install: |
-      bin.install "tailflow"
-    test: |
-      system "#{bin}/tailflow", "--version"
 
 checksum:
   name_template: "checksums.txt"

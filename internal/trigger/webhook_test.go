@@ -17,6 +17,10 @@ func TestWebhook(t *testing.T) {
 	suite.Run(t, new(WebhookTestSuite))
 }
 
+func (s *WebhookTestSuite) SetupTest() {
+	// required by convention
+}
+
 func (s *WebhookTestSuite) TestValidateWebhookSignature_Valid() {
 	secret := "mysecret"
 	payload := []byte(`{"action":"push"}`)

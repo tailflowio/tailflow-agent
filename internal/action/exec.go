@@ -15,7 +15,6 @@ import (
 	"time"
 )
 
-// ExecAction runs shell commands.
 type ExecAction struct{}
 
 func NewExecAction() Action { return &ExecAction{} }
@@ -37,60 +36,30 @@ func (a *ExecAction) Validate(ctx *ActionContext) error {
 }
 
 func (a *ExecAction) Execute(ctx *ActionContext) (any, error) {
-	var args []string
-
-	switch cmd := ctx.Config["command"].(type) {
-	case string:
-		args = strings.Fields(cmd)
-	case []any:
-		for _, v := range cmd {
-			args = append(args, fmt.Sprintf("%v", v))
-		}
-	}
-
+	args := parseCommandArgs(ctx)
 	if len(args) == 0 {
 		return nil, errors.New("exec action: empty command")
 	}
 
 	command := exec.CommandContext(ctx, args[0], args[1:]...)
-
-	// Graceful shutdown: send SIGINT first, then SIGKILL after 5s grace period
 	command.Cancel = func() error {
 		return command.Process.Signal(syscall.SIGINT)
 	}
 	command.WaitDelay = 5 * time.Second
 
-	// Set working directory
-	if dir, ok := ctx.Config["dir"]; ok {
-		command.Dir = fmt.Sprintf("%v", dir)
-	}
+	applyExecOptions(command, ctx)
 
-	// Set environment variables
-	if envMap, ok := ctx.Config["env"]; ok {
-		if envM, ok := envMap.(map[string]any); ok {
-			for k, v := range envM {
-				command.Env = append(command.Env, fmt.Sprintf("%s=%v", k, v))
-			}
-		}
-	}
-
-	// When EmitLog is available, stream stdout/stderr line by line.
 	if ctx.EmitLog != nil {
 		return a.executeStreaming(ctx, command)
 	}
 
 	var stdout, stderr bytes.Buffer
-
 	command.Stdout = &stdout
 	command.Stderr = &stderr
 
 	err := command.Run()
 
-	output := map[string]any{
-		"stdout":    stdout.String(),
-		"stderr":    stderr.String(),
-		"exit_code": command.ProcessState.ExitCode(),
-	}
+	output := buildExecOutput(stdout.String(), stderr.String(), command.ProcessState.ExitCode())
 
 	if err != nil {
 		return output, fmt.Errorf("exec: %w\nstderr: %s", err, stderr.String())
@@ -99,7 +68,44 @@ func (a *ExecAction) Execute(ctx *ActionContext) (any, error) {
 	return output, nil
 }
 
-// executeStreaming runs the command while emitting each output line as a live log.
+func parseCommandArgs(ctx *ActionContext) []string {
+	switch cmd := ctx.Config["command"].(type) {
+	case string:
+		return strings.Fields(cmd)
+	case []any:
+		args := make([]string, 0, len(cmd))
+		for _, v := range cmd {
+			args = append(args, fmt.Sprintf("%v", v))
+		}
+
+		return args
+	default:
+		return nil
+	}
+}
+
+func applyExecOptions(command *exec.Cmd, ctx *ActionContext) {
+	if dir, ok := ctx.Config["dir"]; ok {
+		command.Dir = fmt.Sprintf("%v", dir)
+	}
+
+	if envMap, ok := ctx.Config["env"]; ok {
+		if envM, ok := envMap.(map[string]any); ok {
+			for k, v := range envM {
+				command.Env = append(command.Env, fmt.Sprintf("%s=%v", k, v))
+			}
+		}
+	}
+}
+
+func buildExecOutput(stdout, stderr string, exitCode int) map[string]any {
+	return map[string]any{
+		"stdout":    stdout,
+		"stderr":    stderr,
+		"exit_code": exitCode,
+	}
+}
+
 func (a *ExecAction) executeStreaming(ctx *ActionContext, command *exec.Cmd) (any, error) {
 	stdoutPipe, err := command.StdoutPipe()
 	if err != nil {
@@ -111,17 +117,28 @@ func (a *ExecAction) executeStreaming(ctx *ActionContext, command *exec.Cmd) (an
 		return nil, fmt.Errorf("exec: stderr pipe: %w", err)
 	}
 
-	if startErr := command.Start(); startErr != nil {
+	startErr := command.Start()
+	if startErr != nil {
 		return nil, fmt.Errorf("exec: start: %w", startErr)
 	}
 
-	var (
-		stdoutBuf bytes.Buffer
-		stderrBuf bytes.Buffer
-		wg        sync.WaitGroup
-	)
+	stdoutStr, stderrStr := captureStreams(ctx, stdoutPipe, stderrPipe)
 
-	// Stream helper: scans lines from a reader, emits them, and captures the full output.
+	waitErr := command.Wait()
+
+	output := buildExecOutput(stdoutStr, stderrStr, command.ProcessState.ExitCode())
+
+	if waitErr != nil {
+		return output, fmt.Errorf("exec: %w\nstderr: %s", waitErr, stderrStr)
+	}
+
+	return output, nil
+}
+
+func captureStreams(ctx *ActionContext, stdoutPipe, stderrPipe io.Reader) (string, string) {
+	var stdoutBuf, stderrBuf bytes.Buffer
+	var wg sync.WaitGroup
+
 	streamLines := func(r io.Reader, buf *bytes.Buffer, prefix string) {
 		defer wg.Done()
 
@@ -146,17 +163,5 @@ func (a *ExecAction) executeStreaming(ctx *ActionContext, command *exec.Cmd) (an
 
 	wg.Wait()
 
-	waitErr := command.Wait()
-
-	output := map[string]any{
-		"stdout":    stdoutBuf.String(),
-		"stderr":    stderrBuf.String(),
-		"exit_code": command.ProcessState.ExitCode(),
-	}
-
-	if waitErr != nil {
-		return output, fmt.Errorf("exec: %w\nstderr: %s", waitErr, stderrBuf.String())
-	}
-
-	return output, nil
+	return stdoutBuf.String(), stderrBuf.String()
 }

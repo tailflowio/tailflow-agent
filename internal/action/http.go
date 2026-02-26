@@ -11,7 +11,6 @@ import (
 	"time"
 )
 
-// HTTPAction performs HTTP requests.
 type HTTPAction struct{}
 
 func NewHTTPAction() Action { return &HTTPAction{} }
@@ -32,20 +31,9 @@ func (a *HTTPAction) Execute(ctx *ActionContext) (any, error) {
 
 	url := fmt.Sprintf("%v", ctx.Config["url"])
 
-	var bodyReader io.Reader
-
-	if body, ok := ctx.Config["body"]; ok {
-		switch b := body.(type) {
-		case string:
-			bodyReader = strings.NewReader(b)
-		default:
-			data, err := json.Marshal(b)
-			if err != nil {
-				return nil, fmt.Errorf("http: marshal body: %w", err)
-			}
-
-			bodyReader = bytes.NewReader(data)
-		}
+	bodyReader, err := buildHTTPBody(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
@@ -53,7 +41,48 @@ func (a *HTTPAction) Execute(ctx *ActionContext) (any, error) {
 		return nil, fmt.Errorf("http: create request: %w", err)
 	}
 
-	// Set headers
+	applyHTTPHeaders(req, ctx, bodyReader)
+
+	client := &http.Client{Timeout: resolveHTTPTimeout(ctx)}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("http: request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	output, err := parseHTTPResponse(resp)
+	if err != nil {
+		return nil, err
+	}
+
+	err = checkExpectedStatus(ctx, output, resp.StatusCode)
+	if err != nil {
+		return output, err
+	}
+
+	return output, nil
+}
+
+func buildHTTPBody(ctx *ActionContext) (io.Reader, error) {
+	body, ok := ctx.Config["body"]
+	if !ok {
+		return nil, nil
+	}
+
+	if b, ok := body.(string); ok {
+		return strings.NewReader(b), nil
+	}
+
+	data, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("http: marshal body: %w", err)
+	}
+
+	return bytes.NewReader(data), nil
+}
+
+func applyHTTPHeaders(req *http.Request, ctx *ActionContext, bodyReader io.Reader) {
 	if headers, ok := ctx.Config["headers"]; ok {
 		if hMap, ok := headers.(map[string]any); ok {
 			for k, v := range hMap {
@@ -62,41 +91,31 @@ func (a *HTTPAction) Execute(ctx *ActionContext) (any, error) {
 		}
 	}
 
-	// Default content-type for body
 	if bodyReader != nil && req.Header.Get("Content-Type") == "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
+}
 
-	// Use config timeout if provided, otherwise check if the step context
-	// already has a deadline (from step-level timeout). Only fall back to 30s
-	// default when neither is set.
-	var clientTimeout time.Duration
-
+func resolveHTTPTimeout(ctx *ActionContext) time.Duration {
 	if t, ok := ctx.Config["timeout"]; ok {
-		if ts, ok := t.(string); ok {
-			if d, parseErr := time.ParseDuration(ts); parseErr == nil {
-				clientTimeout = d
+		ts, ok := t.(string)
+		if ok {
+			d, parseErr := time.ParseDuration(ts)
+			if parseErr == nil {
+				return d
 			}
 		}
 	}
 
-	if clientTimeout == 0 {
-		if _, hasDeadline := ctx.Deadline(); hasDeadline {
-			clientTimeout = 0 // context deadline will handle it
-		} else {
-			clientTimeout = 30 * time.Second
-		}
+	_, hasDeadline := ctx.Deadline()
+	if hasDeadline {
+		return 0
 	}
 
-	client := &http.Client{Timeout: clientTimeout}
+	return 30 * time.Second
+}
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("http: request failed: %w", err)
-	}
-
-	defer resp.Body.Close()
-
+func parseHTTPResponse(resp *http.Response) (map[string]any, error) {
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("http: read response: %w", err)
@@ -108,8 +127,8 @@ func (a *HTTPAction) Execute(ctx *ActionContext) (any, error) {
 		"headers":     headerToMap(resp.Header),
 	}
 
-	// Try to parse as JSON
 	var jsonBody any
+
 	err = json.Unmarshal(respBody, &jsonBody)
 	if err == nil {
 		output["body"] = jsonBody
@@ -117,25 +136,37 @@ func (a *HTTPAction) Execute(ctx *ActionContext) (any, error) {
 		output["body"] = string(respBody)
 	}
 
-	// Check expected status
-	if expect, ok := ctx.Config["expect"]; ok {
-		if expectMap, ok := expect.(map[string]any); ok {
-			if expectedStatus, ok := expectMap["status"]; ok {
-				switch es := expectedStatus.(type) {
-				case int:
-					if es != resp.StatusCode {
-						return output, fmt.Errorf("http: expected status %d, got %d", es, resp.StatusCode)
-					}
-				case float64:
-					if int(es) != resp.StatusCode {
-						return output, fmt.Errorf("http: expected status %d, got %d", int(es), resp.StatusCode)
-					}
-				}
-			}
+	return output, nil
+}
+
+func checkExpectedStatus(ctx *ActionContext, _ map[string]any, statusCode int) error {
+	expect, ok := ctx.Config["expect"]
+	if !ok {
+		return nil
+	}
+
+	expectMap, ok := expect.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	expectedStatus, ok := expectMap["status"]
+	if !ok {
+		return nil
+	}
+
+	switch es := expectedStatus.(type) {
+	case int:
+		if es != statusCode {
+			return fmt.Errorf("http: expected status %d, got %d", es, statusCode)
+		}
+	case float64:
+		if int(es) != statusCode {
+			return fmt.Errorf("http: expected status %d, got %d", int(es), statusCode)
 		}
 	}
 
-	return output, nil
+	return nil
 }
 
 func headerToMap(h http.Header) map[string]string {

@@ -7,8 +7,6 @@ import (
 	"strconv"
 )
 
-// toFloat64 converts int, float64, or string to float64.
-// Returns the value and true on success, 0 and false on failure.
 func toFloat64(v any) (float64, bool) {
 	switch n := v.(type) {
 	case float64:
@@ -25,7 +23,6 @@ func toFloat64(v any) (float64, bool) {
 	}
 }
 
-// MathAction computes aggregate operations on a numeric array.
 type MathAction struct{}
 
 func NewMathAction() Action { return &MathAction{} }
@@ -43,6 +40,20 @@ func (a *MathAction) Validate(ctx *ActionContext) error {
 }
 
 func (a *MathAction) Execute(ctx *ActionContext) (any, error) {
+	values, err := extractNumericValues(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	ops, err := parseOperations(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return computeOperations(values, ops)
+}
+
+func extractNumericValues(ctx *ActionContext) ([]float64, error) {
 	raw, ok := ctx.Config["input"]
 	if !ok {
 		return nil, errors.New("math: missing 'input'")
@@ -55,7 +66,10 @@ func (a *MathAction) Execute(ctx *ActionContext) (any, error) {
 
 	field, _ := ctx.Config["field"].(string)
 
-	// Extract numeric values.
+	return toFloat64Slice(arr, field)
+}
+
+func toFloat64Slice(arr []any, field string) ([]float64, error) {
 	values := make([]float64, 0, len(arr))
 
 	for _, item := range arr {
@@ -74,7 +88,10 @@ func (a *MathAction) Execute(ctx *ActionContext) (any, error) {
 		values = append(values, f)
 	}
 
-	// Parse requested operations.
+	return values, nil
+}
+
+func parseOperations(ctx *ActionContext) ([]string, error) {
 	rawOps, ok := ctx.Config["operations"].([]any)
 	if !ok {
 		return nil, errors.New("math: 'operations' must be an array")
@@ -85,60 +102,84 @@ func (a *MathAction) Execute(ctx *ActionContext) (any, error) {
 		ops[i] = fmt.Sprintf("%v", o)
 	}
 
+	return ops, nil
+}
+
+func computeOperations(values []float64, ops []string) (map[string]any, error) {
 	result := make(map[string]any, len(ops))
 
 	for _, op := range ops {
-		switch op {
-		case "count":
-			result["count"] = float64(len(values))
-		case "sum":
-			var s float64
-			for _, v := range values {
-				s += v
-			}
-
-			result["sum"] = s
-		case "min":
-			if len(values) == 0 {
-				result["min"] = nil
-			} else {
-				m := math.Inf(1)
-				for _, v := range values {
-					if v < m {
-						m = v
-					}
-				}
-
-				result["min"] = m
-			}
-		case "max":
-			if len(values) == 0 {
-				result["max"] = nil
-			} else {
-				m := math.Inf(-1)
-				for _, v := range values {
-					if v > m {
-						m = v
-					}
-				}
-
-				result["max"] = m
-			}
-		case "avg":
-			if len(values) == 0 {
-				result["avg"] = nil
-			} else {
-				var s float64
-				for _, v := range values {
-					s += v
-				}
-
-				result["avg"] = s / float64(len(values))
-			}
-		default:
-			return nil, fmt.Errorf("math: unknown operation %q", op)
+		v, err := computeSingleOp(values, op)
+		if err != nil {
+			return nil, err
 		}
+
+		result[op] = v
 	}
 
 	return result, nil
+}
+
+func computeSingleOp(values []float64, op string) (any, error) {
+	switch op {
+	case "count":
+		return float64(len(values)), nil
+	case "sum":
+		return sumFloat64(values), nil
+	case "min":
+		return minFloat64(values), nil
+	case "max":
+		return maxFloat64(values), nil
+	case "avg":
+		return avgFloat64(values), nil
+	default:
+		return nil, fmt.Errorf("math: unknown operation %q", op)
+	}
+}
+
+func sumFloat64(values []float64) float64 {
+	var s float64
+	for _, v := range values {
+		s += v
+	}
+
+	return s
+}
+
+func minFloat64(values []float64) any {
+	if len(values) == 0 {
+		return nil
+	}
+
+	m := math.Inf(1)
+	for _, v := range values {
+		if v < m {
+			m = v
+		}
+	}
+
+	return m
+}
+
+func maxFloat64(values []float64) any {
+	if len(values) == 0 {
+		return nil
+	}
+
+	m := math.Inf(-1)
+	for _, v := range values {
+		if v > m {
+			m = v
+		}
+	}
+
+	return m
+}
+
+func avgFloat64(values []float64) any {
+	if len(values) == 0 {
+		return nil
+	}
+
+	return sumFloat64(values) / float64(len(values))
 }

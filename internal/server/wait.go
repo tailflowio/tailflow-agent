@@ -22,7 +22,6 @@ type WaitRegistry struct {
 	registrations map[string]*WaitRegistration // key: "{executionID}/{path}"
 }
 
-// NewWaitRegistry creates a new WaitRegistry.
 func NewWaitRegistry() *WaitRegistry {
 	return &WaitRegistry{
 		registrations: make(map[string]*WaitRegistration),

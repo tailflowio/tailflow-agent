@@ -113,3 +113,102 @@ func (s *MathActionTestSuite) TestValidateMissingOps() {
 	}))
 	s.Error(err)
 }
+
+func (s *MathActionTestSuite) TestValidateOK() {
+	a := NewMathAction()
+	err := a.Validate(newTestContext(map[string]any{
+		"input":      []any{1.0},
+		"operations": []any{"sum"},
+	}))
+	s.NoError(err)
+}
+
+func (s *MathActionTestSuite) TestToFloat64Int() {
+	f, ok := toFloat64(42)
+	s.True(ok)
+	s.Equal(float64(42), f)
+}
+
+func (s *MathActionTestSuite) TestToFloat64Int64() {
+	f, ok := toFloat64(int64(100))
+	s.True(ok)
+	s.Equal(float64(100), f)
+}
+
+func (s *MathActionTestSuite) TestToFloat64String() {
+	f, ok := toFloat64("3.14")
+	s.True(ok)
+	s.Equal(3.14, f)
+}
+
+func (s *MathActionTestSuite) TestToFloat64InvalidString() {
+	_, ok := toFloat64("not-a-number")
+	s.False(ok)
+}
+
+func (s *MathActionTestSuite) TestToFloat64UnsupportedType() {
+	_, ok := toFloat64([]int{1, 2})
+	s.False(ok)
+}
+
+func (s *MathActionTestSuite) TestMissingInputInExecute() {
+	a := NewMathAction()
+	ctx := newTestContext(map[string]any{
+		"operations": []any{"sum"},
+	})
+	_, err := a.Execute(ctx)
+	s.Error(err)
+	s.Contains(err.Error(), "missing 'input'")
+}
+
+func (s *MathActionTestSuite) TestInputNotArray() {
+	a := NewMathAction()
+	ctx := newTestContext(map[string]any{
+		"input":      "not an array",
+		"operations": []any{"sum"},
+	})
+	_, err := a.Execute(ctx)
+	s.Error(err)
+	s.Contains(err.Error(), "must be an array")
+}
+
+func (s *MathActionTestSuite) TestOperationsNotArray() {
+	a := NewMathAction()
+	ctx := newTestContext(map[string]any{
+		"input":      []any{1.0},
+		"operations": "sum",
+	})
+	_, err := a.Execute(ctx)
+	s.Error(err)
+	s.Contains(err.Error(), "'operations' must be an array")
+}
+
+func (s *MathActionTestSuite) TestNonNumericValuesSkipped() {
+	a := NewMathAction()
+	ctx := newTestContext(map[string]any{
+		"input":      []any{10.0, "not-a-num", 20.0, nil},
+		"operations": []any{"sum", "count"},
+	})
+
+	out, err := a.Execute(ctx)
+	s.Require().NoError(err)
+
+	m := out.(map[string]any)
+	s.Equal(30.0, m["sum"])
+	s.Equal(2.0, m["count"])
+}
+
+func (s *MathActionTestSuite) TestWithIntValues() {
+	a := NewMathAction()
+	ctx := newTestContext(map[string]any{
+		"input":      []any{10, 20, 30},
+		"operations": []any{"sum", "avg"},
+	})
+
+	out, err := a.Execute(ctx)
+	s.Require().NoError(err)
+
+	m := out.(map[string]any)
+	s.Equal(60.0, m["sum"])
+	s.Equal(20.0, m["avg"])
+}

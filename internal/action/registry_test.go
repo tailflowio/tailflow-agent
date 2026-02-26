@@ -41,7 +41,7 @@ func (s *RegistryTestSuite) TestCreateUnknown() {
 	s.ErrorContains(err, "unknown action")
 }
 
-func (s *RegistryTestSuite) TestHas() {
+func (s *RegistryTestSuite) TestHas_RegisteredAction() {
 	reg := action.NewRegistry()
 	s.False(reg.Has("mock"))
 
@@ -50,7 +50,7 @@ func (s *RegistryTestSuite) TestHas() {
 	s.True(reg.Has("mock"))
 }
 
-func (s *RegistryTestSuite) TestNames() {
+func (s *RegistryTestSuite) TestNames_SortedAlphabetically() {
 	reg := action.NewRegistry()
 	fa := fakeaction.NewAction(s.T())
 	reg.Register("http", func() action.Action { return fa })

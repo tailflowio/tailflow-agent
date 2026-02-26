@@ -9,8 +9,6 @@ import (
 	"github.com/tailflow/tailflow/internal/runtime"
 )
 
-// ---------- helpers ----------
-
 func arrayInput(config map[string]any) ([]any, error) {
 	raw, ok := config["input"]
 	if !ok {
@@ -54,8 +52,6 @@ func compareValues(a, b any) int {
 
 	return strings.Compare(as, bs)
 }
-
-// ---------- array.sort ----------
 
 // ArraySortAction sorts an array by a field.
 type ArraySortAction struct{}
@@ -106,8 +102,6 @@ func (a *ArraySortAction) Execute(ctx *ActionContext) (any, error) {
 	return sorted, nil
 }
 
-// ---------- array.filter ----------
-
 // ArrayFilterAction filters an array using an expression.
 type ArrayFilterAction struct{}
 
@@ -156,8 +150,6 @@ func (a *ArrayFilterAction) Execute(ctx *ActionContext) (any, error) {
 	return result, nil
 }
 
-// ---------- array.map ----------
-
 // ArrayMapAction transforms each element using an expression.
 type ArrayMapAction struct{}
 
@@ -200,8 +192,6 @@ func (a *ArrayMapAction) Execute(ctx *ActionContext) (any, error) {
 	return result, nil
 }
 
-// ---------- array.uniq ----------
-
 // ArrayUniqAction deduplicates an array by a field value.
 type ArrayUniqAction struct{}
 
@@ -227,8 +217,7 @@ func (a *ArrayUniqAction) Execute(ctx *ActionContext) (any, error) {
 
 	field := fmt.Sprintf("%v", ctx.Config["field"])
 	seen := make(map[string]bool)
-
-	var result []any
+	result := make([]any, 0, len(items))
 
 	for _, item := range items {
 		key := fmt.Sprintf("%v", fieldValue(item, field))
@@ -237,17 +226,16 @@ func (a *ArrayUniqAction) Execute(ctx *ActionContext) (any, error) {
 		}
 
 		seen[key] = true
+
 		result = append(result, item)
 	}
 
-	if result == nil {
+	if len(result) == 0 {
 		result = []any{}
 	}
 
 	return result, nil
 }
-
-// ---------- array.pick ----------
 
 // ArrayPickAction selects specific fields from each object in an array.
 type ArrayPickAction struct{}
@@ -292,6 +280,7 @@ func (a *ArrayPickAction) Execute(ctx *ActionContext) (any, error) {
 		}
 
 		picked := make(map[string]any, len(fields))
+
 		for _, f := range fields {
 			if v, exists := m[f]; exists {
 				picked[f] = v
@@ -303,8 +292,6 @@ func (a *ArrayPickAction) Execute(ctx *ActionContext) (any, error) {
 
 	return result, nil
 }
-
-// ---------- array.concat ----------
 
 // ArrayConcatAction concatenates multiple arrays into one.
 type ArrayConcatAction struct{}

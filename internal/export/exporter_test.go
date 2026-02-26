@@ -56,9 +56,9 @@ func collectRequests(t *testing.T) (*httptest.Server, *[]request, *sync.Mutex) {
 func getRequests(mu *sync.Mutex, reqs *[]request) []request {
 	mu.Lock()
 	defer mu.Unlock()
-	cp := make([]request, len(*reqs))
-	copy(cp, *reqs)
-	return cp
+	copiedRequests := make([]request, len(*reqs))
+	copy(copiedRequests, *reqs)
+	return copiedRequests
 }
 
 func newTestConfig(url string, bus *event.Bus) Config {
@@ -86,7 +86,10 @@ func TestExporter(t *testing.T) {
 	suite.Run(t, new(ExporterTestSuite))
 }
 
-func (s *ExporterTestSuite) TestRegistration() {
+func (s *ExporterTestSuite) SetupTest() { // required by convention
+}
+
+func (s *ExporterTestSuite) TestRegistration_AssignsAgentID() {
 	srv, reqs, mu := collectRequests(s.T())
 	defer srv.Close()
 
@@ -115,38 +118,23 @@ func (s *ExporterTestSuite) TestRegistration() {
 	for _, r := range got {
 		if r.Path == "/api/v1/agent/register" {
 			found = true
-			if r.Body["workflow_name"] != "test-wf" {
-				s.T().Errorf("expected workflow_name=test-wf, got %v", r.Body["workflow_name"])
-			}
-			if r.Body["workflow_description"] != "A test workflow" {
-				s.T().Errorf("expected workflow_description, got %v", r.Body["workflow_description"])
-			}
-			if r.Body["trigger_type"] != "http" {
-				s.T().Errorf("expected trigger_type=http, got %v", r.Body["trigger_type"])
-			}
-			if r.Body["version"] != "1.0.0" {
-				s.T().Errorf("expected version=1.0.0, got %v", r.Body["version"])
-			}
+			s.Equal("test-wf", r.Body["workflow_name"])
+			s.Equal("A test workflow", r.Body["workflow_description"])
+			s.Equal("http", r.Body["trigger_type"])
+			s.Equal("1.0.0", r.Body["version"])
 			// agent_id should NOT be in the request — it's assigned by the SaaS
-			if _, hasID := r.Body["agent_id"]; hasID {
-				s.T().Error("register request should not contain agent_id")
-			}
+			_, hasID := r.Body["agent_id"]
+			s.False(hasID, "register request should not contain agent_id")
 			break
 		}
 	}
 
-	if !found {
-		s.T().Fatal("no /register request received")
-	}
+	s.Require().True(found, "no /register request received")
 
 	// Verify agent_id was assigned from response
 	agentID, ok := exp.isRegistered()
-	if !ok {
-		s.T().Fatal("expected exporter to be registered")
-	}
-	if agentID != "saas-assigned-id" {
-		s.T().Errorf("expected agent_id=saas-assigned-id, got %v", agentID)
-	}
+	s.Require().True(ok, "expected exporter to be registered")
+	s.Equal("saas-assigned-id", agentID)
 }
 
 func (s *ExporterTestSuite) TestBatchFlush() {
@@ -197,23 +185,15 @@ func (s *ExporterTestSuite) TestBatchFlush() {
 	for _, r := range got {
 		if r.Path == "/api/v1/agent/ingest" {
 			ingestFound = true
-			if r.Body["agent_id"] != "saas-assigned-id" {
-				s.T().Errorf("expected agent_id=saas-assigned-id in ingest, got %v", r.Body["agent_id"])
-			}
+			s.Equal("saas-assigned-id", r.Body["agent_id"])
 			events, ok := r.Body["events"].([]any)
-			if !ok {
-				s.T().Fatalf("expected events array, got %T", r.Body["events"])
-			}
-			if len(events) == 0 {
-				s.T().Fatal("expected at least one event in ingest")
-			}
+			s.Require().True(ok, "expected events array")
+			s.NotEmpty(events, "expected at least one event in ingest")
 			break
 		}
 	}
 
-	if !ingestFound {
-		s.T().Fatal("no /ingest request received")
-	}
+	s.Require().True(ingestFound, "no /ingest request received")
 }
 
 func (s *ExporterTestSuite) TestMetricsFiltered() {
@@ -270,15 +250,13 @@ func (s *ExporterTestSuite) TestMetricsFiltered() {
 				if !ok {
 					continue
 				}
-				if ev["type"] == string(event.Metrics) {
-					s.T().Fatal("metrics event should have been filtered out")
-				}
+				s.NotEqual(string(event.Metrics), ev["type"], "metrics event should have been filtered out")
 			}
 		}
 	}
 }
 
-func (s *ExporterTestSuite) TestHeartbeat() {
+func (s *ExporterTestSuite) TestHeartbeat_SendsAgentStatus() {
 	srv, reqs, mu := collectRequests(s.T())
 	defer srv.Close()
 
@@ -307,22 +285,14 @@ func (s *ExporterTestSuite) TestHeartbeat() {
 	for _, r := range got {
 		if r.Path == "/api/v1/agent/heartbeat" {
 			found = true
-			if r.Body["agent_id"] != "saas-assigned-id" {
-				s.T().Errorf("expected agent_id=saas-assigned-id in heartbeat, got %v", r.Body["agent_id"])
-			}
-			if _, ok := r.Body["uptime_s"]; !ok {
-				s.T().Error("expected uptime_s in heartbeat")
-			}
-			if _, ok := r.Body["active_executions"]; !ok {
-				s.T().Error("expected active_executions in heartbeat")
-			}
+			s.Equal("saas-assigned-id", r.Body["agent_id"])
+			s.Contains(r.Body, "uptime_s", "expected uptime_s in heartbeat")
+			s.Contains(r.Body, "active_executions", "expected active_executions in heartbeat")
 			break
 		}
 	}
 
-	if !found {
-		s.T().Fatal("no /heartbeat request received")
-	}
+	s.Require().True(found, "no /heartbeat request received")
 }
 
 func (s *ExporterTestSuite) TestActiveExecutionTracking() {
@@ -341,9 +311,7 @@ func (s *ExporterTestSuite) TestActiveExecutionTracking() {
 	})
 
 	exp.mu.Lock()
-	if len(exp.activeExecutions) != 2 {
-		s.T().Errorf("expected 2 active executions, got %d", len(exp.activeExecutions))
-	}
+	s.Len(exp.activeExecutions, 2)
 	exp.mu.Unlock()
 
 	exp.trackExecution(event.Event{
@@ -352,9 +320,7 @@ func (s *ExporterTestSuite) TestActiveExecutionTracking() {
 	})
 
 	exp.mu.Lock()
-	if len(exp.activeExecutions) != 1 {
-		s.T().Errorf("expected 1 active execution, got %d", len(exp.activeExecutions))
-	}
+	s.Len(exp.activeExecutions, 1)
 	exp.mu.Unlock()
 }
 
@@ -412,17 +378,11 @@ func (s *ExporterTestSuite) TestRetryOnError() {
 	got := attempts
 	mu.Unlock()
 
-	if got < 3 {
-		s.T().Errorf("expected at least 3 attempts, got %d", got)
-	}
+	s.GreaterOrEqual(got, 3, "expected at least 3 attempts")
 
 	agentID, ok := exp.isRegistered()
-	if !ok {
-		s.T().Fatal("expected exporter to be registered after retries")
-	}
-	if agentID != "saas-retry-id" {
-		s.T().Errorf("expected agent_id=saas-retry-id, got %v", agentID)
-	}
+	s.Require().True(ok, "expected exporter to be registered after retries")
+	s.Equal("saas-retry-id", agentID)
 }
 
 func (s *ExporterTestSuite) TestServerConfigPush() {
@@ -498,20 +458,14 @@ func (s *ExporterTestSuite) TestServerConfigPush() {
 	fl := exp.flushInterval
 	exp.mu.Unlock()
 
-	if hb != 1*time.Second {
-		s.T().Errorf("expected heartbeat interval 1s, got %v", hb)
-	}
-	if fl != 500*time.Millisecond {
-		s.T().Errorf("expected flush interval 500ms, got %v", fl)
-	}
+	s.Equal(1*time.Second, hb)
+	s.Equal(500*time.Millisecond, fl)
 
 	mu.Lock()
 	got := heartbeats
 	mu.Unlock()
 
-	if got < 2 {
-		s.T().Errorf("expected at least 2 heartbeats, got %d", got)
-	}
+	s.GreaterOrEqual(got, 2, "expected at least 2 heartbeats")
 }
 
 func (s *ExporterTestSuite) TestApplyServerConfigMinimums() {
@@ -533,12 +487,8 @@ func (s *ExporterTestSuite) TestApplyServerConfigMinimums() {
 	after := exp.heartbeatInterval
 	exp.mu.Unlock()
 
-	if changed {
-		s.T().Error("should not have changed with value below minimum")
-	}
-	if before != after {
-		s.T().Errorf("heartbeat interval should not have changed: before=%v after=%v", before, after)
-	}
+	s.False(changed, "should not have changed with value below minimum")
+	s.Equal(before, after, "heartbeat interval should not have changed")
 
 	tooFastFlush := 0.01
 	body, _ = json.Marshal(serverConfig{FlushIntervalS: &tooFastFlush})
@@ -553,9 +503,7 @@ func (s *ExporterTestSuite) TestApplyServerConfigMinimums() {
 	afterFlush := exp.flushInterval
 	exp.mu.Unlock()
 
-	if beforeFlush != afterFlush {
-		s.T().Errorf("flush interval should not have changed: before=%v after=%v", beforeFlush, afterFlush)
-	}
+	s.Equal(beforeFlush, afterFlush, "flush interval should not have changed")
 }
 
 func (s *ExporterTestSuite) TestBufferingBeforeRegistration() {
@@ -636,16 +584,12 @@ func (s *ExporterTestSuite) TestBufferingBeforeRegistration() {
 	got := len(ingestCalls)
 	mu.Unlock()
 
-	if got == 0 {
-		s.T().Fatal("expected ingest call after registration, got none")
-	}
+	s.Require().Greater(got, 0, "expected ingest call after registration, got none")
 
 	// Verify the buffered event was sent with the SaaS-assigned ID
 	mu.Lock()
 	firstIngest := ingestCalls[0]
 	mu.Unlock()
 
-	if firstIngest["agent_id"] != "delayed-id" {
-		s.T().Errorf("expected agent_id=delayed-id in ingest, got %v", firstIngest["agent_id"])
-	}
+	s.Equal("delayed-id", firstIngest["agent_id"])
 }

@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -11,8 +12,28 @@ import (
 
 const kvRedisPrefix = "tailflow:kv:"
 
+// jsonMarshalKV and jsonUnmarshalKV wrap json functions for testing.
+var (
+	jsonMarshalKV   = json.Marshal
+	jsonUnmarshalKV = json.Unmarshal
+)
+
+// redisClient is the subset of *redis.Client methods used by RedisKVStore.
+type redisClient interface {
+	Get(ctx context.Context, key string) *redis.StringCmd
+	Set(ctx context.Context, key string, value any, expiration time.Duration) *redis.StatusCmd
+	Del(ctx context.Context, keys ...string) *redis.IntCmd
+	Ping(ctx context.Context) *redis.StatusCmd
+	Close() error
+}
+
+// newRedisClientFn wraps redis.NewClient for testing.
+var newRedisClientFn = func(opts *redis.Options) redisClient {
+	return redis.NewClient(opts)
+}
+
 type RedisKVStore struct {
-	client *redis.Client
+	client redisClient
 }
 
 func NewRedisKVStore(url string) (*RedisKVStore, error) {
@@ -21,7 +42,7 @@ func NewRedisKVStore(url string) (*RedisKVStore, error) {
 		return nil, fmt.Errorf("redis: invalid URL: %w", err)
 	}
 
-	client := redis.NewClient(opts)
+	client := newRedisClientFn(opts)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -37,15 +58,17 @@ func NewRedisKVStore(url string) (*RedisKVStore, error) {
 
 func (s *RedisKVStore) Get(ctx context.Context, key string) (any, bool) {
 	data, err := s.client.Get(ctx, kvRedisPrefix+key).Bytes()
-	if err == redis.Nil {
+	if errors.Is(err, redis.Nil) {
 		return nil, false
 	}
+
 	if err != nil {
 		return nil, false
 	}
 
 	var value any
-	err = json.Unmarshal(data, &value)
+
+	err = jsonUnmarshalKV(data, &value)
 	if err != nil {
 		return nil, false
 	}
@@ -54,7 +77,7 @@ func (s *RedisKVStore) Get(ctx context.Context, key string) (any, bool) {
 }
 
 func (s *RedisKVStore) Set(ctx context.Context, key string, value any, ttl time.Duration) {
-	data, err := json.Marshal(value)
+	data, err := jsonMarshalKV(value)
 	if err != nil {
 		return
 	}

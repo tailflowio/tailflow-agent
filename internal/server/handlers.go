@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"sort"
@@ -36,6 +37,7 @@ func (s *Server) handleGetWorkflow(w http.ResponseWriter, r *http.Request) {
 			NextRun *time.Time `json:"next_run,omitempty"`
 		}{Workflow: wf, NextRun: nextRun}
 		writeJSON(w, http.StatusOK, resp)
+
 		return
 	}
 
@@ -67,7 +69,10 @@ func (s *Server) handleValidateWorkflow(w http.ResponseWriter, r *http.Request) 
 func (s *Server) handleRunWorkflow(w http.ResponseWriter, r *http.Request) {
 	var req api.RunRequest
 	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&req)
+		decodeErr := json.NewDecoder(r.Body).Decode(&req)
+		if decodeErr != nil {
+			s.config.Logger.DebugContext(r.Context(), "failed to decode run request body", "error", decodeErr)
+		}
 	}
 
 	executionID := s.runWorkflowAsync(req.Params)
@@ -110,7 +115,7 @@ func (s *Server) handleGetWorkflowActivity(w http.ResponseWriter, r *http.Reques
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"steps":      activity,
+		"steps":       activity,
 		"exec_counts": s.config.ExecutionStore.StepExecCounts(),
 	})
 }
@@ -118,36 +123,49 @@ func (s *Server) handleGetWorkflowActivity(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleGetStepDetail(w http.ResponseWriter, r *http.Request) {
 	stepID := r.PathValue("id")
 
-	// Find the step in the workflow definition
-	var step *parser.Step
-
-	for i := range s.config.Workflow.Steps {
-		if s.config.Workflow.Steps[i].ID == stepID {
-			step = &s.config.Workflow.Steps[i]
-
-			break
-		}
-	}
-
+	step := s.findStep(stepID)
 	if step == nil {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("step %q not found", stepID))
 		return
 	}
 
-	// Build history from stored executions
-	execs := s.config.ExecutionStore.List()
+	history := s.buildStepHistory(stepID)
 
-	type historyEntry struct {
-		ExecutionID string `json:"execution_id"`
-		Status      string `json:"status"`
-		StartedAt   string `json:"started_at"`
-		FinishedAt  string `json:"finished_at,omitempty"`
-		DurationMs  int64  `json:"duration_ms"`
-		Output      any    `json:"output,omitempty"`
-		Error       string `json:"error,omitempty"`
+	metrics := s.config.ExecutionStore.GetStepMetrics(stepID)
+	if metrics == nil {
+		metrics = &store.StepMetrics{}
 	}
 
-	history := make([]historyEntry, 0, len(execs))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"step":    step,
+		"history": history,
+		"metrics": metrics,
+	})
+}
+
+func (s *Server) findStep(stepID string) *parser.Step {
+	for i := range s.config.Workflow.Steps {
+		if s.config.Workflow.Steps[i].ID == stepID {
+			return &s.config.Workflow.Steps[i]
+		}
+	}
+
+	return nil
+}
+
+type stepHistoryEntry struct {
+	ExecutionID string `json:"execution_id"`
+	Status      string `json:"status"`
+	StartedAt   string `json:"started_at"`
+	FinishedAt  string `json:"finished_at,omitempty"`
+	DurationMs  int64  `json:"duration_ms"`
+	Output      any    `json:"output,omitempty"`
+	Error       string `json:"error,omitempty"`
+}
+
+func (s *Server) buildStepHistory(stepID string) []stepHistoryEntry {
+	execs := s.config.ExecutionStore.List()
+	history := make([]stepHistoryEntry, 0, len(execs))
 
 	for _, exec := range execs {
 		sr, ok := exec.Steps[stepID]
@@ -155,77 +173,84 @@ func (s *Server) handleGetStepDetail(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		var errStr string
-		if sr.Error != nil {
-			errStr = sr.Error.Message
-		}
-		entry := historyEntry{
-			ExecutionID: exec.ID,
-			Status:      sr.Status,
-			Output:      sr.Output,
-			Error:       errStr,
-		}
-
-		if sr.StartedAt != nil {
-			entry.StartedAt = sr.StartedAt.Format(time.RFC3339)
-		} else {
-			entry.StartedAt = exec.StartedAt.Format(time.RFC3339)
-		}
-
-		if sr.StartedAt != nil && sr.FinishedAt != nil {
-			entry.FinishedAt = sr.FinishedAt.Format(time.RFC3339)
-			entry.DurationMs = sr.FinishedAt.Sub(*sr.StartedAt).Milliseconds()
-		} else if exec.FinishedAt != nil {
-			entry.FinishedAt = exec.FinishedAt.Format(time.RFC3339)
-		}
-
+		entry := buildHistoryEntry(exec, sr)
 		history = append(history, entry)
 	}
 
-	// Read cached metrics (computed every 5s by background goroutine)
-	metrics := s.config.ExecutionStore.GetStepMetrics(stepID)
-	if metrics == nil {
-		metrics = &store.StepMetrics{}
+	return history
+}
+
+func buildHistoryEntry(exec *store.Execution, sr *runtime.StepResult) stepHistoryEntry {
+	var errStr string
+	if sr.Error != nil {
+		errStr = sr.Error.Message
 	}
 
-	resp := map[string]any{
-		"step":    step,
-		"history": history,
-		"metrics": metrics,
+	entry := stepHistoryEntry{
+		ExecutionID: exec.ID,
+		Status:      sr.Status,
+		Output:      sr.Output,
+		Error:       errStr,
 	}
 
-	writeJSON(w, http.StatusOK, resp)
+	if sr.StartedAt != nil {
+		entry.StartedAt = sr.StartedAt.Format(time.RFC3339)
+	} else {
+		entry.StartedAt = exec.StartedAt.Format(time.RFC3339)
+	}
+
+	if sr.StartedAt != nil && sr.FinishedAt != nil {
+		entry.FinishedAt = sr.FinishedAt.Format(time.RFC3339)
+		entry.DurationMs = sr.FinishedAt.Sub(*sr.StartedAt).Milliseconds()
+	} else if exec.FinishedAt != nil {
+		entry.FinishedAt = exec.FinishedAt.Format(time.RFC3339)
+	}
+
+	return entry
 }
 
 func (s *Server) handleListExecutions(w http.ResponseWriter, r *http.Request) {
 	execs := s.config.ExecutionStore.List() // newest-first
 
-	// Filter by status (comma-separated)
-	if statusFilter := r.URL.Query().Get("status"); statusFilter != "" {
-		statuses := strings.Split(statusFilter, ",")
-		statusSet := make(map[string]bool, len(statuses))
-		for _, st := range statuses {
-			statusSet[st] = true
-		}
-		filtered := make([]*store.Execution, 0, len(execs))
-		for _, e := range execs {
-			if statusSet[e.Status] {
-				filtered = append(filtered, e)
-			}
-		}
-		execs = filtered
-	}
-
+	execs = filterByStatus(execs, r.URL.Query().Get("status"))
 	total := len(execs)
 
-	// Sort
-	sortBy := r.URL.Query().Get("sort")  // "date" (default) or "duration"
-	order := r.URL.Query().Get("order")   // "desc" (default) or "asc"
+	sortExecutions(execs, r.URL.Query().Get("sort"), r.URL.Query().Get("order"))
 
+	paged := paginateExecutions(execs, r)
+
+	writeJSON(w, http.StatusOK, map[string]any{"items": paged, "total": total})
+}
+
+func filterByStatus(execs []*store.Execution, statusFilter string) []*store.Execution {
+	if statusFilter == "" {
+		return execs
+	}
+
+	statuses := strings.Split(statusFilter, ",")
+	statusSet := make(map[string]bool, len(statuses))
+
+	for _, st := range statuses {
+		statusSet[st] = true
+	}
+
+	filtered := make([]*store.Execution, 0, len(execs))
+
+	for _, e := range execs {
+		if statusSet[e.Status] {
+			filtered = append(filtered, e)
+		}
+	}
+
+	return filtered
+}
+
+func sortExecutions(execs []*store.Execution, sortBy, order string) {
 	if sortBy == "duration" {
 		sort.Slice(execs, func(i, j int) bool {
 			di := execDuration(execs[i])
 			dj := execDuration(execs[j])
+
 			return di > dj // desc by default
 		})
 	}
@@ -234,27 +259,29 @@ func (s *Server) handleListExecutions(w http.ResponseWriter, r *http.Request) {
 	if order == "asc" {
 		slices.Reverse(execs)
 	}
+}
 
-	// Pagination
+func paginateExecutions(execs []*store.Execution, r *http.Request) []*store.Execution {
 	offset := parseIntParam(r, "offset", 0)
 	limit := parseIntParam(r, "limit", 20)
 
 	if offset > len(execs) {
 		offset = len(execs)
 	}
+
 	end := offset + limit
 	if end > len(execs) {
 		end = len(execs)
 	}
-	paged := execs[offset:end]
 
-	writeJSON(w, http.StatusOK, map[string]any{"items": paged, "total": total})
+	return execs[offset:end]
 }
 
 func execDuration(e *store.Execution) time.Duration {
 	if e.FinishedAt == nil {
 		return 0
 	}
+
 	return e.FinishedAt.Sub(e.StartedAt)
 }
 
@@ -263,10 +290,12 @@ func parseIntParam(r *http.Request, name string, defaultVal int) int {
 	if s == "" {
 		return defaultVal
 	}
+
 	v, err := strconv.Atoi(s)
 	if err != nil || v < 0 {
 		return defaultVal
 	}
+
 	return v
 }
 
@@ -314,14 +343,8 @@ func (s *Server) handlePublicTrigger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	matched := false
-	if wf.Trigger.HTTP != nil && wf.Trigger.HTTP.Path == path && r.Method == wf.Trigger.HTTP.Method {
-		matched = true
-	}
-
-	if wf.Trigger.Webhook != nil && wf.Trigger.Webhook.Path == path {
-		matched = true
-	}
+	matched := (wf.Trigger.HTTP != nil && wf.Trigger.HTTP.Path == path && r.Method == wf.Trigger.HTTP.Method) ||
+		(wf.Trigger.Webhook != nil && wf.Trigger.Webhook.Path == path)
 
 	if !matched {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("no workflow matches %s %s", r.Method, path))
@@ -332,57 +355,14 @@ func (s *Server) handlePublicTrigger(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) executeTriggerWorkflow(w http.ResponseWriter, r *http.Request, wf *parser.Workflow) {
-	var body any
-	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&body)
-	}
+	triggerData, params := s.buildTriggerData(r)
+	executionID, opts, stopCapture := s.prepareTriggerExecution(wf, triggerData, params)
 
-	params := make(map[string]any)
-	triggerData := map[string]any{
-		"method": r.Method,
-		"path":   r.URL.Path,
-		"query":  r.URL.Query(),
-		"body":   body,
-	}
-
-	triggerData["headers"] = headerMap(r.Header)
-
-	// Pre-generate execution ID and store immediately
-	executionID := uuid.New().String()
-	exec := &store.Execution{
-		ID:           executionID,
-		WorkflowName: wf.Name,
-		Status:       runtime.StatusRunning,
-		Params:       params,
-		StartedAt:    time.Now(),
-	}
-	s.config.ExecutionStore.Add(exec)
-
-	stopCapture := s.captureEvents(executionID)
-
-	// Build services for wait actions
-	services := s.buildActionServices()
-
-	opts := engine.ExecuteOptions{
-		ExecutionID: executionID,
-		TriggerData: triggerData,
-		Services:    services,
-	}
-
-	// Cancellable context for this execution
 	execCtx, cancel := context.WithCancel(context.Background())
 	s.registerCancel(executionID, cancel)
 
-	// Async mode: return 202 immediately, run in background
 	if wf.Trigger.HTTP != nil && wf.Trigger.HTTP.Async {
-		go func() {
-			defer stopCapture()
-			defer s.unregisterCancel(executionID)
-
-			result, err := s.config.Executor.Execute(execCtx, wf, params, opts)
-			s.finalizeExecution(executionID, result, err, execCtx)
-		}()
-
+		s.runTriggerAsync(executionID, wf, params, opts, execCtx, stopCapture)
 		writeJSON(w, http.StatusAccepted, map[string]any{
 			"execution_id": executionID,
 			"status":       runtime.StatusRunning,
@@ -391,14 +371,87 @@ func (s *Server) executeTriggerWorkflow(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// Sync mode: block until workflow completes
+	s.runTriggerSync(w, wf, params, opts, execCtx, executionID, stopCapture)
+}
+
+func (s *Server) buildTriggerData(r *http.Request) (map[string]any, map[string]any) {
+	var body any
+	if r.Body != nil {
+		decodeErr := json.NewDecoder(r.Body).Decode(&body)
+		if decodeErr != nil {
+			s.config.Logger.DebugContext(r.Context(), "failed to decode trigger request body", "error", decodeErr)
+		}
+	}
+
+	params := make(map[string]any)
+	triggerData := map[string]any{
+		"method":  r.Method,
+		"path":    r.URL.Path,
+		"query":   r.URL.Query(),
+		"body":    body,
+		"headers": headerMap(r.Header),
+	}
+
+	return triggerData, params
+}
+
+func (s *Server) prepareTriggerExecution(
+	wf *parser.Workflow, triggerData, params map[string]any,
+) (string, engine.ExecuteOptions, func()) {
+	executionID := uuid.New().String()
+	exec := &store.Execution{
+		ID:           executionID,
+		WorkflowName: wf.Name,
+		Status:       runtime.StatusRunning,
+		Params:       s.sensitive.MaskMap(params),
+		StartedAt:    time.Now(),
+	}
+	s.config.ExecutionStore.Add(exec)
+
+	stopCapture := s.captureEvents(executionID)
+	services := s.buildActionServices()
+
+	opts := engine.ExecuteOptions{
+		ExecutionID: executionID,
+		TriggerData: triggerData,
+		Services:    services,
+	}
+
+	return executionID, opts, stopCapture
+}
+
+func (s *Server) runTriggerAsync(
+	executionID string, wf *parser.Workflow, params map[string]any,
+	opts engine.ExecuteOptions, execCtx context.Context, stopCapture func(),
+) {
+	go func() {
+		defer stopCapture()
+		defer s.unregisterCancel(executionID)
+
+		result, err := s.config.Executor.Execute(execCtx, wf, params, opts)
+		s.finalizeExecution(executionID, result, err, execCtx)
+	}()
+}
+
+func (s *Server) runTriggerSync(
+	w http.ResponseWriter, wf *parser.Workflow, params map[string]any,
+	opts engine.ExecuteOptions, execCtx context.Context, executionID string, stopCapture func(),
+) {
 	defer s.unregisterCancel(executionID)
+
 	result, err := s.config.Executor.Execute(execCtx, wf, params, opts)
 
 	stopCapture()
 
 	s.finalizeExecution(executionID, result, err, execCtx)
+	s.writeTriggerResponse(w, wf, result, err, execCtx, executionID)
+}
 
+// writeTriggerResponse writes the HTTP response for a synchronous trigger execution.
+func (s *Server) writeTriggerResponse(
+	w http.ResponseWriter, wf *parser.Workflow, result *engine.ExecuteResult,
+	err error, execCtx context.Context, executionID string,
+) {
 	if err != nil {
 		if execCtx.Err() != nil {
 			writeJSON(w, http.StatusOK, map[string]any{"status": runtime.StatusCancelled, "execution_id": executionID})
@@ -455,7 +508,10 @@ func (s *Server) handleWaitWebhook(w http.ResponseWriter, r *http.Request) {
 
 	var body any
 	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		decodeErr := json.NewDecoder(r.Body).Decode(&body)
+		if decodeErr != nil {
+			s.config.Logger.DebugContext(r.Context(), "failed to decode wait request body", "error", decodeErr)
+		}
 	}
 
 	req := runtime.WaitRequest{
@@ -482,72 +538,104 @@ func buildGraph(wf *parser.Workflow, _ *engine.DAG) workflow.Graph {
 	}
 
 	for _, step := range wf.Steps {
-		label := step.Title
-		if label == "" {
-			label = step.ID
-		}
-
-		node := workflow.GraphNode{
-			ID:     step.ID,
-			Label:  label,
-			Action: step.Action,
-			Type:   "step",
-			When:   step.When,
-		}
-
-		// Extract pipeline sub-actions for loop steps
-		if step.Action == "loop" {
-			if rawActions, ok := step.Config["actions"]; ok {
-				if arr, ok := rawActions.([]any); ok {
-					for _, item := range arr {
-						if m, ok := item.(map[string]any); ok {
-							actName, _ := m["action"].(string)
-							actTitle, _ := m["title"].(string)
-
-							if actName != "" {
-								node.Pipeline = append(node.Pipeline, workflow.PipelineAction{
-									Action: actName,
-									Title:  actTitle,
-								})
-							}
-						}
-					}
-				}
-			}
-		}
-
-		graph.Nodes = append(graph.Nodes, node)
-		for _, dep := range step.DependsOn {
-			edge := workflow.GraphEdge{
-				Source: dep,
-				Target: step.ID,
-			}
-			// Only mark the edge as "when" if the source step is referenced
-			// in the when expression (e.g. "steps.check_changed.output...")
-			if step.When != "" && strings.Contains(step.When, "steps."+dep+".") {
-				edge.Type = "when"
-				edge.Label = step.When
-			}
-			graph.Edges = append(graph.Edges, edge)
-		}
-
-		if step.Goto != nil {
-			graph.Edges = append(graph.Edges, workflow.GraphEdge{
-				Source: step.ID,
-				Target: step.Goto.Target,
-				Type:   "goto",
-				Label:  step.Goto.When,
-			})
-		}
+		graph.Nodes = append(graph.Nodes, buildGraphNode(step))
+		graph.Edges = append(graph.Edges, buildStepEdges(step)...)
 	}
 
 	return graph
 }
 
+func buildGraphNode(step parser.Step) workflow.GraphNode {
+	label := step.Title
+	if label == "" {
+		label = step.ID
+	}
+
+	node := workflow.GraphNode{
+		ID:     step.ID,
+		Label:  label,
+		Action: step.Action,
+		Type:   "step",
+		When:   step.When,
+	}
+
+	if step.Action == "loop" {
+		node.Pipeline = extractLoopPipeline(step.Config)
+	}
+
+	return node
+}
+
+func extractLoopPipeline(config map[string]any) []workflow.PipelineAction {
+	rawActions, ok := config["actions"]
+	if !ok {
+		return nil
+	}
+
+	arr, ok := rawActions.([]any)
+	if !ok {
+		return nil
+	}
+
+	var pipeline []workflow.PipelineAction
+
+	for _, item := range arr {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		actName, _ := m["action"].(string)
+		actTitle, _ := m["title"].(string)
+
+		if actName != "" {
+			pipeline = append(pipeline, workflow.PipelineAction{
+				Action: actName,
+				Title:  actTitle,
+			})
+		}
+	}
+
+	return pipeline
+}
+
+func buildStepEdges(step parser.Step) []workflow.GraphEdge {
+	edges := make([]workflow.GraphEdge, 0, len(step.DependsOn)+1)
+
+	for _, dep := range step.DependsOn {
+		edge := workflow.GraphEdge{
+			Source: dep,
+			Target: step.ID,
+		}
+
+		if step.When != "" && strings.Contains(step.When, "steps."+dep+".") {
+			edge.Type = "when"
+			edge.Label = step.When
+		}
+
+		edges = append(edges, edge)
+	}
+
+	if step.Goto != nil {
+		edges = append(edges, workflow.GraphEdge{
+			Source: step.ID,
+			Target: step.Goto.Target,
+			Type:   "goto",
+			Label:  step.Goto.When,
+		})
+	}
+
+	return edges
+}
+
 func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(data) //nolint:errchkjson // HTTP response writer
+
+	err := json.NewEncoder(w).Encode(data)
+	if err != nil {
+		slog.Warn("failed to write JSON response", "error", err)
+	}
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
@@ -565,6 +653,7 @@ func (s *Server) buildActionServices() *runtime.ActionServices {
 			for k, v := range details {
 				data[k] = v
 			}
+
 			s.config.EventBus.Publish(event.Event{
 				Type:        event.StepWaiting,
 				Timestamp:   time.Now(),
@@ -595,7 +684,7 @@ func (s *Server) buildActionServices() *runtime.ActionServices {
 		Locker:     s.locker,
 		DBPool:     s.dbPool,
 		KVStore:    s.kvStore,
-		TxRegistry: runtime.NewMemoryTxRegistry(),
+		TxRegistry: runtime.NewMemoryTxRegistry(s.config.Logger),
 	}
 }
 
@@ -615,79 +704,7 @@ func (s *Server) captureEvents(executionID string) func() {
 				continue
 			}
 
-			lt.Track(ev)
-
-			// Reset body steps to pending in the store on goto so
-			// dashboard step dots stay coherent during loops.
-			if ev.Type == event.StepGoto && lt.Body != nil {
-				for sid := range lt.Body {
-					s.config.ExecutionStore.UpdateStep(executionID, sid, func(r *runtime.StepResult) {
-						r.Status = "pending"
-					})
-				}
-			}
-
-			// Store event — skip loop body events after iteration 1
-			// to prevent unbounded memory growth. step.goto events are
-			// always stored so the frontend can track iteration count.
-			if !lt.InLoop(ev) {
-				s.config.ExecutionStore.AppendEvent(executionID, ev)
-			}
-
-			// Update step state in real-time (always, even during loops)
-			if ev.StepID == "" {
-				continue
-			}
-
-			switch ev.Type {
-			case event.StepStarted:
-				s.config.ExecutionStore.UpdateStep(executionID, ev.StepID, func(r *runtime.StepResult) {
-					r.Status = runtime.StatusRunning
-				})
-				s.config.ExecutionStore.IncrStepExecCount(ev.StepID)
-			case event.StepWaiting:
-				s.config.ExecutionStore.UpdateStep(executionID, ev.StepID, func(r *runtime.StepResult) {
-					r.Status = runtime.StatusWaiting
-				})
-			case event.StepInput:
-				s.config.ExecutionStore.UpdateStep(executionID, ev.StepID, func(r *runtime.StepResult) {
-					r.Input = ev.Data
-				})
-			case event.StepCompleted:
-				s.config.ExecutionStore.UpdateStep(executionID, ev.StepID, func(r *runtime.StepResult) {
-					r.Status = runtime.StatusSuccess
-					if o, ok := ev.Data["output"]; ok {
-						r.Output = o
-					}
-				})
-			case event.StepFailed:
-				s.config.ExecutionStore.UpdateStep(executionID, ev.StepID, func(r *runtime.StepResult) {
-					r.Status = runtime.StatusFailed
-					r.Error = &runtime.StepError{Message: ev.Message, Code: "action_failed", StepID: ev.StepID}
-				})
-			case event.StepSkipped:
-				s.config.ExecutionStore.UpdateStep(executionID, ev.StepID, func(r *runtime.StepResult) {
-					r.Status = runtime.StatusSkipped
-				})
-			case event.StepOutput:
-				s.config.ExecutionStore.UpdateStep(executionID, ev.StepID, func(r *runtime.StepResult) {
-					if o, ok := ev.Data["output"]; ok {
-						r.Output = o
-					}
-				})
-			case event.WorkflowCompleted:
-				// Update execution status atomically so any GET request
-				// arriving before finalizeExecution sees the correct
-				// terminal status.
-				if statusStr, ok := ev.Data["status"].(string); ok {
-					ts := ev.Timestamp
-					s.config.ExecutionStore.UpdateExecution(executionID, func(exec *store.Execution) {
-						exec.Status = statusStr
-						exec.FinishedAt = &ts
-					})
-				}
-			case event.WorkflowStarted, event.StepLog, event.StepGoto:
-			}
+			s.processEvent(executionID, ev, lt)
 		}
 	}()
 
@@ -695,6 +712,87 @@ func (s *Server) captureEvents(executionID string) func() {
 		s.config.EventBus.Unsubscribe(ch)
 		<-done // wait for goroutine to drain
 	}
+}
+
+func (s *Server) processEvent(executionID string, ev event.Event, lt *loopTracker) {
+	lt.Track(ev)
+
+	// Reset body steps to pending on goto so dashboard stays coherent during loops
+	if ev.Type == event.StepGoto && lt.Body != nil {
+		for sid := range lt.Body {
+			s.config.ExecutionStore.UpdateStep(executionID, sid, func(r *runtime.StepResult) {
+				r.Status = "pending"
+			})
+		}
+	}
+
+	// Skip loop body events after iteration 1 to prevent unbounded memory growth
+	if !lt.InLoop(ev) {
+		s.config.ExecutionStore.AppendEvent(executionID, ev)
+	}
+
+	if ev.StepID == "" {
+		return
+	}
+
+	s.applyStepEvent(executionID, ev)
+}
+
+func (s *Server) applyStepEvent(executionID string, ev event.Event) {
+	switch ev.Type {
+	case event.StepStarted:
+		s.config.ExecutionStore.UpdateStep(executionID, ev.StepID, func(r *runtime.StepResult) {
+			r.Status = runtime.StatusRunning
+		})
+		s.config.ExecutionStore.IncrStepExecCount(ev.StepID)
+	case event.StepWaiting:
+		s.config.ExecutionStore.UpdateStep(executionID, ev.StepID, func(r *runtime.StepResult) {
+			r.Status = runtime.StatusWaiting
+		})
+	case event.StepInput:
+		s.config.ExecutionStore.UpdateStep(executionID, ev.StepID, func(r *runtime.StepResult) {
+			r.Input = ev.Data
+		})
+	case event.StepCompleted:
+		s.config.ExecutionStore.UpdateStep(executionID, ev.StepID, func(r *runtime.StepResult) {
+			r.Status = runtime.StatusSuccess
+			if o, ok := ev.Data["output"]; ok {
+				r.Output = o
+			}
+		})
+	case event.StepFailed:
+		s.config.ExecutionStore.UpdateStep(executionID, ev.StepID, func(r *runtime.StepResult) {
+			r.Status = runtime.StatusFailed
+			r.Error = &runtime.StepError{Message: ev.Message, Code: "action_failed", StepID: ev.StepID}
+		})
+	case event.StepSkipped:
+		s.config.ExecutionStore.UpdateStep(executionID, ev.StepID, func(r *runtime.StepResult) {
+			r.Status = runtime.StatusSkipped
+		})
+	case event.StepOutput:
+		s.config.ExecutionStore.UpdateStep(executionID, ev.StepID, func(r *runtime.StepResult) {
+			if o, ok := ev.Data["output"]; ok {
+				r.Output = o
+			}
+		})
+	case event.WorkflowCompleted:
+		s.applyWorkflowCompleted(executionID, ev)
+	case event.Metrics, event.WorkflowStarted, event.StepLog, event.StepGoto:
+	}
+}
+
+func (s *Server) applyWorkflowCompleted(executionID string, ev event.Event) {
+	statusStr, ok := ev.Data["status"].(string)
+	if !ok {
+		return
+	}
+
+	ts := ev.Timestamp
+
+	s.config.ExecutionStore.UpdateExecution(executionID, func(exec *store.Execution) {
+		exec.Status = statusStr
+		exec.FinishedAt = &ts
+	})
 }
 
 // finalizeExecution updates the stored execution with the engine result.
@@ -715,8 +813,10 @@ func (s *Server) finalizeExecution(
 		} else {
 			exec.Status = result.Status
 			mergeStepResults(exec, result.Steps)
+
 			now := result.FinishedAt
 			exec.FinishedAt = &now
+
 			if result.Error != nil {
 				exec.Error = result.Error.Error()
 			}

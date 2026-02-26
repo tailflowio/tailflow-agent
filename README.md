@@ -726,6 +726,34 @@ steps:                            # Workflow steps (DAG)
       max_iterations: 10
 ```
 
+### Sensitive Fields
+
+Declare sensitive key names at the workflow top-level to automatically mask their values in all external outputs (SSE events, SaaS exporter, REST API). Internal step-to-step resolution keeps the real values.
+
+```yaml
+version: "2.0"
+name: "payment"
+
+sensitive:
+  - token
+  - refresh_token
+  - card_number
+  - api_key
+  - password
+
+params:
+  - name: api_key
+    type: string
+
+steps:
+  - id: auth
+    action: http
+    config:
+      url: "https://api.example.com/auth"
+```
+
+Any key matching a name in the `sensitive` list is replaced with `[SENSITIVE]` **recursively** — at any depth, in params, step outputs, and configs — across all external channels. Steps still receive the real values via template resolution (`{{ steps.auth.output.token }}`).
+
 ### Template expressions
 
 Access runtime data in any config value:

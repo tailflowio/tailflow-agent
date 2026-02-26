@@ -3,6 +3,10 @@ name: "create-user"
 description: "API endpoint to create a user"
 tags: ["api", "trigger"]
 
+sensitive:
+  - api_key
+  - token
+
 trigger:
   http:
     method: POST

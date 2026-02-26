@@ -4,17 +4,20 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"sync"
 )
 
 type MemoryTxRegistry struct {
-	mu  sync.Mutex
-	txs map[string]*sql.Tx
+	mu     sync.Mutex
+	txs    map[string]*sql.Tx
+	logger *slog.Logger
 }
 
-func NewMemoryTxRegistry() *MemoryTxRegistry {
+func NewMemoryTxRegistry(logger *slog.Logger) *MemoryTxRegistry {
 	return &MemoryTxRegistry{
-		txs: make(map[string]*sql.Tx),
+		txs:    make(map[string]*sql.Tx),
+		logger: logger,
 	}
 }
 
@@ -83,7 +86,10 @@ func (r *MemoryTxRegistry) RollbackAll() {
 	defer r.mu.Unlock()
 
 	for name, tx := range r.txs {
-		_ = tx.Rollback()
+		rollbackErr := tx.Rollback()
+		if rollbackErr != nil {
+			r.logger.Warn("failed to rollback transaction", "name", name, "error", rollbackErr)
+		}
 
 		delete(r.txs, name)
 	}

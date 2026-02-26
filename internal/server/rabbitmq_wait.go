@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -12,7 +13,8 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-// rmqWaiter is a single pending wait.rabbitmq registration.
+var requeueThrottleDuration = 100 * time.Millisecond
+
 type rmqWaiter struct {
 	matchField string
 	matchValue string
@@ -20,30 +22,25 @@ type rmqWaiter struct {
 	ctx        context.Context
 }
 
-// queueConsumer manages a single AMQP consumer on one queue.
 type queueConsumer struct {
 	mu       sync.Mutex
 	waiters  []*rmqWaiter
-	amqpChan *amqp.Channel
+	amqpChan amqpChan
 	cancel   context.CancelFunc
 }
 
-// managedConnection holds an AMQP connection and its per-queue consumers.
 type managedConnection struct {
-	conn      *amqp.Connection
-	consumers map[string]*queueConsumer // key: queue name
+	conn      amqpConn
+	consumers map[string]*queueConsumer
 }
 
-// RabbitMQWaitManager is a shared pool of AMQP connections and consumers.
-// A single consumer is created per queue; incoming messages are routed to
-// matching waiters registered via Register.
 type RabbitMQWaitManager struct {
 	mu          sync.Mutex
-	connections map[string]*managedConnection // key: AMQP URL
+	connections map[string]*managedConnection
 	logger      *slog.Logger
+	dial        amqpDialer
 }
 
-// NewRabbitMQWaitManager creates a new manager.
 func NewRabbitMQWaitManager(logger *slog.Logger) *RabbitMQWaitManager {
 	return &RabbitMQWaitManager{
 		connections: make(map[string]*managedConnection),
@@ -51,9 +48,6 @@ func NewRabbitMQWaitManager(logger *slog.Logger) *RabbitMQWaitManager {
 	}
 }
 
-// Register adds a waiter for the given queue. It lazily creates the AMQP
-// connection and consumer goroutine when needed.
-// Returns a channel that will receive the matched message, and a cleanup func.
 func (m *RabbitMQWaitManager) Register(url, queue, matchField, matchValue string, ctx context.Context) (<-chan map[string]any, func()) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -65,64 +59,16 @@ func (m *RabbitMQWaitManager) Register(url, queue, matchField, matchValue string
 		ctx:        ctx,
 	}
 
-	// Ensure connection exists
-	mc, ok := m.connections[url]
-	if !ok {
-		conn, err := amqp.Dial(url)
-		if err != nil {
-			m.logger.Error("rabbitmq_wait: dial failed", "url", url, "error", err)
-			close(w.ch)
-			return w.ch, func() {}
-		}
-
-		mc = &managedConnection{
-			conn:      conn,
-			consumers: make(map[string]*queueConsumer),
-		}
-		m.connections[url] = mc
+	mc, err := m.getOrCreateConnection(url)
+	if err != nil {
+		close(w.ch)
+		return w.ch, func() {}
 	}
 
-	// Ensure consumer exists for this queue
-	qc, ok := mc.consumers[queue]
-	if !ok {
-		ch, err := mc.conn.Channel()
-		if err != nil {
-			m.logger.Error("rabbitmq_wait: channel failed", "queue", queue, "error", err)
-			close(w.ch)
-			return w.ch, func() {}
-		}
-
-		if err := ch.Qos(1, 0, false); err != nil {
-			m.logger.Error("rabbitmq_wait: qos failed", "queue", queue, "error", err)
-			ch.Close()
-			close(w.ch)
-			return w.ch, func() {}
-		}
-
-		deliveries, err := ch.Consume(
-			queue,
-			"",    // consumer tag (auto-generated)
-			false, // auto-ack
-			false, // exclusive
-			false, // no-local
-			false, // no-wait
-			nil,
-		)
-		if err != nil {
-			m.logger.Error("rabbitmq_wait: consume failed", "queue", queue, "error", err)
-			ch.Close()
-			close(w.ch)
-			return w.ch, func() {}
-		}
-
-		consumerCtx, cancel := context.WithCancel(context.Background())
-		qc = &queueConsumer{
-			amqpChan: ch,
-			cancel:   cancel,
-		}
-		mc.consumers[queue] = qc
-
-		go m.consumeLoop(consumerCtx, qc, deliveries)
+	qc, err := m.getOrCreateConsumer(mc, queue) //nolint:contextcheck
+	if err != nil {
+		close(w.ch)
+		return w.ch, func() {}
 	}
 
 	qc.mu.Lock()
@@ -133,7 +79,6 @@ func (m *RabbitMQWaitManager) Register(url, queue, matchField, matchValue string
 		m.removeWaiter(url, queue, w)
 	}
 
-	// Auto-cleanup on context cancellation
 	if ctx != nil {
 		go func() {
 			<-ctx.Done()
@@ -144,7 +89,66 @@ func (m *RabbitMQWaitManager) Register(url, queue, matchField, matchValue string
 	return w.ch, cleanup
 }
 
-// removeWaiter removes a waiter and tears down the consumer/connection when empty.
+func (m *RabbitMQWaitManager) getOrCreateConnection(url string) (*managedConnection, error) {
+	mc, ok := m.connections[url]
+	if ok {
+		return mc, nil
+	}
+
+	dial := m.dial
+	if dial == nil {
+		dial = realAMQPDial
+	}
+
+	conn, err := dial(url)
+	if err != nil {
+		return nil, fmt.Errorf("dial: %w", err)
+	}
+
+	mc = &managedConnection{
+		conn:      conn,
+		consumers: make(map[string]*queueConsumer),
+	}
+	m.connections[url] = mc
+
+	return mc, nil
+}
+
+func (m *RabbitMQWaitManager) getOrCreateConsumer(mc *managedConnection, queue string) (*queueConsumer, error) {
+	qc, ok := mc.consumers[queue]
+	if ok {
+		return qc, nil
+	}
+
+	ch, err := mc.conn.Channel()
+	if err != nil {
+		return nil, fmt.Errorf("channel: %w", err)
+	}
+
+	err = ch.Qos(1, 0, false)
+	if err != nil {
+		ch.Close()
+		return nil, fmt.Errorf("qos: %w", err)
+	}
+
+	deliveries, err := ch.Consume(queue, "", false, false, false, false, nil)
+	if err != nil {
+		ch.Close()
+		return nil, fmt.Errorf("consume: %w", err)
+	}
+
+	consumerCtx, cancel := context.WithCancel(context.Background())
+	qc = &queueConsumer{
+		amqpChan: ch,
+		cancel:   cancel,
+	}
+	mc.consumers[queue] = qc
+
+	go m.consumeLoop(consumerCtx, qc, deliveries)
+
+	return qc, nil
+}
+
 func (m *RabbitMQWaitManager) removeWaiter(url, queue string, w *rmqWaiter) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -166,22 +170,24 @@ func (m *RabbitMQWaitManager) removeWaiter(url, queue string, w *rmqWaiter) {
 			break
 		}
 	}
+
 	empty := len(qc.waiters) == 0
 	qc.mu.Unlock()
 
-	if empty {
-		qc.cancel()
-		qc.amqpChan.Close()
-		delete(mc.consumers, queue)
+	if !empty {
+		return
+	}
 
-		if len(mc.consumers) == 0 {
-			mc.conn.Close()
-			delete(m.connections, url)
-		}
+	qc.cancel()
+	qc.amqpChan.Close()
+	delete(mc.consumers, queue)
+
+	if len(mc.consumers) == 0 {
+		mc.conn.Close()
+		delete(m.connections, url)
 	}
 }
 
-// consumeLoop reads messages from the AMQP channel and routes them to waiters.
 func (m *RabbitMQWaitManager) consumeLoop(ctx context.Context, qc *queueConsumer, deliveries <-chan amqp.Delivery) {
 	for {
 		select {
@@ -192,26 +198,29 @@ func (m *RabbitMQWaitManager) consumeLoop(ctx context.Context, qc *queueConsumer
 				return
 			}
 
-			if !m.routeMessage(qc, msg) {
-				// No matching waiter — nack + requeue and throttle to avoid hot-loop
-				_ = msg.Nack(false, true)
+			if m.routeMessage(qc, msg) {
+				continue
+			}
 
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(100 * time.Millisecond):
-				}
+			nackErr := msg.Nack(false, true)
+			if nackErr != nil {
+				m.logger.WarnContext(ctx, "failed to nack unmatched message", "error", nackErr)
+			}
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(requeueThrottleDuration):
 			}
 		}
 	}
 }
 
-// routeMessage tries to deliver a message to a matching waiter.
-// Returns true if delivered (message is acked), false otherwise.
 func (m *RabbitMQWaitManager) routeMessage(qc *queueConsumer, msg amqp.Delivery) bool {
 	var body map[string]any
-	if err := json.Unmarshal(msg.Body, &body); err != nil {
-		// Non-JSON body: build a simple map
+
+	err := json.Unmarshal(msg.Body, &body)
+	if err != nil {
 		body = map[string]any{"raw": string(msg.Body)}
 	}
 
@@ -219,17 +228,14 @@ func (m *RabbitMQWaitManager) routeMessage(qc *queueConsumer, msg amqp.Delivery)
 	defer qc.mu.Unlock()
 
 	for i, w := range qc.waiters {
-		// Skip waiters whose context is already done
 		if w.ctx != nil && w.ctx.Err() != nil {
 			continue
 		}
 
 		if w.matchField == "" {
-			// No match field → first waiter takes the message
 			return m.deliverToWaiter(qc, i, w, msg, body)
 		}
 
-		// Match on a specific field using dot-notation
 		val := extractDotField(body, w.matchField)
 		if val == w.matchValue {
 			return m.deliverToWaiter(qc, i, w, msg, body)
@@ -239,8 +245,6 @@ func (m *RabbitMQWaitManager) routeMessage(qc *queueConsumer, msg amqp.Delivery)
 	return false
 }
 
-// deliverToWaiter sends the parsed body to the waiter, acks the message,
-// and removes the waiter from the list.
 func (m *RabbitMQWaitManager) deliverToWaiter(qc *queueConsumer, idx int, w *rmqWaiter, msg amqp.Delivery, body map[string]any) bool {
 	result := map[string]any{
 		"body":         body,
@@ -253,19 +257,19 @@ func (m *RabbitMQWaitManager) deliverToWaiter(qc *queueConsumer, idx int, w *rmq
 	select {
 	case w.ch <- result:
 	default:
-		// Channel full — should not happen with buffer=1, skip
 		return false
 	}
 
-	_ = msg.Ack(false)
+	ackErr := msg.Ack(false)
+	if ackErr != nil {
+		m.logger.Warn("failed to ack delivered message", "error", ackErr)
+	}
 
-	// Remove waiter (order preserved)
 	qc.waiters = append(qc.waiters[:idx], qc.waiters[idx+1:]...)
 
 	return true
 }
 
-// Close shuts down all consumers and connections.
 func (m *RabbitMQWaitManager) Close() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -282,8 +286,6 @@ func (m *RabbitMQWaitManager) Close() {
 	}
 }
 
-// extractDotField navigates a nested map using dot-notation (e.g. "data.order_id")
-// and returns the value as a string. Returns "" if not found.
 func extractDotField(m map[string]any, field string) string {
 	parts := strings.Split(field, ".")
 	var current any = m
@@ -303,16 +305,13 @@ func extractDotField(m map[string]any, field string) string {
 	return fmt.Sprintf("%v", current)
 }
 
-// amqpTableToMap converts amqp.Table to a plain map[string]any.
 func amqpTableToMap(t amqp.Table) map[string]any {
 	if t == nil {
 		return nil
 	}
 
 	out := make(map[string]any, len(t))
-	for k, v := range t {
-		out[k] = v
-	}
+	maps.Copy(out, t)
 
 	return out
 }

@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"maps"
 	"sync"
 	"time"
 
@@ -59,11 +60,10 @@ type MemoryExecutionStore struct {
 	head           int
 	count          int
 
-	metricsMu    sync.RWMutex
-	stepMetrics  map[string]*StepMetrics // stepID -> cached metrics
+	metricsMu   sync.RWMutex
+	stepMetrics map[string]*StepMetrics // stepID -> cached metrics
 }
 
-// NewExecutionStore creates a new in-memory execution store with fixed capacity.
 func NewExecutionStore(capacity int) *MemoryExecutionStore {
 	if capacity <= 0 {
 		capacity = 100
@@ -78,7 +78,6 @@ func NewExecutionStore(capacity int) *MemoryExecutionStore {
 	}
 }
 
-// Add inserts an execution. If the buffer is full, the oldest is evicted.
 func (s *MemoryExecutionStore) Add(exec *Execution) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -101,7 +100,6 @@ func (s *MemoryExecutionStore) Add(exec *Execution) {
 	}
 }
 
-// Get retrieves an execution by ID.
 func (s *MemoryExecutionStore) Get(id string) (*Execution, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -114,7 +112,6 @@ func (s *MemoryExecutionStore) Get(id string) (*Execution, error) {
 	return exec, nil
 }
 
-// Update modifies an existing execution.
 func (s *MemoryExecutionStore) Update(exec *Execution) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -165,6 +162,7 @@ func (s *MemoryExecutionStore) Count() int {
 func (s *MemoryExecutionStore) AppendEvent(executionID string, ev event.Event) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	s.events[executionID] = append(s.events[executionID], ev)
 }
 
@@ -230,6 +228,7 @@ func (s *MemoryExecutionStore) GetEvents(executionID string) []event.Event {
 func (s *MemoryExecutionStore) IncrStepExecCount(stepID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	s.stepExecCounts[stepID]++
 }
 
@@ -239,9 +238,8 @@ func (s *MemoryExecutionStore) StepExecCounts() map[string]int {
 	defer s.mu.RUnlock()
 
 	out := make(map[string]int, len(s.stepExecCounts))
-	for k, v := range s.stepExecCounts {
-		out[k] = v
-	}
+	maps.Copy(out, s.stepExecCounts)
+
 	return out
 }
 
@@ -249,13 +247,16 @@ func (s *MemoryExecutionStore) StepExecCounts() map[string]int {
 // Designed to be called periodically by a background goroutine.
 func (s *MemoryExecutionStore) RefreshStepMetrics() {
 	s.mu.RLock()
+
 	execs := make([]*Execution, 0, s.count)
+
 	for i := 0; i < s.count; i++ {
 		idx := (s.head - 1 - i + s.capacity) % s.capacity
 		if s.buffer[idx] != nil {
 			execs = append(execs, s.buffer[idx])
 		}
 	}
+
 	s.mu.RUnlock()
 
 	metrics := make(map[string]*StepMetrics)
@@ -288,10 +289,9 @@ func (s *MemoryExecutionStore) RefreshStepMetrics() {
 		}
 	}
 
-	// Compute averages
 	for _, m := range metrics {
 		if m.TotalExecutions > 0 {
-			m.AvgDurationMs = m.AvgDurationMs / int64(m.TotalExecutions)
+			m.AvgDurationMs /= int64(m.TotalExecutions)
 		}
 	}
 
@@ -308,6 +308,7 @@ func (s *MemoryExecutionStore) GetStepMetrics(stepID string) *StepMetrics {
 	if s.stepMetrics == nil {
 		return nil
 	}
+
 	return s.stepMetrics[stepID]
 }
 
@@ -317,9 +318,11 @@ func (s *MemoryExecutionStore) GetAllStepMetrics() map[string]*StepMetrics {
 	defer s.metricsMu.RUnlock()
 
 	out := make(map[string]*StepMetrics, len(s.stepMetrics))
+
 	for k, v := range s.stepMetrics {
 		cp := *v
 		out[k] = &cp
 	}
+
 	return out
 }

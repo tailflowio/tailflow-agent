@@ -16,8 +16,6 @@ func TestArrayAction(t *testing.T) {
 
 func (s *ArrayActionTestSuite) SetupTest() {}
 
-// ---------- array.sort ----------
-
 func (s *ArrayActionTestSuite) TestSortAsc() {
 	a := NewArraySortAction()
 	ctx := newTestContext(map[string]any{
@@ -95,8 +93,6 @@ func (s *ArrayActionTestSuite) TestSortValidateMissingField() {
 	s.Error(err)
 }
 
-// ---------- array.filter ----------
-
 func (s *ArrayActionTestSuite) TestFilterMatch() {
 	a := NewArrayFilterAction()
 	ctx := newTestContext(map[string]any{
@@ -140,8 +136,6 @@ func (s *ArrayActionTestSuite) TestFilterValidateMissingCondition() {
 	s.Error(err)
 }
 
-// ---------- array.map ----------
-
 func (s *ArrayActionTestSuite) TestMapTransform() {
 	a := NewArrayMapAction()
 	ctx := newTestContext(map[string]any{
@@ -184,8 +178,6 @@ func (s *ArrayActionTestSuite) TestMapValidateMissingExpression() {
 	s.Error(err)
 }
 
-// ---------- array.uniq ----------
-
 func (s *ArrayActionTestSuite) TestUniqDedup() {
 	a := NewArrayUniqAction()
 	ctx := newTestContext(map[string]any{
@@ -223,8 +215,6 @@ func (s *ArrayActionTestSuite) TestUniqValidateMissingField() {
 	err := a.Validate(newTestContext(map[string]any{"input": []any{}}))
 	s.Error(err)
 }
-
-// ---------- array.pick ----------
 
 func (s *ArrayActionTestSuite) TestPickFields() {
 	a := NewArrayPickAction()
@@ -284,8 +274,6 @@ func (s *ArrayActionTestSuite) TestPickInvalidFieldsType() {
 	s.Error(err)
 }
 
-// ---------- array.concat ----------
-
 func (s *ArrayActionTestSuite) TestConcatBasic() {
 	a := NewArrayConcatAction()
 	ctx := newTestContext(map[string]any{
@@ -331,4 +319,225 @@ func (s *ArrayActionTestSuite) TestConcatValidateMissingArrays() {
 	a := NewArrayConcatAction()
 	err := a.Validate(newTestContext(map[string]any{}))
 	s.Error(err)
+}
+
+func (s *ArrayActionTestSuite) TestSortValidateOK() {
+	a := NewArraySortAction()
+	err := a.Validate(newTestContext(map[string]any{"input": []any{}, "field": "name"}))
+	s.NoError(err)
+}
+
+func (s *ArrayActionTestSuite) TestFilterValidateOK() {
+	a := NewArrayFilterAction()
+	err := a.Validate(newTestContext(map[string]any{"input": []any{}, "condition": "true"}))
+	s.NoError(err)
+}
+
+func (s *ArrayActionTestSuite) TestFilterValidateMissingInput() {
+	a := NewArrayFilterAction()
+	err := a.Validate(newTestContext(map[string]any{"condition": "true"}))
+	s.Error(err)
+	s.Contains(err.Error(), "input")
+}
+
+func (s *ArrayActionTestSuite) TestMapValidateOK() {
+	a := NewArrayMapAction()
+	err := a.Validate(newTestContext(map[string]any{"input": []any{}, "expression": "item"}))
+	s.NoError(err)
+}
+
+func (s *ArrayActionTestSuite) TestMapValidateMissingInput() {
+	a := NewArrayMapAction()
+	err := a.Validate(newTestContext(map[string]any{"expression": "item"}))
+	s.Error(err)
+	s.Contains(err.Error(), "input")
+}
+
+func (s *ArrayActionTestSuite) TestUniqValidateOK() {
+	a := NewArrayUniqAction()
+	err := a.Validate(newTestContext(map[string]any{"input": []any{}, "field": "id"}))
+	s.NoError(err)
+}
+
+func (s *ArrayActionTestSuite) TestUniqValidateMissingInput() {
+	a := NewArrayUniqAction()
+	err := a.Validate(newTestContext(map[string]any{"field": "id"}))
+	s.Error(err)
+	s.Contains(err.Error(), "input")
+}
+
+func (s *ArrayActionTestSuite) TestPickValidateOK() {
+	a := NewArrayPickAction()
+	err := a.Validate(newTestContext(map[string]any{"input": []any{}, "fields": []any{"name"}}))
+	s.NoError(err)
+}
+
+func (s *ArrayActionTestSuite) TestPickValidateMissingInput() {
+	a := NewArrayPickAction()
+	err := a.Validate(newTestContext(map[string]any{"fields": []any{"name"}}))
+	s.Error(err)
+	s.Contains(err.Error(), "input")
+}
+
+func (s *ArrayActionTestSuite) TestConcatValidateOK() {
+	a := NewArrayConcatAction()
+	err := a.Validate(newTestContext(map[string]any{"arrays": []any{}}))
+	s.NoError(err)
+}
+
+func (s *ArrayActionTestSuite) TestSortInputNotArray() {
+	a := NewArraySortAction()
+	ctx := newTestContext(map[string]any{
+		"input": "not-an-array",
+		"field": "name",
+	})
+	_, err := a.Execute(ctx)
+	s.Error(err)
+	s.Contains(err.Error(), "must be an array")
+}
+
+func (s *ArrayActionTestSuite) TestFilterInputNotArray() {
+	a := NewArrayFilterAction()
+	ctx := newTestContext(map[string]any{
+		"input":     "not-an-array",
+		"condition": "true",
+	})
+	_, err := a.Execute(ctx)
+	s.Error(err)
+	s.Contains(err.Error(), "must be an array")
+}
+
+func (s *ArrayActionTestSuite) TestMapInputNotArray() {
+	a := NewArrayMapAction()
+	ctx := newTestContext(map[string]any{
+		"input":      "not-an-array",
+		"expression": "item",
+	})
+	_, err := a.Execute(ctx)
+	s.Error(err)
+	s.Contains(err.Error(), "must be an array")
+}
+
+func (s *ArrayActionTestSuite) TestUniqInputNotArray() {
+	a := NewArrayUniqAction()
+	ctx := newTestContext(map[string]any{
+		"input": "not-an-array",
+		"field": "id",
+	})
+	_, err := a.Execute(ctx)
+	s.Error(err)
+	s.Contains(err.Error(), "must be an array")
+}
+
+func (s *ArrayActionTestSuite) TestPickInputNotArray() {
+	a := NewArrayPickAction()
+	ctx := newTestContext(map[string]any{
+		"input":  "not-an-array",
+		"fields": []any{"name"},
+	})
+	_, err := a.Execute(ctx)
+	s.Error(err)
+	s.Contains(err.Error(), "must be an array")
+}
+
+func (s *ArrayActionTestSuite) TestConcatNotArrayOfArrays() {
+	a := NewArrayConcatAction()
+	ctx := newTestContext(map[string]any{
+		"arrays": "not-an-array",
+	})
+	_, err := a.Execute(ctx)
+	s.Error(err)
+	s.Contains(err.Error(), "must be an array")
+}
+
+func (s *ArrayActionTestSuite) TestSortNonMapItems() {
+	a := NewArraySortAction()
+	ctx := newTestContext(map[string]any{
+		"input": []any{"c", "a", "b"},
+		"field": "nonexistent",
+	})
+
+	out, err := a.Execute(ctx)
+	s.Require().NoError(err)
+	// fieldValue returns nil for non-map items, comparison should still work
+	s.NotNil(out)
+}
+
+func (s *ArrayActionTestSuite) TestFilterExpressionError() {
+	a := NewArrayFilterAction()
+	ctx := newTestContext(map[string]any{
+		"input":     []any{map[string]any{"x": 1}},
+		"condition": "item.nonexistent.deep > 0",
+	})
+
+	_, err := a.Execute(ctx)
+	s.Error(err)
+}
+
+func (s *ArrayActionTestSuite) TestMapExpressionError() {
+	a := NewArrayMapAction()
+	ctx := newTestContext(map[string]any{
+		"input":      []any{"a"},
+		"expression": "item.deep.nested.value",
+	})
+
+	_, err := a.Execute(ctx)
+	s.Error(err)
+}
+
+func (s *ArrayActionTestSuite) TestPickNonObjectItems() {
+	a := NewArrayPickAction()
+	ctx := newTestContext(map[string]any{
+		"input":  []any{"not-a-map", 42},
+		"fields": []any{"name"},
+	})
+
+	out, err := a.Execute(ctx)
+	s.Require().NoError(err)
+	items := out.([]any)
+	s.Equal("not-a-map", items[0])
+	s.Equal(42, items[1])
+}
+
+func (s *ArrayActionTestSuite) TestSortMissingInput() {
+	a := NewArraySortAction()
+	ctx := newTestContext(map[string]any{
+		"field": "name",
+	})
+	_, err := a.Execute(ctx)
+	s.Error(err)
+	s.Contains(err.Error(), "missing 'input'")
+}
+
+func (s *ArrayActionTestSuite) TestCompareEqualValues() {
+	a := NewArraySortAction()
+	ctx := newTestContext(map[string]any{
+		"input": []any{
+			map[string]any{"val": 1.0},
+			map[string]any{"val": 1.0},
+			map[string]any{"val": 2.0},
+		},
+		"field": "val",
+	})
+
+	out, err := a.Execute(ctx)
+	s.Require().NoError(err)
+	items := out.([]any)
+	s.Len(items, 3)
+	s.Equal(1.0, items[0].(map[string]any)["val"])
+}
+
+func (s *ArrayActionTestSuite) TestSortStringComparison() {
+	a := NewArraySortAction()
+	ctx := newTestContext(map[string]any{
+		"input": []any{
+			map[string]any{"val": true},
+			map[string]any{"val": false},
+		},
+		"field": "val",
+	})
+
+	out, err := a.Execute(ctx)
+	s.Require().NoError(err)
+	s.NotNil(out)
 }

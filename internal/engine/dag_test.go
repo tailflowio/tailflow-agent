@@ -179,3 +179,26 @@ func (s *DAGTestSuite) TestFindLoopBody_Diamond() {
 	s.False(bodySet["c"])
 	s.Len(body, 2)
 }
+
+// TestBuildDAG_CycleViaTopoSort covers the cycle detection path inside topoSort
+// (dag.go line 122). This requires a graph with at least one root node but a cycle
+// among other nodes, so that BuildDAG passes the "no root steps" check but topoSort
+// detects the cycle.
+func (s *DAGTestSuite) TestBuildDAG_CycleViaTopoSort() {
+	steps := []parser.Step{
+		{ID: "a", Action: "log"},                                   // root (no deps)
+		{ID: "b", Action: "log", DependsOn: []string{"a", "c"}},   // depends on a and c
+		{ID: "c", Action: "log", DependsOn: []string{"b"}},         // depends on b -> cycle between b and c
+	}
+	_, err := BuildDAG(steps)
+	s.Require().Error(err)
+	s.Contains(err.Error(), "cycle detected")
+}
+
+// TestBuildDAG_Empty verifies that building a DAG from an empty step list succeeds.
+func (s *DAGTestSuite) TestBuildDAG_Empty() {
+	dag, err := BuildDAG(nil)
+	s.Require().NoError(err)
+	s.Len(dag.Roots, 0)
+	s.Len(dag.Order, 0)
+}

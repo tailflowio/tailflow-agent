@@ -13,6 +13,13 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
+// sqlOpenFn wraps sql.Open for testing.
+var sqlOpenFn = sql.Open
+
+// testHookAfterRLockMiss is called in Get after the RLock fast-path misses and before acquiring the write lock.
+// It is nil in production; tests can set it to inject concurrent state between the two lock phases.
+var testHookAfterRLockMiss func()
+
 type MemoryDBPool struct {
 	mu   sync.RWMutex
 	pool map[string]*sql.DB
@@ -46,6 +53,10 @@ func (p *MemoryDBPool) Get(ctx context.Context, dsn string) (*sql.DB, error) {
 		return db, nil
 	}
 
+	if testHookAfterRLockMiss != nil {
+		testHookAfterRLockMiss()
+	}
+
 	// Slow path: write lock, double-check
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -59,7 +70,7 @@ func (p *MemoryDBPool) Get(ctx context.Context, dsn string) (*sql.DB, error) {
 		return nil, err
 	}
 
-	db, err = sql.Open(driver, dsn)
+	db, err = sqlOpenFn(driver, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("dbpool: open %s: %w", driver, err)
 	}
@@ -84,6 +95,7 @@ func (p *MemoryDBPool) Close() error {
 	defer p.mu.Unlock()
 
 	var firstErr error
+
 	for dsn, db := range p.pool {
 		err := db.Close()
 		if err != nil && firstErr == nil {

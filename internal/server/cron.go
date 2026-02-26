@@ -13,7 +13,6 @@ type CronScheduler struct {
 	logger *slog.Logger
 }
 
-// NewCronScheduler creates a new cron scheduler.
 func NewCronScheduler(logger *slog.Logger) *CronScheduler {
 	return &CronScheduler{
 		cron:   cron.New(),
@@ -49,10 +48,13 @@ func (cs *CronScheduler) Stop() {
 // NextRun parses a cron expression and returns the next scheduled time.
 func NextRun(spec string) *time.Time {
 	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
+
 	sched, err := parser.Parse(spec)
 	if err != nil {
 		return nil
 	}
+
 	next := sched.Next(time.Now())
+
 	return &next
 }

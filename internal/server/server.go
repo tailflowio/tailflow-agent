@@ -20,6 +20,14 @@ import (
 	"github.com/tailflow/tailflow/internal/store"
 )
 
+// newRabbitMQConsumerFn creates a RabbitMQConsumer. Override in tests.
+var newRabbitMQConsumerFn = NewRabbitMQConsumer
+
+// newRedisKVStoreFn wraps runtime.NewRedisKVStore for testing.
+var newRedisKVStoreFn = func(url string) (runtime.KVStore, error) {
+	return runtime.NewRedisKVStore(url)
+}
+
 // Config holds server configuration.
 type Config struct {
 	Port           int
@@ -51,19 +59,23 @@ type Server struct {
 	timerMu         sync.Mutex
 	metrics         *metrics.Collector
 	exporter        *export.Exporter
+	sensitive       *engine.SensitiveRegistry
 }
 
 // New creates a new server.
 func New(config Config) *Server {
 	var kvStore runtime.KVStore
 
-	if redisURL := os.Getenv("REDIS_URL"); redisURL != "" {
-		rs, err := runtime.NewRedisKVStore(redisURL)
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL != "" {
+		rs, err := newRedisKVStoreFn(redisURL)
 		if err != nil {
 			config.Logger.Warn("failed to connect to Redis, falling back to in-memory KV store", "error", err)
+
 			kvStore = runtime.NewMemoryKVStore()
 		} else {
 			config.Logger.Info("using Redis KV store")
+
 			kvStore = rs
 		}
 	} else {
@@ -80,120 +92,26 @@ func New(config Config) *Server {
 		dbPool:       runtime.NewMemoryDBPool(),
 		kvStore:      kvStore,
 		metrics:      metrics.New(),
+		sensitive:    engine.NewSensitiveRegistry(config.Workflow.Sensitive),
 	}
 	s.setupRoutes()
 
 	return s
 }
 
-// Run starts the server and blocks until the context is cancelled.
 func (s *Server) Run(ctx context.Context) error {
 	s.metrics.Start(ctx)
+	s.startExporter(ctx)
+	s.startMetricsRefresh(ctx)
 
-	// Start HTTP exporter if configured
-	if s.config.ExportURL != "" {
-		var triggerType string
-		if t := s.config.Workflow.Trigger; t != nil {
-			switch {
-			case t.HTTP != nil:
-				triggerType = "http"
-			case t.Webhook != nil:
-				triggerType = "webhook"
-			case t.Schedule != nil:
-				triggerType = "schedule"
-			case t.RabbitMQ != nil:
-				triggerType = "rabbitmq"
-			}
-		}
-
-		s.exporter = export.New(export.Config{
-			ExportURL:           s.config.ExportURL,
-			APIKey:              s.config.APIKey,
-			AgentName:           s.config.ExporterName,
-			EventBus:            s.config.EventBus,
-			Logger:              s.config.Logger,
-			WorkflowName:        s.config.Workflow.Name,
-			WorkflowDescription: s.config.Workflow.Description,
-			WorkflowTags:        s.config.Workflow.Tags,
-			TriggerType:         triggerType,
-			StepsCount:          len(s.config.Workflow.Steps),
-			Version:             s.config.Version,
-			Revision:            s.config.Workflow.Revision,
-		})
-		s.exporter.Start(ctx)
+	cronSched, err := s.startCronScheduler() //nolint:contextcheck
+	if err != nil {
+		return err
 	}
 
-	// Start background metrics refresh (every 1s)
-	go func() {
-		s.config.ExecutionStore.RefreshStepMetrics()
-		ticker := time.NewTicker(1 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				s.config.ExecutionStore.RefreshStepMetrics()
-
-				// Push system metrics via SSE
-				snap := s.metrics.Snapshot()
-				s.config.EventBus.Publish(event.Event{
-					Type:      event.Metrics,
-					Timestamp: time.Now(),
-					Data: map[string]any{
-						"cpu_percent":   snap.CPUPercent,
-						"rss_kb":        snap.RSSKB,
-						"goroutines":    snap.Goroutines,
-						"heap_mb":       snap.HeapMB,
-						"net_rx_bytes":  snap.NetRxBytes,
-						"net_tx_bytes":  snap.NetTxBytes,
-						"uptime_s":      snap.UptimeS,
-						"available":     snap.Available,
-					},
-				})
-			}
-		}
-	}()
-
-	// Start cron scheduler for schedule triggers
-	var cronSched *CronScheduler
-
-	if wf := s.config.Workflow; wf.Trigger != nil && wf.Trigger.Schedule != nil {
-		cronSched = NewCronScheduler(s.config.Logger)
-		cronExpr := wf.Trigger.Schedule.Cron
-
-		err := cronSched.Add(cronExpr, func() { //nolint:contextcheck // cron jobs run independently
-			s.config.Logger.Info("cron trigger fired", "cron", cronExpr)
-			s.runWorkflowAsync(nil)
-		})
-		if err != nil {
-			return fmt.Errorf("invalid cron expression: %w", err)
-		}
-
-		cronSched.Start()
-	}
-
-	// Start RabbitMQ consumer for rabbitmq triggers
-	var rmqConsumer *RabbitMQConsumer
-
-	if wf := s.config.Workflow; wf.Trigger != nil && wf.Trigger.RabbitMQ != nil {
-		rmqConsumer = NewRabbitMQConsumer(wf.Trigger.RabbitMQ, s.config.Logger)
-
-		onMessage := func(triggerData map[string]any, ackFn func(bool)) {
-			s.config.Logger.Info("rabbitmq message received", "queue", wf.Trigger.RabbitMQ.Queue)
-			opts := asyncRunOpts{TriggerData: triggerData}
-			if ackFn != nil {
-				opts.OnComplete = func(_ string, success bool) {
-					ackFn(success)
-				}
-			}
-			s.runWorkflowAsync(nil, opts)
-		}
-
-		err := rmqConsumer.Start(ctx, onMessage)
-		if err != nil {
-			return fmt.Errorf("rabbitmq consumer: %w", err)
-		}
+	rmqConsumer, err := s.startRabbitMQConsumer(ctx)
+	if err != nil {
+		return err
 	}
 
 	s.srv = &http.Server{
@@ -209,48 +127,172 @@ func (s *Server) Run(ctx context.Context) error {
 	go func() {
 		s.config.Logger.Info("server started", "port", s.config.Port, "url", fmt.Sprintf("http://localhost:%d", s.config.Port))
 
-		err := s.srv.ListenAndServe()
-		if err != nil && err != http.ErrServerClosed {
-			errCh <- err
+		listenErr := s.srv.ListenAndServe()
+		if listenErr != nil && listenErr != http.ErrServerClosed {
+			errCh <- listenErr
 		}
 	}()
 
 	select {
 	case <-ctx.Done():
-		s.config.Logger.Info("shutting down server")
-
-		// Cancel all running workflow executions
-		s.cancelAllExecutions()
-
-		if cronSched != nil {
-			cronSched.Stop()
-		}
-
-		if rmqConsumer != nil {
-			rmqConsumer.Stop()
-		}
-
-		s.rmqWaitMgr.Close()
-
-		if s.dbPool != nil {
-			s.dbPool.Close()
-		}
-
-		if s.kvStore != nil {
-			s.kvStore.Close()
-		}
-
-		// Cancel scheduled timers
-		s.cancelScheduledTimers()
-
-		// Give active connections 5s to finish
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer shutdownCancel()
-
-		return s.srv.Shutdown(shutdownCtx) //nolint:contextcheck // standard practice for graceful shutdown
-	case err := <-errCh:
-		return err
+		return s.shutdownServices(cronSched, rmqConsumer) //nolint:contextcheck
+	case listenErr := <-errCh:
+		return listenErr
 	}
+}
+
+func (s *Server) startExporter(ctx context.Context) {
+	if s.config.ExportURL == "" {
+		return
+	}
+
+	var triggerType string
+
+	t := s.config.Workflow.Trigger
+	if t != nil {
+		switch {
+		case t.HTTP != nil:
+			triggerType = "http"
+		case t.Webhook != nil:
+			triggerType = "webhook"
+		case t.Schedule != nil:
+			triggerType = "schedule"
+		case t.RabbitMQ != nil:
+			triggerType = "rabbitmq"
+		}
+	}
+
+	s.exporter = export.New(export.Config{
+		ExportURL:           s.config.ExportURL,
+		APIKey:              s.config.APIKey,
+		AgentName:           s.config.ExporterName,
+		EventBus:            s.config.EventBus,
+		Logger:              s.config.Logger,
+		WorkflowName:        s.config.Workflow.Name,
+		WorkflowDescription: s.config.Workflow.Description,
+		WorkflowTags:        s.config.Workflow.Tags,
+		TriggerType:         triggerType,
+		StepsCount:          len(s.config.Workflow.Steps),
+		Version:             s.config.Version,
+		Revision:            s.config.Workflow.Revision,
+	})
+	s.exporter.Start(ctx)
+}
+
+func (s *Server) startMetricsRefresh(ctx context.Context) {
+	go func() {
+		s.config.ExecutionStore.RefreshStepMetrics()
+
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.config.ExecutionStore.RefreshStepMetrics()
+
+				snap := s.metrics.Snapshot()
+				s.config.EventBus.Publish(event.Event{
+					Type:      event.Metrics,
+					Timestamp: time.Now(),
+					Data: map[string]any{
+						"cpu_percent":  snap.CPUPercent,
+						"rss_kb":       snap.RSSKB,
+						"goroutines":   snap.Goroutines,
+						"heap_mb":      snap.HeapMB,
+						"net_rx_bytes": snap.NetRxBytes,
+						"net_tx_bytes": snap.NetTxBytes,
+						"uptime_s":     snap.UptimeS,
+						"available":    snap.Available,
+					},
+				})
+			}
+		}
+	}()
+}
+
+func (s *Server) startCronScheduler() (*CronScheduler, error) {
+	wf := s.config.Workflow
+	if wf.Trigger == nil || wf.Trigger.Schedule == nil {
+		return nil, nil
+	}
+
+	cronSched := NewCronScheduler(s.config.Logger)
+	cronExpr := wf.Trigger.Schedule.Cron
+
+	err := cronSched.Add(cronExpr, func() {
+		s.config.Logger.Info("cron trigger fired", "cron", cronExpr)
+		s.runWorkflowAsync(nil)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("invalid cron expression: %w", err)
+	}
+
+	cronSched.Start()
+
+	return cronSched, nil
+}
+
+func (s *Server) startRabbitMQConsumer(ctx context.Context) (*RabbitMQConsumer, error) {
+	wf := s.config.Workflow
+	if wf.Trigger == nil || wf.Trigger.RabbitMQ == nil {
+		return nil, nil
+	}
+
+	rmqConsumer := newRabbitMQConsumerFn(wf.Trigger.RabbitMQ, s.config.Logger)
+
+	onMessage := func(triggerData map[string]any, ackFn func(bool)) { //nolint:contextcheck
+		s.config.Logger.Info("rabbitmq message received", "queue", wf.Trigger.RabbitMQ.Queue)
+
+		opts := asyncRunOpts{TriggerData: triggerData}
+		if ackFn != nil {
+			opts.OnComplete = func(_ string, success bool) {
+				ackFn(success)
+			}
+		}
+
+		s.runWorkflowAsync(nil, opts)
+	}
+
+	err := rmqConsumer.Start(ctx, onMessage)
+	if err != nil {
+		return nil, fmt.Errorf("rabbitmq consumer: %w", err)
+	}
+
+	return rmqConsumer, nil
+}
+
+func (s *Server) shutdownServices(cronSched *CronScheduler, rmqConsumer *RabbitMQConsumer) error {
+	s.config.Logger.Info("shutting down server")
+
+	s.cancelAllExecutions()
+
+	if cronSched != nil {
+		cronSched.Stop()
+	}
+
+	if rmqConsumer != nil {
+		rmqConsumer.Stop()
+	}
+
+	s.rmqWaitMgr.Close()
+
+	if s.dbPool != nil {
+		s.dbPool.Close()
+	}
+
+	if s.kvStore != nil {
+		s.kvStore.Close()
+	}
+
+	s.cancelScheduledTimers()
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+
+	return s.srv.Shutdown(shutdownCtx)
 }
 
 // asyncRunOpts holds optional settings for runWorkflowAsync.
@@ -268,7 +310,7 @@ func (s *Server) runWorkflowAsync(params map[string]any, opts ...asyncRunOpts) s
 		ID:           executionID,
 		WorkflowName: wf.Name,
 		Status:       runtime.StatusRunning,
-		Params:       params,
+		Params:       s.sensitive.MaskMap(params),
 		StartedAt:    time.Now(),
 	}
 	s.config.ExecutionStore.Add(exec)

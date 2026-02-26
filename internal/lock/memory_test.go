@@ -7,15 +7,17 @@ import (
 	"github.com/stretchr/testify/suite"
 )
 
-type LockTestSuite struct {
+type MemoryTestSuite struct {
 	suite.Suite
 }
 
-func TestLock(t *testing.T) {
-	suite.Run(t, new(LockTestSuite))
+func TestMemory(t *testing.T) {
+	suite.Run(t, new(MemoryTestSuite))
 }
 
-func (s *LockTestSuite) TestMemoryLocker_Acquire() {
+func (s *MemoryTestSuite) SetupTest() {}
+
+func (s *MemoryTestSuite) TestMemoryLocker_Acquire() {
 	l := NewMemoryLocker()
 
 	release, acquired, err := l.Acquire(context.Background(), "key1")
@@ -36,7 +38,7 @@ func (s *LockTestSuite) TestMemoryLocker_Acquire() {
 	release3()
 }
 
-func (s *LockTestSuite) TestMemoryLocker_DifferentKeys() {
+func (s *MemoryTestSuite) TestMemoryLocker_DifferentKeys() {
 	l := NewMemoryLocker()
 
 	r1, a1, _ := l.Acquire(context.Background(), "key1")
@@ -49,7 +51,7 @@ func (s *LockTestSuite) TestMemoryLocker_DifferentKeys() {
 	r2()
 }
 
-func (s *LockTestSuite) TestMemoryDeduplicator() {
+func (s *MemoryTestSuite) TestMemoryDeduplicator() {
 	d := NewMemoryDeduplicator()
 
 	dup, err := d.IsDuplicate(context.Background(), "event-1")

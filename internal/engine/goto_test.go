@@ -22,6 +22,21 @@ func TestGoto(t *testing.T) {
 
 func (s *GotoTestSuite) SetupTest() {}
 
+func (s *GotoTestSuite) TestHandleGoto_NoLoop() {
+	exec, bus := newTestExecutor()
+	defer bus.Close()
+
+	node := &DAGNode{Step: parser.Step{
+		ID:     "x",
+		Action: "log",
+		Goto:   &parser.GotoConfig{Target: "a", When: "true", MaxIterations: 5},
+	}}
+
+	ready, triggered := exec.handleGoto(node, nil, nil, map[string]loopInfo{}, nil, nil, new(int))
+	s.Nil(ready)
+	s.False(triggered)
+}
+
 func (s *GotoTestSuite) TestGotoBasic() {
 	exec, bus := newTestExecutor()
 	defer bus.Close()

@@ -6,7 +6,6 @@ import (
 	"fmt"
 )
 
-// SQLExecAction executes a SQL statement (INSERT, UPDATE, DELETE).
 type SQLExecAction struct{}
 
 func NewSQLExecAction() Action { return &SQLExecAction{} }
@@ -65,8 +64,15 @@ func (a *SQLExecAction) Execute(ctx *ActionContext) (any, error) {
 		return nil, fmt.Errorf("sql.exec: %w", err)
 	}
 
-	affected, _ := res.RowsAffected()
-	lastID, _ := res.LastInsertId()
+	affected, affectedErr := res.RowsAffected()
+	if affectedErr != nil {
+		return nil, fmt.Errorf("sql.exec: rows affected: %w", affectedErr)
+	}
+
+	lastID, lastIDErr := res.LastInsertId()
+	if lastIDErr != nil {
+		return nil, fmt.Errorf("sql.exec: last insert id: %w", lastIDErr)
+	}
 
 	return map[string]any{
 		"affected":       affected,
