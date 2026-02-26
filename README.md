@@ -99,6 +99,24 @@ tailflow serve --selfhosted \
   examples/ping.yaml
 ```
 
+### `.env` support
+
+TailFlow automatically loads a `.env` file from the working directory at startup. No wrapper or manual `source` needed.
+
+```bash
+# .env
+DATABASE_URL=postgres://localhost/mydb
+SLACK_WEBHOOK=https://hooks.slack.com/xxx
+```
+
+Variables from `.env` are available via `{{ env.DATABASE_URL }}` in your workflows. Environment variables already set in your shell take precedence over `.env` values.
+
+**Priority (highest to lowest):**
+1. CLI flags (`--exporter-url`)
+2. Shell environment (`export X=...`)
+3. `.env` file
+4. Workflow defaults
+
 ### Your first workflow
 
 ```yaml

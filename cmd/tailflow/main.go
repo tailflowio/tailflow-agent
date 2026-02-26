@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/spf13/cobra"
 	"github.com/tailflow/tailflow/internal/action"
 	"github.com/tailflow/tailflow/internal/engine"
@@ -877,6 +878,8 @@ func flagOrEnv(flagVal, envName string) string {
 }
 
 func main() {
+	_ = godotenv.Load()
+
 	var (
 		noColorFlag  bool
 		exporterURL  string
