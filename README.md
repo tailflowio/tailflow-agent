@@ -9,6 +9,14 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/tailflowio/tailflow-agent/releases"><img src="https://img.shields.io/github/v/release/tailflowio/tailflow-agent?style=flat-square&color=00ADD8" alt="Release"></a>
+  <a href="https://pkg.go.dev/github.com/tailflow/tailflow"><img src="https://img.shields.io/badge/Go-1.26-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go 1.26"></a>
+  <a href="https://github.com/tailflowio/tailflow-agent/blob/develop/LICENSE"><img src="https://img.shields.io/github/license/tailflowio/tailflow-agent?style=flat-square&color=blue" alt="License"></a>
+  <a href="https://github.com/tailflowio/tailflow-agent"><img src="https://img.shields.io/badge/coverage-100%25-brightgreen?style=flat-square" alt="Coverage"></a>
+  <a href="https://github.com/tailflowio/tailflow-agent"><img src="https://img.shields.io/github/stars/tailflowio/tailflow-agent?style=flat-square&color=yellow" alt="Stars"></a>
+</p>
+
+<p align="center">
   <a href="#quick-start">Quick Start</a> &bull;
   <a href="#use-cases">Use Cases</a> &bull;
   <a href="#actions">Actions</a> &bull;
