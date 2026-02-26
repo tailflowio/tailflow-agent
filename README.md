@@ -469,16 +469,17 @@ tailflow serve --selfhosted \
 
 ### How it works
 
-1. **Registration** - Agent sends workflow metadata to `/register`. The SaaS responds with an `agent_id` and optional config overrides.
-2. **Event ingestion** - Workflow events (step started/completed/failed, logs) are batched and flushed to `/ingest` every 1s.
-3. **Heartbeat** - Agent sends uptime, active execution count, and system metrics (CPU, memory, goroutines) to `/heartbeat` every 10s.
+1. **Registration** - Agent sends workflow metadata to `/api/v1/agent/register`. The SaaS responds with an `agent_id` and optional config overrides.
+2. **Event ingestion** - Workflow events (step started/completed/failed, logs) are batched and flushed to `/api/v1/agent/ingest` every 1s.
+3. **Heartbeat** - Agent sends uptime, active execution count, and system metrics (CPU, memory, goroutines, network) to `/api/v1/agent/heartbeat` every 10s.
 
 ### Protocol
 
-**`POST /register`** (agent -> SaaS)
+**`POST /api/v1/agent/register`** (agent -> SaaS)
 ```json
 {
   "session_id": "uuid",
+  "agent_name": "my-agent",
   "workflow_name": "ping",
   "workflow_description": "Ping a host",
   "workflow_tags": ["example", "network"],
@@ -498,16 +499,25 @@ tailflow serve --selfhosted \
 }
 ```
 
-**`POST /ingest`** (every flush interval)
+**`POST /api/v1/agent/ingest`** (every flush interval)
 ```json
 {
   "agent_id": "uuid",
   "session_id": "uuid",
-  "events": [{"type": "step.started", "timestamp": "...", "step_id": "ping", ...}]
+  "events": [
+    {
+      "type": "step.started",
+      "timestamp": "2025-01-15T10:30:00Z",
+      "execution_id": "exec-uuid",
+      "step_id": "ping",
+      "data": {},
+      "message": ""
+    }
+  ]
 }
 ```
 
-**`POST /heartbeat`** (every heartbeat interval)
+**`POST /api/v1/agent/heartbeat`** (every heartbeat interval)
 ```json
 {
   "agent_id": "uuid",
@@ -518,7 +528,11 @@ tailflow serve --selfhosted \
     "cpu_percent": 12.5,
     "rss_kb": 45000,
     "goroutines": 8,
-    "heap_mb": 3.2
+    "heap_mb": 3.2,
+    "net_rx_bytes": 123456,
+    "net_tx_bytes": 78900,
+    "uptime_s": 3600,
+    "available": true
   }
 }
 ```
@@ -532,18 +546,11 @@ tailflow serve --selfhosted \
 ### Test locally
 
 ```bash
-# Terminal 1: start the debug export server
-go run ./examples/debug-export-server/
-
-# Terminal 2: start agent with export
-tailflow serve --selfhosted --exporter-url http://localhost:9090 --exporter-key test examples/ping.yaml
-```
-
-Or with Docker:
-
-```bash
-cd personal_examples
-docker compose -f docker-compose.export.yaml up --build
+tailflow serve --selfhosted \
+  --exporter-url http://localhost:9090 \
+  --exporter-key test \
+  --exporter-name my-agent \
+  examples/ping.yaml
 ```
 
 ---
