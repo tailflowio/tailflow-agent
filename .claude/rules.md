@@ -90,7 +90,7 @@ make lint && make test
 
 ### Critical Enabled Linters
 - **errcheck**: All errors must be checked
-- **govet**: Suspicious construction issues
+- **govet**: Suspicious construction issues (includes sub-analyzers: minmax, mapsloop, waitgroup, fmtappendf, lostcancel, shadow)
 - **staticcheck**: Advanced static analysis
 - **gosimple**: Possible simplifications
 - **ineffassign**: Inefficient assignments
@@ -98,12 +98,17 @@ make lint && make test
 - **gofmt/gofumpt**: Strict formatting
 - **goimports**: Organized imports
 - **contextcheck**: Correct context propagation
+- **noctx**: Always use `http.NewRequestWithContext`, never `http.NewRequest`
 - **errname**: Error naming (ErrXxx)
-- **errorlint**: Correct error wrapping
-- **exhaustive**: Exhaustive enum switches
+- **errorlint**: Use `errors.Is()`/`errors.As()`, never `==` for error comparison
+- **exhaustive**: Exhaustive enum switches (add `default:` case for unhandled values)
 - **nilerr**: Incorrect nil,err returns
 - **bodyclose**: HTTP body closure
 - **rowserrcheck/sqlclosecheck**: Correct SQL handling
+- **perfsprint**: Use `errors.New()` instead of `fmt.Errorf()` when no format args; prefer string concat over `fmt.Sprintf` for simple cases
+- **unconvert**: Remove unnecessary type conversions
+- **gocritic**: Code simplifications (unlambda: direct function references, if-else → switch, etc.)
+- **gochecknoinits**: Avoid `init()` functions (use `//nolint:gochecknoinits` only when truly needed)
 - **sloglint**: Correct slog usage
 - **testifylint**: Correct testify usage
 - **wsl**: Whitespace logic (logical separation)
@@ -111,6 +116,12 @@ make lint && make test
 - **prealloc**: Slice preallocation
 - **revive**: Additional style rules
 - **stylecheck**: Standard Go style
+
+### Go 1.25+ Idioms (enforced by govet sub-analyzers)
+- **minmax**: Use `min()`/`max()` builtins instead of if/else
+- **mapsloop**: Use `maps.Copy(dst, src)` instead of manual `for k, v := range` copy loops
+- **waitgroup**: Use `wg.Go(func() { ... })` instead of `wg.Add(1)` + `go func() { defer wg.Done(); ... }()`
+- **fmtappendf**: Use `fmt.Appendf(nil, ...)` instead of `[]byte(fmt.Sprintf(...))`
 
 ### Code Review
 - Always request a review before merging
@@ -128,6 +139,7 @@ make lint && make test
 - ❌ NEVER repeat what the code does
 - ❌ NEVER comment clear code
 - ❌ DO NOT comment conditions, loops, early returns
+- ❌ NEVER use separator/divider comments (`// ---------- section ----------`, `// --- section ---`, `// ----...----`)
 
 **Strict principle**:
 - If in doubt → DO NOT comment

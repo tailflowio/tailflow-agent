@@ -1,8 +1,9 @@
 module github.com/tailflow/tailflow
 
-go 1.25.6
+go 1.26.0
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/dop251/goja v0.0.0-20260106131823-651366fbe6e3
 	github.com/expr-lang/expr v1.17.7
 	github.com/go-playground/validator/v10 v10.30.1

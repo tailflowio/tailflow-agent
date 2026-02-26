@@ -16,6 +16,10 @@ func TestBus(t *testing.T) {
 	suite.Run(t, new(BusTestSuite))
 }
 
+func (s *BusTestSuite) SetupTest() {
+	// required by convention
+}
+
 func (s *BusTestSuite) TestPublishSubscribe() {
 	bus := NewBus()
 	defer bus.Close()
@@ -56,7 +60,7 @@ func (s *BusTestSuite) TestMultipleSubscribers() {
 	}
 }
 
-func (s *BusTestSuite) TestUnsubscribe() {
+func (s *BusTestSuite) TestUnsubscribe_ClosesChannel() {
 	bus := NewBus()
 	defer bus.Close()
 
@@ -82,9 +86,10 @@ func (s *BusTestSuite) TestDropSlowSubscribers() {
 
 	// Should get at least 1 event (buffer size)
 	select {
-	case <-ch:
+	case received := <-ch:
+		s.Equal(StepLog, received.Type, "received event should be a StepLog")
 	case <-time.After(time.Second):
-		s.T().Fatal("timeout")
+		s.Fail("timeout waiting for event from slow subscriber")
 	}
 }
 
@@ -119,7 +124,7 @@ done:
 	s.Require().Equal(100, count)
 }
 
-func (s *BusTestSuite) TestClose() {
+func (s *BusTestSuite) TestClose_ClosesSubscriberChannels() {
 	bus := NewBus()
 	ch := bus.Subscribe(10)
 	bus.Close()
@@ -131,3 +136,14 @@ func (s *BusTestSuite) TestClose() {
 	// Publishing after close should not panic
 	bus.Publish(NewEvent(StepLog, "exec-1", "step1", "log"))
 }
+
+func (s *BusTestSuite) TestCloseIdempotent() {
+	bus := NewBus()
+	bus.Subscribe(10)
+	bus.Close()
+	// Second close should not panic
+	s.NotPanics(func() {
+		bus.Close()
+	}, "calling Close() a second time should not panic")
+}
+

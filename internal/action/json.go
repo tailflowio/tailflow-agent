@@ -6,7 +6,6 @@ import (
 	"fmt"
 )
 
-// JSONDecodeAction parses JSON strings.
 type JSONDecodeAction struct{}
 
 func NewJSONDecodeAction() Action { return &JSONDecodeAction{} }
@@ -24,38 +23,38 @@ func (a *JSONDecodeAction) Execute(ctx *ActionContext) (any, error) {
 	var result any
 
 	err := json.Unmarshal([]byte(input), &result)
-	if err != nil {
-		extracted := extractJSON(input)
-		if extracted == "" {
-			extracted = input
-		}
-		sanitized := sanitizeJSONStrings(extracted)
-		err2 := json.Unmarshal([]byte(sanitized), &result)
-		if err2 == nil {
-			return result, nil
-		}
-		preview := input
-		if len(preview) > 200 {
-			preview = preview[:200] + "..."
-		}
-		return nil, fmt.Errorf("json.decode: %w (input: %s)", err, preview)
+	if err == nil {
+		return result, nil
 	}
 
-	return result, nil
+	return tryRecoverJSON(input, err)
 }
 
-// extractJSON tries to find the first JSON object or array in a string.
-func extractJSON(s string) string {
-	// Find first { or [
-	start := -1
-	opener := byte(0)
-	for i := 0; i < len(s); i++ {
-		if s[i] == '{' || s[i] == '[' {
-			start = i
-			opener = s[i]
-			break
-		}
+func tryRecoverJSON(input string, originalErr error) (any, error) {
+	extracted := extractJSON(input)
+	if extracted == "" {
+		extracted = input
 	}
+
+	sanitized := sanitizeJSONStrings(extracted)
+
+	var result any
+
+	err := json.Unmarshal([]byte(sanitized), &result)
+	if err == nil {
+		return result, nil
+	}
+
+	preview := input
+	if len(preview) > 200 {
+		preview = preview[:200] + "..."
+	}
+
+	return nil, fmt.Errorf("json.decode: %w (input: %s)", originalErr, preview)
+}
+
+func extractJSON(s string) string {
+	start, opener := findJSONStart(s)
 	if start == -1 {
 		return ""
 	}
@@ -65,81 +64,95 @@ func extractJSON(s string) string {
 		closer = ']'
 	}
 
-	// Find matching closer, accounting for nesting and strings
+	return findMatchingClose(s, start, opener, closer)
+}
+
+func findJSONStart(s string) (int, byte) {
+	for i := 0; i < len(s); i++ {
+		if s[i] == '{' || s[i] == '[' {
+			return i, s[i]
+		}
+	}
+
+	return -1, 0
+}
+
+func findMatchingClose(s string, start int, opener, closer byte) string {
 	depth := 0
 	inString := false
 	escaped := false
+
 	for i := start; i < len(s); i++ {
 		if escaped {
 			escaped = false
 			continue
 		}
+
 		ch := s[i]
+
 		if ch == '\\' && inString {
 			escaped = true
 			continue
 		}
+
 		if ch == '"' {
 			inString = !inString
 			continue
 		}
+
 		if inString {
 			continue
 		}
-		if ch == opener {
+
+		switch ch {
+		case opener:
 			depth++
-		} else if ch == closer {
+		case closer:
 			depth--
 			if depth == 0 {
 				return s[start : i+1]
 			}
 		}
 	}
+
 	return ""
 }
 
-// sanitizeJSONStrings escapes literal control characters (newlines, tabs)
-// inside JSON string values, which LLMs often produce.
 func sanitizeJSONStrings(s string) string {
-	var buf []byte
+	buf := make([]byte, 0, len(s))
 	inString := false
 	escaped := false
+
 	for i := 0; i < len(s); i++ {
 		ch := s[i]
-		if escaped {
+		appendCh := true
+
+		switch {
+		case escaped:
 			escaped = false
-			buf = append(buf, ch)
-			continue
-		}
-		if ch == '\\' && inString {
+		case ch == '\\' && inString:
 			escaped = true
-			buf = append(buf, ch)
-			continue
-		}
-		if ch == '"' {
+		case ch == '"':
 			inString = !inString
-			buf = append(buf, ch)
-			continue
+		case inString && ch == '\n':
+			buf = append(buf, '\\', 'n')
+			appendCh = false
+		case inString && ch == '\r':
+			buf = append(buf, '\\', 'r')
+			appendCh = false
+		case inString && ch == '\t':
+			buf = append(buf, '\\', 't')
+			appendCh = false
 		}
-		if inString {
-			switch ch {
-			case '\n':
-				buf = append(buf, '\\', 'n')
-			case '\r':
-				buf = append(buf, '\\', 'r')
-			case '\t':
-				buf = append(buf, '\\', 't')
-			default:
-				buf = append(buf, ch)
-			}
-		} else {
+
+		if appendCh {
 			buf = append(buf, ch)
 		}
 	}
+
 	return string(buf)
 }
 
-// JSONEncodeAction serializes values to JSON.
 type JSONEncodeAction struct{}
 
 func NewJSONEncodeAction() Action { return &JSONEncodeAction{} }

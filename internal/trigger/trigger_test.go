@@ -15,6 +15,10 @@ func TestTrigger(t *testing.T) {
 	suite.Run(t, new(TriggerTestSuite))
 }
 
+func (s *TriggerTestSuite) SetupTest() {
+	// required by convention
+}
+
 func (s *TriggerTestSuite) TestResolveRoutes() {
 	workflows := []*parser.Workflow{
 		{

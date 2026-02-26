@@ -18,7 +18,7 @@ func TestDelayAction(t *testing.T) {
 
 func (s *DelayActionTestSuite) SetupTest() {}
 
-func (s *DelayActionTestSuite) TestExecute() {
+func (s *DelayActionTestSuite) TestExecute_WaitsDuration() {
 	a := NewDelayAction()
 	ctx := newTestContext(map[string]any{
 		"duration": "10ms",
@@ -60,4 +60,10 @@ func (s *DelayActionTestSuite) TestValidateMissingDuration() {
 	a := NewDelayAction()
 	err := a.Validate(newTestContext(map[string]any{}))
 	s.Error(err)
+}
+
+func (s *DelayActionTestSuite) TestValidateOK() {
+	a := NewDelayAction()
+	err := a.Validate(newTestContext(map[string]any{"duration": "1s"}))
+	s.NoError(err)
 }

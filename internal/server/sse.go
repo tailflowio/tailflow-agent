@@ -11,15 +11,15 @@ import (
 
 const flushInterval = 50 * time.Millisecond
 
-// loopTracker tracks goto loop state to filter out redundant events
-// for loop body steps after iteration 1. Used by both SSE handlers
-// and captureEvents to avoid sending/storing thousands of repetitive events.
+// jsonMarshalEvent is used to marshal SSE event payloads.
+// Override in tests to simulate marshal errors.
+var jsonMarshalEvent = json.Marshal
+
 type loopTracker struct {
 	Body      map[string]bool
 	Iteration int
 }
 
-// Track updates loop state from an event. Must be called for every event.
 func (lt *loopTracker) Track(ev event.Event) {
 	if ev.Type == event.StepGoto && ev.Data != nil {
 		if iter, ok := ev.Data["iteration"].(float64); ok {
@@ -28,6 +28,7 @@ func (lt *loopTracker) Track(ev event.Event) {
 
 		if body, ok := ev.Data["body"].([]any); ok {
 			lt.Body = make(map[string]bool, len(body))
+
 			for _, b := range body {
 				if sid, ok := b.(string); ok {
 					lt.Body[sid] = true
@@ -36,17 +37,97 @@ func (lt *loopTracker) Track(ev event.Event) {
 		}
 	}
 
-	// End of loop: a step outside the body starts.
 	if ev.Type == event.StepStarted && lt.Iteration > 0 && !lt.Body[ev.StepID] {
 		lt.Body = nil
 		lt.Iteration = 0
 	}
 }
 
-// InLoop returns true if the event is a loop body event past iteration 1.
 // step.goto events are never considered "in loop" (always pass through).
 func (lt *loopTracker) InLoop(ev event.Event) bool {
 	return lt.Iteration > 1 && lt.Body[ev.StepID] && ev.Type != event.StepGoto
+}
+
+func setSSEHeaders(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+}
+
+func writeSSEEvent(w http.ResponseWriter, ev event.Event) bool {
+	data, err := jsonMarshalEvent(ev)
+	if err != nil {
+		return false
+	}
+
+	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, string(data))
+
+	return true
+}
+
+func (s *Server) replayStoredEvents(
+	w http.ResponseWriter, flusher http.Flusher, executionID string,
+) (replayedCount int, workflowDone bool) {
+	stored := s.config.ExecutionStore.GetEvents(executionID)
+
+	for _, ev := range stored {
+		writeSSEEvent(w, ev)
+
+		if ev.Type == "workflow.completed" {
+			workflowDone = true
+		}
+	}
+
+	flusher.Flush()
+
+	return len(stored), workflowDone
+}
+
+type sseEventFilter func(ev event.Event) bool
+
+func sseEventLoop(
+	w http.ResponseWriter, r *http.Request, flusher http.Flusher,
+	ch <-chan event.Event, closeOnComplete bool, filter sseEventFilter,
+) {
+	ticker := time.NewTicker(flushInterval)
+	defer ticker.Stop()
+
+	pendingFlush := false
+
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				return
+			}
+
+			if !filter(ev) {
+				continue
+			}
+
+			if !writeSSEEvent(w, ev) {
+				continue
+			}
+
+			pendingFlush = true
+
+			if closeOnComplete && ev.Type == "workflow.completed" {
+				flusher.Flush()
+				return
+			}
+
+		case <-ticker.C:
+			if pendingFlush {
+				flusher.Flush()
+
+				pendingFlush = false
+			}
+
+		case <-r.Context().Done():
+			return
+		}
+	}
 }
 
 func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
@@ -58,106 +139,40 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	setSSEHeaders(w)
 
 	// Subscribe BEFORE reading history to avoid losing events published
 	// between GetEvents and Subscribe.
 	ch := s.config.EventBus.Subscribe(100)
 	defer s.config.EventBus.Unsubscribe(ch)
 
-	// Send initial connection event
 	fmt.Fprintf(w, "event: connected\ndata: {\"execution_id\":%q}\n\n", executionID)
 	flusher.Flush()
 
-	// Replay stored events (may overlap with events buffered in ch)
-	stored := s.config.ExecutionStore.GetEvents(executionID)
-	replayedCount := len(stored)
-	workflowDone := false
-
-	for _, ev := range stored {
-		data, err := json.Marshal(ev)
-		if err != nil {
-			continue
-		}
-
-		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, string(data))
-
-		if ev.Type == "workflow.completed" {
-			workflowDone = true
-		}
-	}
-
-	flusher.Flush()
-
-	// If workflow already finished, close stream
+	replayedCount, workflowDone := s.replayStoredEvents(w, flusher, executionID)
 	if workflowDone {
 		return
 	}
 
-	// Live events — skip events already replayed.
-	// Events for this execution are appended sequentially, so we count
-	// how many we already sent and skip that many from the bus.
 	skipped := 0
-
-	ticker := time.NewTicker(flushInterval)
-	defer ticker.Stop()
-
-	pendingFlush := false
 	lt := &loopTracker{}
 
-	for {
-		select {
-		case ev, ok := <-ch:
-			if !ok {
-				return
-			}
-
-			if ev.ExecutionID != executionID {
-				continue
-			}
-
-			// Skip events that were already part of the replay
-			if skipped < replayedCount {
-				skipped++
-				continue
-			}
-
-			lt.Track(ev)
-
-			if lt.InLoop(ev) {
-				continue
-			}
-
-			data, err := json.Marshal(ev)
-			if err != nil {
-				continue
-			}
-
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, string(data))
-			pendingFlush = true
-
-			if ev.Type == "workflow.completed" {
-				flusher.Flush()
-				return
-			}
-
-		case <-ticker.C:
-			if pendingFlush {
-				flusher.Flush()
-				pendingFlush = false
-			}
-
-		case <-r.Context().Done():
-			return
+	sseEventLoop(w, r, flusher, ch, true, func(ev event.Event) bool {
+		if ev.ExecutionID != executionID {
+			return false
 		}
-	}
+
+		if skipped < replayedCount {
+			skipped++
+			return false
+		}
+
+		lt.Track(ev)
+
+		return !lt.InLoop(ev)
+	})
 }
 
-// handleGlobalSSE streams ALL events (no execution filter).
-// The frontend uses this to refresh lists in real-time.
 func (s *Server) handleGlobalSSE(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -165,10 +180,7 @@ func (s *Server) handleGlobalSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	setSSEHeaders(w)
 
 	ch := s.config.EventBus.Subscribe(100)
 	defer s.config.EventBus.Unsubscribe(ch)
@@ -176,54 +188,25 @@ func (s *Server) handleGlobalSSE(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "event: connected\ndata: {}\n\n")
 	flusher.Flush()
 
-	ticker := time.NewTicker(flushInterval)
-	defer ticker.Stop()
-
-	pendingFlush := false
-
-	// Per-execution loop tracking for the global stream.
 	loops := map[string]*loopTracker{}
 
-	for {
-		select {
-		case ev, ok := <-ch:
-			if !ok {
-				return
-			}
-
-			lt := loops[ev.ExecutionID]
-			if lt == nil {
-				lt = &loopTracker{}
-				loops[ev.ExecutionID] = lt
-			}
-
-			lt.Track(ev)
-
-			if lt.InLoop(ev) {
-				continue
-			}
-
-			// Clean up finished executions.
-			if ev.Type == event.WorkflowCompleted {
-				delete(loops, ev.ExecutionID)
-			}
-
-			data, err := json.Marshal(ev)
-			if err != nil {
-				continue
-			}
-
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, string(data))
-			pendingFlush = true
-
-		case <-ticker.C:
-			if pendingFlush {
-				flusher.Flush()
-				pendingFlush = false
-			}
-
-		case <-r.Context().Done():
-			return
+	sseEventLoop(w, r, flusher, ch, false, func(ev event.Event) bool {
+		lt := loops[ev.ExecutionID]
+		if lt == nil {
+			lt = &loopTracker{}
+			loops[ev.ExecutionID] = lt
 		}
-	}
+
+		lt.Track(ev)
+
+		if lt.InLoop(ev) {
+			return false
+		}
+
+		if ev.Type == event.WorkflowCompleted {
+			delete(loops, ev.ExecutionID)
+		}
+
+		return true
+	})
 }

@@ -6,8 +6,6 @@ import (
 	"time"
 )
 
-// WaitRabbitMQAction blocks until a matching message is received from a RabbitMQ queue.
-// Uses the server-side RabbitMQWaitManager for shared connections and consumers.
 type WaitRabbitMQAction struct{}
 
 func NewWaitRabbitMQAction() Action { return &WaitRabbitMQAction{} }
@@ -28,61 +26,85 @@ func (a *WaitRabbitMQAction) Validate(ctx *ActionContext) error {
 	return nil
 }
 
-func (a *WaitRabbitMQAction) Execute(ctx *ActionContext) (any, error) {
-	url := fmt.Sprintf("%v", ctx.Config["url"])
-	queue := fmt.Sprintf("%v", ctx.Config["queue"])
+type waitRabbitMQConfig struct {
+	url        string
+	queue      string
+	matchField string
+	matchValue string
+	timeout    time.Duration
+}
 
-	var matchField, matchValue string
+func parseWaitRabbitMQConfig(ctx *ActionContext) (waitRabbitMQConfig, error) {
+	cfg := waitRabbitMQConfig{
+		url:     fmt.Sprintf("%v", ctx.Config["url"]),
+		queue:   fmt.Sprintf("%v", ctx.Config["queue"]),
+		timeout: 5 * time.Minute,
+	}
+
 	if v, ok := ctx.Config["match"]; ok {
-		matchField = fmt.Sprintf("%v", v)
-	}
-	if v, ok := ctx.Config["match_value"]; ok {
-		matchValue = fmt.Sprintf("%v", v)
+		cfg.matchField = fmt.Sprintf("%v", v)
 	}
 
-	// Parse optional timeout (default: 5m)
-	timeout := 5 * time.Minute
+	if v, ok := ctx.Config["match_value"]; ok {
+		cfg.matchValue = fmt.Sprintf("%v", v)
+	}
 
 	if t, ok := ctx.Config["timeout"]; ok {
 		dur, err := time.ParseDuration(fmt.Sprintf("%v", t))
 		if err != nil {
-			return nil, fmt.Errorf("wait.rabbitmq: invalid timeout %q: %w", t, err)
+			return cfg, fmt.Errorf("wait.rabbitmq: invalid timeout %q: %w", t, err)
 		}
 
-		timeout = dur
+		cfg.timeout = dur
 	}
 
-	ch, cleanup := ctx.Services.WaitRabbitMQRegister(url, queue, matchField, matchValue, ctx)
+	return cfg, nil
+}
+
+func (a *WaitRabbitMQAction) Execute(ctx *ActionContext) (any, error) {
+	cfg, err := parseWaitRabbitMQConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	ch, cleanup := ctx.Services.WaitRabbitMQRegister(cfg.url, cfg.queue, cfg.matchField, cfg.matchValue, ctx)
 	defer cleanup()
 
-	executionID := ctx.ExecCtx.ExecutionID
-	stepID := ctx.StepID
+	emitWaitingSignal(ctx, cfg)
 
-	// Signal that this step is now blocking on an external event
-	if ctx.Services.EmitWaiting != nil {
-		details := map[string]any{
-			"queue":   queue,
-			"timeout": timeout.String(),
-		}
-		if matchField != "" {
-			details["match"] = matchField
-			details["match_value"] = matchValue
-		}
-		ctx.Services.EmitWaiting(executionID, stepID, "rabbitmq", details)
+	ctx.Logger.Info("waiting for message", "queue", cfg.queue, "match", cfg.matchField, "timeout", cfg.timeout)
+
+	return awaitMessage(ctx, ch, cfg)
+}
+
+func emitWaitingSignal(ctx *ActionContext, cfg waitRabbitMQConfig) {
+	if ctx.Services.EmitWaiting == nil {
+		return
 	}
 
-	ctx.Logger.Info("waiting for message", "queue", queue, "match", matchField, "timeout", timeout)
+	details := map[string]any{
+		"queue":   cfg.queue,
+		"timeout": cfg.timeout.String(),
+	}
+	if cfg.matchField != "" {
+		details["match"] = cfg.matchField
+		details["match_value"] = cfg.matchValue
+	}
 
+	ctx.Services.EmitWaiting(ctx.ExecCtx.ExecutionID, ctx.StepID, "rabbitmq", details)
+}
+
+func awaitMessage(ctx *ActionContext, ch <-chan map[string]any, cfg waitRabbitMQConfig) (any, error) {
 	select {
 	case msg, ok := <-ch:
 		if !ok {
-			return nil, fmt.Errorf("wait.rabbitmq: connection failed for queue %s", queue)
+			return nil, fmt.Errorf("wait.rabbitmq: connection failed for queue %s", cfg.queue)
 		}
 
 		return msg, nil
 
-	case <-time.After(timeout):
-		return nil, fmt.Errorf("wait.rabbitmq: timeout after %s waiting on queue %s", timeout, queue)
+	case <-time.After(cfg.timeout):
+		return nil, fmt.Errorf("wait.rabbitmq: timeout after %s waiting on queue %s", cfg.timeout, cfg.queue)
 
 	case <-ctx.Done():
 		return nil, ctx.Err()

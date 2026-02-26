@@ -59,6 +59,7 @@ func New(cfg Config) *Exporter {
 	if cfg.FlushInterval == 0 {
 		cfg.FlushInterval = 1 * time.Second
 	}
+
 	if cfg.HeartbeatInterval == 0 {
 		cfg.HeartbeatInterval = 10 * time.Second
 	}
@@ -94,7 +95,44 @@ func (e *Exporter) Shutdown() {
 func (e *Exporter) isRegistered() (string, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+
 	return e.agentID, e.registered
+}
+
+// registerInitialBackoff and registerMaxBackoff control retry timing. Override in tests.
+var (
+	registerInitialBackoff = 1 * time.Second
+	registerMaxBackoff     = 30 * time.Second
+)
+
+// tryRegister attempts one registration with the SaaS. On success it sets
+// agentID/registered and returns true. On failure it logs and returns false.
+func (e *Exporter) tryRegister(payload map[string]any, backoff time.Duration) bool {
+	// Use background context so in-flight HTTP calls aren't aborted when the
+	// parent ctx is canceled — registration must finish for finalFlush to work.
+	resp, err := e.post(context.Background(), "/api/v1/agent/register", payload)
+	if err != nil {
+		e.cfg.Logger.Warn("export register failed, retrying", "error", err, "backoff", backoff)
+		return false
+	}
+
+	var sc serverConfig
+
+	jsonErr := json.Unmarshal(resp, &sc)
+	if jsonErr != nil || sc.AgentID == "" {
+		e.cfg.Logger.Warn("export register response missing agent_id, retrying")
+		return false
+	}
+
+	e.mu.Lock()
+	e.agentID = sc.AgentID
+	e.registered = true
+	e.mu.Unlock()
+
+	e.cfg.Logger.Info("export registered", "agent_id", sc.AgentID)
+	e.applyServerConfig(resp)
+
+	return true
 }
 
 func (e *Exporter) register(ctx context.Context) {
@@ -110,28 +148,12 @@ func (e *Exporter) register(ctx context.Context) {
 		"version":              e.cfg.Version,
 	}
 
-	backoff := 1 * time.Second
-	const maxBackoff = 30 * time.Second
+	backoff := registerInitialBackoff
+	maxBackoff := registerMaxBackoff
 
 	for {
-		resp, err := e.post("/api/v1/agent/register", payload)
-		if err == nil {
-			var sc serverConfig
-			jsonErr := json.Unmarshal(resp, &sc)
-			if jsonErr == nil && sc.AgentID != "" {
-				e.mu.Lock()
-				e.agentID = sc.AgentID
-				e.registered = true
-				e.mu.Unlock()
-
-				e.cfg.Logger.Info("export registered", "agent_id", sc.AgentID)
-				e.applyServerConfig(resp)
-				return
-			}
-
-			e.cfg.Logger.Warn("export register response missing agent_id, retrying")
-		} else {
-			e.cfg.Logger.Warn("export register failed, retrying", "error", err, "backoff", backoff)
+		if e.tryRegister(payload, backoff) { //nolint:contextcheck
+			return
 		}
 
 		select {
@@ -156,111 +178,126 @@ const maxBatchSize = 10_000
 // request to stay well within typical body-size limits.
 const flushChunkSize = 2_000
 
+// flushBatch sends all buffered events to the SaaS in chunks.
+// It clears the batch on success or drops failed chunks.
+func (e *Exporter) flushBatch(flushCtx context.Context, batch *[]event.Event) {
+	if len(*batch) == 0 {
+		return
+	}
+
+	agentID, ok := e.isRegistered()
+	if !ok {
+		return // keep buffering until registered
+	}
+
+	// Send in chunks to avoid hitting server body-size limits.
+	for len(*batch) > 0 {
+		end := min(flushChunkSize, len(*batch))
+		chunk := (*batch)[:end]
+
+		payload := map[string]any{
+			"agent_id":   agentID,
+			"session_id": e.sessionID,
+			"events":     chunk,
+		}
+
+		if _, err := e.post(flushCtx, "/api/v1/agent/ingest", payload); err != nil {
+			e.cfg.Logger.Warn("export ingest failed", "error", err, "batch_size", len(*batch))
+			// Drop the failed chunk to prevent infinite accumulation.
+			*batch = (*batch)[end:]
+
+			return
+		}
+
+		*batch = (*batch)[end:]
+	}
+}
+
+// finalFlush drains any remaining events from the channel, waits briefly for
+// registration if needed, then flushes the batch.
+func (e *Exporter) finalFlush(ch <-chan event.Event, batch *[]event.Event) {
+	// Drain any remaining events from the channel.
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				break
+			}
+
+			if ev.Type != event.Metrics {
+				e.trackExecution(ev)
+				*batch = append(*batch, ev)
+			}
+
+			continue
+		default:
+		}
+
+		break
+	}
+
+	if len(*batch) == 0 {
+		return
+	}
+
+	e.awaitRegistrationThenFlush(batch)
+}
+
+// awaitRegistrationThenFlush waits up to 5s for registration then flushes.
+func (e *Exporter) awaitRegistrationThenFlush(batch *[]event.Event) {
+	if _, ok := e.isRegistered(); !ok {
+		deadline := time.After(5 * time.Second)
+		tick := time.NewTicker(50 * time.Millisecond)
+
+		defer tick.Stop()
+
+		for {
+			select {
+			case <-deadline:
+				e.cfg.Logger.Warn("export: shutdown timeout waiting for registration, events lost", "count", len(*batch))
+				return
+			case <-tick.C:
+				if _, ok := e.isRegistered(); ok {
+					goto ready
+				}
+			}
+		}
+	}
+
+ready:
+	e.flushBatch(context.Background(), batch)
+}
+
 // Events are buffered even before registration; they are only sent once
 // the SaaS has assigned an agent_id.
 func (e *Exporter) batchLoop(ctx context.Context, ch <-chan event.Event) {
 	e.mu.Lock()
 	ticker := time.NewTicker(e.flushInterval)
 	e.mu.Unlock()
+
 	defer ticker.Stop()
 
 	var batch []event.Event
 
-	flush := func() {
-		if len(batch) == 0 {
-			return
-		}
-
-		agentID, ok := e.isRegistered()
-		if !ok {
-			return // keep buffering until registered
-		}
-
-		// Send in chunks to avoid hitting server body-size limits.
-		for len(batch) > 0 {
-			end := min(flushChunkSize, len(batch))
-			chunk := batch[:end]
-
-			payload := map[string]any{
-				"agent_id":   agentID,
-				"session_id": e.sessionID,
-				"events":     chunk,
-			}
-
-			if _, err := e.post("/api/v1/agent/ingest", payload); err != nil {
-				e.cfg.Logger.Warn("export ingest failed", "error", err, "batch_size", len(batch))
-				// Drop the failed chunk to prevent infinite accumulation.
-				batch = batch[end:]
-				return
-			}
-
-			batch = batch[end:]
-		}
-	}
-
-	// finalFlush waits up to 5s for registration then flushes remaining events.
-	finalFlush := func() {
-		// Drain any remaining events from the channel.
-		for {
-			select {
-			case ev, ok := <-ch:
-				if !ok {
-					break
-				}
-				if ev.Type != event.Metrics {
-					e.trackExecution(ev)
-					batch = append(batch, ev)
-				}
-				continue
-			default:
-			}
-
-			break
-		}
-
-		if len(batch) == 0 {
-			return
-		}
-
-		// Wait briefly for registration if not yet done.
-		if _, ok := e.isRegistered(); !ok {
-			deadline := time.After(5 * time.Second)
-			tick := time.NewTicker(50 * time.Millisecond)
-			defer tick.Stop()
-
-			for {
-				select {
-				case <-deadline:
-					e.cfg.Logger.Warn("export: shutdown timeout waiting for registration, events lost", "count", len(batch))
-					return
-				case <-tick.C:
-					if _, ok := e.isRegistered(); ok {
-						goto ready
-					}
-				}
-			}
-		}
-
-	ready:
-		flush()
-	}
-
 	for {
 		select {
 		case <-ctx.Done():
-			finalFlush()
+			e.finalFlush(ch, &batch) //nolint:contextcheck
 			return
 		case ev, ok := <-ch:
 			if !ok {
-				finalFlush()
+				e.finalFlush(ch, &batch) //nolint:contextcheck
 				return
 			}
+
 			if ev.Type == event.Metrics {
 				e.mu.Lock()
 				e.lastMetrics = ev.Data
 				e.mu.Unlock()
+
 				continue
 			}
+
 			e.trackExecution(ev)
 			batch = append(batch, ev)
 			// Cap buffer to prevent unbounded memory growth.
@@ -270,7 +307,7 @@ func (e *Exporter) batchLoop(ctx context.Context, ch <-chan event.Event) {
 				e.cfg.Logger.Warn("export buffer full, dropping oldest events", "dropped", drop)
 			}
 		case <-ticker.C:
-			flush()
+			e.flushBatch(ctx, &batch)
 		case <-e.intervalChange:
 			e.mu.Lock()
 			ticker.Reset(e.flushInterval)
@@ -283,6 +320,7 @@ func (e *Exporter) heartbeatLoop(ctx context.Context) {
 	e.mu.Lock()
 	ticker := time.NewTicker(e.heartbeatInterval)
 	e.mu.Unlock()
+
 	defer ticker.Stop()
 
 	for {
@@ -308,7 +346,7 @@ func (e *Exporter) heartbeatLoop(ctx context.Context) {
 				"metrics":           metrics,
 			}
 
-			resp, err := e.post("/api/v1/agent/heartbeat", payload)
+			resp, err := e.post(ctx, "/api/v1/agent/heartbeat", payload)
 			if err != nil {
 				e.cfg.Logger.Warn("export heartbeat failed", "error", err)
 				continue
@@ -329,6 +367,7 @@ func (e *Exporter) applyServerConfig(body []byte) bool {
 	}
 
 	var sc serverConfig
+
 	err := json.Unmarshal(body, &sc)
 	if err != nil {
 		return false
@@ -379,21 +418,25 @@ func (e *Exporter) trackExecution(ev event.Event) {
 		e.mu.Lock()
 		delete(e.activeExecutions, ev.ExecutionID)
 		e.mu.Unlock()
+	case event.StepStarted, event.StepCompleted, event.StepFailed, event.StepSkipped,
+		event.StepLog, event.StepWaiting, event.StepInput, event.StepOutput,
+		event.StepGoto, event.Metrics:
 	}
 }
 
-func (e *Exporter) post(path string, payload any) ([]byte, error) {
+func (e *Exporter) post(ctx context.Context, path string, payload any) ([]byte, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("marshal: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, e.cfg.ExportURL+path, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.cfg.ExportURL+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("new request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+
 	if e.cfg.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+e.cfg.APIKey)
 	}

@@ -16,7 +16,7 @@ func TestStringMatchAllAction(t *testing.T) {
 
 func (s *StringMatchAllActionTestSuite) SetupTest() {}
 
-func (s *StringMatchAllActionTestSuite) TestValidate() {
+func (s *StringMatchAllActionTestSuite) TestValidate_MissingFields() {
 	a := NewStringMatchAllAction()
 
 	s.Error(a.Validate(newTestContext(map[string]any{})))
@@ -53,6 +53,21 @@ func (s *StringMatchAllActionTestSuite) TestCaptureGroup() {
 	m := out.(map[string]any)
 	matches := m["matches"].([]any)
 	s.Equal([]any{"https://example.com/a", "https://example.com/b"}, matches)
+}
+
+func (s *StringMatchAllActionTestSuite) TestCaptureGroupDeduplicated() {
+	a := NewStringMatchAllAction()
+	ctx := newTestContext(map[string]any{
+		"input":   "[A](https://example.com/a) [B](https://example.com/a) [C](https://example.com/b)",
+		"pattern": `\[.*?\]\((https://example\.com/[^)]+)\)`,
+	})
+
+	out, err := a.Execute(ctx)
+	s.Require().NoError(err)
+
+	m := out.(map[string]any)
+	matches := m["matches"].([]any)
+	s.Equal([]any{"https://example.com/a", "https://example.com/b"}, matches) // deduplicated
 }
 
 func (s *StringMatchAllActionTestSuite) TestNoMatch() {

@@ -83,3 +83,39 @@ func (s *ValidateActionTestSuite) TestMissingData() {
 	result := out.(map[string]any)
 	s.False(result["valid"].(bool))
 }
+
+func (s *ValidateActionTestSuite) TestValidateOK() {
+	a := NewValidateAction()
+	err := a.Validate(newTestContext(map[string]any{
+		"rules": map[string]any{"email": "required"},
+	}))
+	s.NoError(err)
+}
+
+func (s *ValidateActionTestSuite) TestRulesNotMap() {
+	a := NewValidateAction()
+	ctx := newTestContext(map[string]any{
+		"rules": "not-a-map",
+	})
+
+	out, err := a.Execute(ctx)
+	s.Require().NoError(err)
+
+	result := out.(map[string]any)
+	s.False(result["valid"].(bool))
+	s.Empty(result["errors"])
+}
+
+func (s *ValidateActionTestSuite) TestDataNotMap() {
+	a := NewValidateAction()
+	ctx := newTestContext(map[string]any{
+		"rules": map[string]any{"email": "required"},
+		"data":  "not-a-map",
+	})
+
+	out, err := a.Execute(ctx)
+	s.Require().NoError(err)
+
+	result := out.(map[string]any)
+	s.False(result["valid"].(bool))
+}

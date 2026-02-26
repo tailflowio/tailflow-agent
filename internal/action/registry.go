@@ -21,6 +21,7 @@ func NewRegistry() *Registry {
 func (r *Registry) Register(name string, factory ActionFactory) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	r.factories[name] = factory
 }
 
@@ -60,6 +61,7 @@ func (r *Registry) Create(name string) (Action, error) {
 func (r *Registry) Has(name string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
 	_, ok := r.factories[name]
 
 	return ok

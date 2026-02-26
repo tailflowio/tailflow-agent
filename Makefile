@@ -13,14 +13,21 @@ build: frontend ## Build the binary with embedded UI
 build-quick: ## Build without frontend (faster)
 	go build $(GOFLAGS) -o bin/$(BINARY) ./cmd/tailflow/
 
-test: ## Run all Go tests
-	go test ./... -v
+GO := go
+COVER_OUT := coverage.out
+PKGS_WITH_TESTS := $(shell $(GO) list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' ./...)
 
-test-coverage: ## Run tests with coverage
-	go test ./... -coverprofile=coverage.out
-	go tool cover -func=coverage.out
-	@echo ""
-	@echo "Total coverage: $$(go tool cover -func=coverage.out | grep total | awk '{print $$3}')"
+test: ## Run all Go tests
+	$(GO) test ./... -v
+
+test-coverage: ## Run tests with coverage (100% required, mocks excluded)
+	@$(GO) test $(PKGS_WITH_TESTS) -coverprofile=$(COVER_OUT) -covermode=count > /dev/null
+	@coverage=$$($(GO) tool cover -func=$(COVER_OUT) | grep total | awk '{print $$3}' | sed 's/%//'); \
+	echo "coverage: $$coverage% of statements"; \
+	if [ "$$coverage" != "100.0" ]; then \
+		echo "Error: global coverage is $$coverage%, it should be 100.0%."; \
+		exit 1; \
+	fi
 
 frontend: ## Build the VueJS frontend
 	cd web/frontend && npm install && npx vite build

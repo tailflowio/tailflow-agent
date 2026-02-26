@@ -18,7 +18,7 @@ func TestExpression(t *testing.T) {
 
 func (s *ExpressionTestSuite) SetupTest() {}
 
-func (s *ExpressionTestSuite) TestEval() {
+func (s *ExpressionTestSuite) TestEval_BasicExpressions() {
 	eval := NewExprEvaluator()
 	ctx := map[string]any{
 		"params": map[string]any{"env": "staging"},

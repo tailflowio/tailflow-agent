@@ -9,7 +9,12 @@ import (
 	"github.com/dop251/goja"
 )
 
-// JSAction executes inline JavaScript via goja.
+// gojaVMSet wraps vm.Set for testing.
+var gojaVMSet = func(vm *goja.Runtime, name string, value any) error { return vm.Set(name, value) }
+
+// gojaObjSet wraps goja.Object.Set for testing.
+var gojaObjSet = func(obj *goja.Object, name string, value any) error { return obj.Set(name, value) }
+
 type JSAction struct{}
 
 func NewJSAction() Action { return &JSAction{} }
@@ -30,7 +35,7 @@ func (a *JSAction) Execute(ctx *ActionContext) (any, error) {
 	// Expose context to JS
 	ctxMap := ctx.ExecCtx.ToMap()
 	for k, v := range ctxMap {
-		err := vm.Set(k, v)
+		err := gojaVMSet(vm, k, v)
 		if err != nil {
 			return nil, fmt.Errorf("js: set %q: %w", k, err)
 		}
@@ -38,7 +43,8 @@ func (a *JSAction) Execute(ctx *ActionContext) (any, error) {
 
 	// Expose ctx.get and ctx.set helpers
 	ctxObj := vm.NewObject()
-	_ = ctxObj.Set("get", func(call goja.FunctionCall) goja.Value {
+
+	err := gojaObjSet(ctxObj, "get", func(call goja.FunctionCall) goja.Value {
 		key := call.Argument(0).String()
 
 		v, ok := ctx.ExecCtx.GetVariable(key)
@@ -48,14 +54,25 @@ func (a *JSAction) Execute(ctx *ActionContext) (any, error) {
 
 		return vm.ToValue(v)
 	})
-	_ = ctxObj.Set("set", func(call goja.FunctionCall) goja.Value {
+	if err != nil {
+		return nil, fmt.Errorf("js: set ctx.get: %w", err)
+	}
+
+	err = gojaObjSet(ctxObj, "set", func(call goja.FunctionCall) goja.Value {
 		key := call.Argument(0).String()
 		val := call.Argument(1).Export()
 		ctx.ExecCtx.SetVariable(key, val)
 
 		return goja.Undefined()
 	})
-	_ = vm.Set("ctx", ctxObj)
+	if err != nil {
+		return nil, fmt.Errorf("js: set ctx.set: %w", err)
+	}
+
+	err = gojaVMSet(vm, "ctx", ctxObj)
+	if err != nil {
+		return nil, fmt.Errorf("js: set ctx: %w", err)
+	}
 
 	// Wrap in a function to support return statements
 	wrapped := fmt.Sprintf("(function() { %s })()", script)

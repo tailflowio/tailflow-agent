@@ -12,8 +12,9 @@ import (
 type RabbitMQConsumer struct {
 	config *parser.RabbitMQTrigger
 	logger *slog.Logger
-	conn   *amqp.Connection
-	ch     *amqp.Channel
+	dial   amqpDialer
+	conn   amqpConn
+	ch     amqpChan
 }
 
 func NewRabbitMQConsumer(config *parser.RabbitMQTrigger, logger *slog.Logger) *RabbitMQConsumer {
@@ -24,17 +25,37 @@ func NewRabbitMQConsumer(config *parser.RabbitMQTrigger, logger *slog.Logger) *R
 }
 
 func (c *RabbitMQConsumer) Start(ctx context.Context, onMessage func(triggerData map[string]any, ackFn func(bool))) error {
-	conn, err := amqp.Dial(c.config.URL)
+	msgs, err := c.openChannel()
 	if err != nil {
-		return fmt.Errorf("rabbitmq dial: %w", err)
+		return err
 	}
+
+	c.logger.Info("rabbitmq consumer started", "queue", c.config.Queue, "ack_on_success", c.config.AckOnSuccess)
+
+	go c.consumeLoop(ctx, msgs, onMessage)
+
+	return nil
+}
+
+func (c *RabbitMQConsumer) openChannel() (<-chan amqp.Delivery, error) {
+	dial := c.dial
+	if dial == nil {
+		dial = realAMQPDial
+	}
+
+	conn, err := dial(c.config.URL)
+	if err != nil {
+		return nil, fmt.Errorf("rabbitmq dial: %w", err)
+	}
+
 	c.conn = conn
 
 	ch, err := conn.Channel()
 	if err != nil {
 		conn.Close()
-		return fmt.Errorf("rabbitmq channel: %w", err)
+		return nil, fmt.Errorf("rabbitmq channel: %w", err)
 	}
+
 	c.ch = ch
 
 	if c.config.Prefetch > 0 {
@@ -42,43 +63,36 @@ func (c *RabbitMQConsumer) Start(ctx context.Context, onMessage func(triggerData
 		if err != nil {
 			ch.Close()
 			conn.Close()
-			return fmt.Errorf("rabbitmq qos: %w", err)
+
+			return nil, fmt.Errorf("rabbitmq qos: %w", err)
 		}
 	}
 
-	msgs, err := ch.Consume(
-		c.config.Queue,
-		"",    // consumer tag (auto-generated)
-		false, // auto-ack: always false, we handle ack manually
-		false, // exclusive
-		false, // no-local
-		false, // no-wait
-		nil,   // args
-	)
+	msgs, err := ch.Consume(c.config.Queue, "", false, false, false, false, nil)
 	if err != nil {
 		ch.Close()
 		conn.Close()
-		return fmt.Errorf("rabbitmq consume: %w", err)
+
+		return nil, fmt.Errorf("rabbitmq consume: %w", err)
 	}
 
-	c.logger.Info("rabbitmq consumer started", "queue", c.config.Queue, "ack_on_success", c.config.AckOnSuccess)
+	return msgs, nil
+}
 
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
+func (c *RabbitMQConsumer) consumeLoop(ctx context.Context, msgs <-chan amqp.Delivery, onMessage func(map[string]any, func(bool))) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg, ok := <-msgs:
+			if !ok {
+				c.logger.Info("rabbitmq delivery channel closed")
 				return
-			case msg, ok := <-msgs:
-				if !ok {
-					c.logger.Info("rabbitmq delivery channel closed")
-					return
-				}
-				c.handleMessage(msg, onMessage)
 			}
-		}
-	}()
 
-	return nil
+			c.handleMessage(msg, onMessage)
+		}
+	}
 }
 
 func (c *RabbitMQConsumer) handleMessage(msg amqp.Delivery, onMessage func(map[string]any, func(bool))) {
@@ -87,12 +101,11 @@ func (c *RabbitMQConsumer) handleMessage(msg amqp.Delivery, onMessage func(map[s
 		"content_type": msg.ContentType,
 		"routing_key":  msg.RoutingKey,
 		"message_id":   msg.MessageId,
-		"headers":      amqp.Table(msg.Headers),
+		"headers":      msg.Headers,
 		"queue":        c.config.Queue,
 	}
 
 	if c.config.AckOnSuccess {
-		// Defer ack/nack to after workflow completion.
 		ackFn := func(success bool) {
 			if success {
 				err := msg.Ack(false)
@@ -107,22 +120,26 @@ func (c *RabbitMQConsumer) handleMessage(msg amqp.Delivery, onMessage func(map[s
 			}
 		}
 		onMessage(triggerData, ackFn)
-	} else {
-		// Ack immediately, then dispatch.
-		err := msg.Ack(false)
-		if err != nil {
-			c.logger.Error("rabbitmq ack failed", "error", err)
-		}
-		onMessage(triggerData, nil)
+
+		return
 	}
+
+	err := msg.Ack(false)
+	if err != nil {
+		c.logger.Error("rabbitmq ack failed", "error", err)
+	}
+
+	onMessage(triggerData, nil)
 }
 
 func (c *RabbitMQConsumer) Stop() {
 	if c.ch != nil {
 		c.ch.Close()
 	}
+
 	if c.conn != nil {
 		c.conn.Close()
 	}
+
 	c.logger.Info("rabbitmq consumer stopped")
 }

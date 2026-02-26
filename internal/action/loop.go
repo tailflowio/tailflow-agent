@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// LoopAction iterates over a list.
 type LoopAction struct{}
 
 func NewLoopAction() Action { return &LoopAction{} }
@@ -26,22 +25,8 @@ func (a *LoopAction) Execute(ctx *ActionContext) (any, error) {
 		return nil, errors.New("loop action: 'items' must be an array")
 	}
 
-	varName := "item"
-	if as, ok := ctx.Config["as"]; ok {
-		varName = fmt.Sprintf("%v", as)
-	}
+	lp := parseLoopParams(ctx)
 
-	indexName := "index"
-	if idx, ok := ctx.Config["index"]; ok {
-		indexName = fmt.Sprintf("%v", idx)
-	}
-
-	concurrency := 1
-	if c, ok := toInt(ctx.Config["concurrency"]); ok && c > 0 {
-		concurrency = c
-	}
-
-	// Check for pipeline actions array first
 	if rawActions, ok := ctx.Config["actions"]; ok {
 		pipeline, err := parsePipelineActions(rawActions)
 		if err != nil {
@@ -52,24 +37,59 @@ func (a *LoopAction) Execute(ctx *ActionContext) (any, error) {
 			return nil, errors.New("loop action: RunAction callback not available")
 		}
 
-		return a.executePipeline(ctx, items, varName, indexName, concurrency, pipeline)
+		return a.executePipeline(ctx, items, lp, pipeline)
 	}
 
-	// Fallback: single action
 	actionName, _ := ctx.Config["action"].(string)
 	if actionName == "" {
-		return a.executeLegacy(ctx, items, varName, indexName)
+		return a.executeLegacy(ctx, items, lp.varName, lp.indexName)
 	}
-
-	// action_config is kept raw (unresolved) by the engine so that {{ loop.* }}
-	// templates survive until RunAction resolves them per iteration.
-	actionConfig, _ := ctx.Config["action_config"].(map[string]any)
 
 	if ctx.RunAction == nil {
 		return nil, errors.New("loop action: RunAction callback not available")
 	}
 
-	sem := make(chan struct{}, concurrency)
+	actionConfig, _ := ctx.Config["action_config"].(map[string]any)
+
+	return a.executeSingleAction(ctx, items, lp, actionName, actionConfig)
+}
+
+type loopParams struct {
+	varName     string
+	indexName   string
+	concurrency int
+}
+
+func parseLoopParams(ctx *ActionContext) loopParams {
+	lp := loopParams{
+		varName:     "item",
+		indexName:   "index",
+		concurrency: 1,
+	}
+
+	if as, ok := ctx.Config["as"]; ok {
+		lp.varName = fmt.Sprintf("%v", as)
+	}
+
+	if idx, ok := ctx.Config["index"]; ok {
+		lp.indexName = fmt.Sprintf("%v", idx)
+	}
+
+	if c, ok := toInt(ctx.Config["concurrency"]); ok && c > 0 {
+		lp.concurrency = c
+	}
+
+	return lp
+}
+
+func (a *LoopAction) executeSingleAction(
+	ctx *ActionContext,
+	items []any,
+	lp loopParams,
+	actionName string,
+	actionConfig map[string]any,
+) (any, error) {
+	sem := make(chan struct{}, lp.concurrency)
 	results := make([]any, len(items))
 	errs := make([]error, len(items))
 	var wg sync.WaitGroup
@@ -84,8 +104,8 @@ func (a *LoopAction) Execute(ctx *ActionContext) (any, error) {
 			defer func() { <-sem }()
 
 			loopVars := map[string]any{
-				varName:   it,
-				indexName: idx,
+				lp.varName:   it,
+				lp.indexName: idx,
 			}
 
 			if ctx.EmitLog != nil {
@@ -100,49 +120,16 @@ func (a *LoopAction) Execute(ctx *ActionContext) (any, error) {
 
 	wg.Wait()
 
-	errorPolicy, _ := ctx.Config["error_policy"].(string)
+	setLastIterationVars(ctx, items, lp.varName, lp.indexName)
 
-	var loopErrors []map[string]any
-	for i, err := range errs {
-		if err != nil {
-			loopErrors = append(loopErrors, map[string]any{
-				"index":   i,
-				"item":    items[i],
-				"message": err.Error(),
-			})
-		}
-	}
-
-	if len(loopErrors) > 0 && errorPolicy != "continue" {
-		return nil, fmt.Errorf("loop iteration failed: %w", errs[firstErrIdx(errs)])
-	}
-
-	// Set last item vars for backward compat
-	if len(items) > 0 {
-		ctx.ExecCtx.SetVariable(varName, items[len(items)-1])
-		ctx.ExecCtx.SetVariable(indexName, len(items)-1)
-	}
-
-	output := map[string]any{
-		"iterations": len(items),
-		"items":      items,
-		"results":    results,
-	}
-	if len(loopErrors) > 0 {
-		output["errors"] = loopErrors
-		output["failed"] = len(loopErrors)
-		output["succeeded"] = len(items) - len(loopErrors)
-	}
-	return output, nil
+	return buildLoopOutput(ctx, items, results, errs)
 }
 
-// pipelineStep represents a single action in a pipeline.
 type pipelineStep struct {
 	Action string
 	Config map[string]any
 }
 
-// parsePipelineActions validates and parses the "actions" config value.
 func parsePipelineActions(raw any) ([]pipelineStep, error) {
 	arr, ok := raw.([]any)
 	if !ok {
@@ -177,26 +164,24 @@ func parsePipelineActions(raw any) ([]pipelineStep, error) {
 	return steps, nil
 }
 
-// executePipeline runs a pipeline of actions for each iteration with concurrency control.
+type actionResult struct {
+	Action     string `json:"action"`
+	Output     any    `json:"output"`
+	Error      string `json:"error,omitempty"`
+	DurationMs int64  `json:"duration_ms"`
+}
+
+type iterationResult struct {
+	Actions []actionResult `json:"actions"`
+}
+
 func (a *LoopAction) executePipeline(
 	ctx *ActionContext,
 	items []any,
-	varName, indexName string,
-	concurrency int,
+	lp loopParams,
 	pipeline []pipelineStep,
 ) (any, error) {
-	type actionResult struct {
-		Action     string `json:"action"`
-		Output     any    `json:"output"`
-		Error      string `json:"error,omitempty"`
-		DurationMs int64  `json:"duration_ms"`
-	}
-
-	type iterationResult struct {
-		Actions []actionResult `json:"actions"`
-	}
-
-	sem := make(chan struct{}, concurrency)
+	sem := make(chan struct{}, lp.concurrency)
 	results := make([]iterationResult, len(items))
 	errs := make([]error, len(items))
 	var wg sync.WaitGroup
@@ -211,60 +196,98 @@ func (a *LoopAction) executePipeline(
 			defer func() { <-sem }()
 
 			loopVars := map[string]any{
-				varName:   it,
-				indexName: idx,
+				lp.varName:   it,
+				lp.indexName: idx,
 			}
 
-			var actionResults []actionResult
-
-			for si, ps := range pipeline {
-				if ctx.EmitLog != nil {
-					ctx.EmitLog(fmt.Sprintf("[%d/%d] step %d/%d %s", idx+1, len(items), si+1, len(pipeline), ps.Action))
-				}
-
-				start := time.Now()
-				output, err := ctx.RunAction(ps.Action, deepCopyMap(ps.Config), loopVars)
-				durationMs := time.Since(start).Milliseconds()
-
-				if err != nil {
-					if ctx.EmitLog != nil {
-						ctx.EmitLog(fmt.Sprintf("[%d/%d] step %d/%d %s FAILED (%dms): %s", idx+1, len(items), si+1, len(pipeline), ps.Action, durationMs, err.Error()))
-					}
-
-					errs[idx] = fmt.Errorf("action %q (step %d/%d): %w", ps.Action, si+1, len(pipeline), err)
-
-					actionResults = append(actionResults, actionResult{
-						Action:     ps.Action,
-						Output:     output,
-						Error:      err.Error(),
-						DurationMs: durationMs,
-					})
-
-					break
-				}
-
-				if ctx.EmitLog != nil {
-					ctx.EmitLog(fmt.Sprintf("[%d/%d] step %d/%d %s OK (%dms)", idx+1, len(items), si+1, len(pipeline), ps.Action, durationMs))
-				}
-
-				loopVars["prev"] = output
-
-				actionResults = append(actionResults, actionResult{
-					Action:     ps.Action,
-					Output:     output,
-					DurationMs: durationMs,
-				})
-			}
-
+			actionResults, err := runPipelineSteps(ctx, pipeline, loopVars, idx, len(items))
 			results[idx] = iterationResult{Actions: actionResults}
+			errs[idx] = err
 		}(i, item)
 	}
 
 	wg.Wait()
 
+	setLastIterationVars(ctx, items, lp.varName, lp.indexName)
+
+	return buildLoopOutput(ctx, items, results, errs)
+}
+
+func runPipelineSteps(
+	ctx *ActionContext,
+	pipeline []pipelineStep,
+	loopVars map[string]any,
+	idx, total int,
+) ([]actionResult, error) {
+	var results []actionResult
+
+	for si, ps := range pipeline {
+		if ctx.EmitLog != nil {
+			ctx.EmitLog(fmt.Sprintf("[%d/%d] step %d/%d %s", idx+1, total, si+1, len(pipeline), ps.Action))
+		}
+
+		start := time.Now()
+		output, err := ctx.RunAction(ps.Action, deepCopyMap(ps.Config), loopVars)
+		durationMs := time.Since(start).Milliseconds()
+
+		if err != nil {
+			return appendFailedStep(ctx, results, ps, output, durationMs, err, idx, total, si, len(pipeline))
+		}
+
+		if ctx.EmitLog != nil {
+			ctx.EmitLog(fmt.Sprintf("[%d/%d] step %d/%d %s OK (%dms)", idx+1, total, si+1, len(pipeline), ps.Action, durationMs))
+		}
+
+		loopVars["prev"] = output
+
+		results = append(results, actionResult{
+			Action:     ps.Action,
+			Output:     output,
+			DurationMs: durationMs,
+		})
+	}
+
+	return results, nil
+}
+
+func appendFailedStep(
+	ctx *ActionContext,
+	results []actionResult,
+	ps pipelineStep,
+	output any,
+	durationMs int64,
+	err error,
+	idx, total, si, pipelineLen int,
+) ([]actionResult, error) {
+	if ctx.EmitLog != nil {
+		ctx.EmitLog(fmt.Sprintf("[%d/%d] step %d/%d %s FAILED (%dms): %s",
+			idx+1, total, si+1, pipelineLen, ps.Action, durationMs, err.Error()))
+	}
+
+	results = append(results, actionResult{
+		Action:     ps.Action,
+		Output:     output,
+		Error:      err.Error(),
+		DurationMs: durationMs,
+	})
+
+	return results, fmt.Errorf("action %q (step %d/%d): %w", ps.Action, si+1, pipelineLen, err)
+}
+
+func setLastIterationVars(ctx *ActionContext, items []any, varName, indexName string) {
+	if len(items) == 0 {
+		return
+	}
+
+	ctx.ExecCtx.SetVariable(varName, items[len(items)-1])
+	ctx.ExecCtx.SetVariable(indexName, len(items)-1)
+}
+
+func buildLoopOutput[T any](ctx *ActionContext, items []any, results []T, errs []error) (any, error) {
 	errorPolicy, _ := ctx.Config["error_policy"].(string)
 
 	var loopErrors []map[string]any
+
 	for i, err := range errs {
 		if err != nil {
 			loopErrors = append(loopErrors, map[string]any{
@@ -279,12 +302,6 @@ func (a *LoopAction) executePipeline(
 		return nil, fmt.Errorf("loop iteration failed: %w", errs[firstErrIdx(errs)])
 	}
 
-	// Set last item vars for backward compat
-	if len(items) > 0 {
-		ctx.ExecCtx.SetVariable(varName, items[len(items)-1])
-		ctx.ExecCtx.SetVariable(indexName, len(items)-1)
-	}
-
 	output := map[string]any{
 		"iterations": len(items),
 		"items":      items,
@@ -295,10 +312,10 @@ func (a *LoopAction) executePipeline(
 		output["failed"] = len(loopErrors)
 		output["succeeded"] = len(items) - len(loopErrors)
 	}
+
 	return output, nil
 }
 
-// executeLegacy preserves the original loop behaviour: set variables for each item.
 func (a *LoopAction) executeLegacy(ctx *ActionContext, items []any, varName, indexName string) (any, error) {
 	results := make([]any, 0, len(items))
 
@@ -315,17 +332,16 @@ func (a *LoopAction) executeLegacy(ctx *ActionContext, items []any, varName, ind
 	}, nil
 }
 
-// firstErrIdx returns the index of the first non-nil error.
 func firstErrIdx(errs []error) int {
 	for i, e := range errs {
 		if e != nil {
 			return i
 		}
 	}
+
 	return 0
 }
 
-// toInt converts a config value to int.
 func toInt(v any) (int, bool) {
 	switch n := v.(type) {
 	case int:
@@ -339,7 +355,6 @@ func toInt(v any) (int, bool) {
 	}
 }
 
-// deepCopyMap creates a shallow copy of a map so template resolution doesn't mutate the original.
 func deepCopyMap(m map[string]any) map[string]any {
 	if m == nil {
 		return nil

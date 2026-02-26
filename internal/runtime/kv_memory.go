@@ -67,6 +67,7 @@ func (s *MemoryKVStore) Delete(_ context.Context, key string) (bool, error) {
 	}
 
 	delete(s.store, key)
+
 	return true, nil
 }
 

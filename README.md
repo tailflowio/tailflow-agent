@@ -9,6 +9,14 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/tailflowio/tailflow-agent/releases"><img src="https://img.shields.io/github/v/release/tailflowio/tailflow-agent?style=flat-square&color=00ADD8" alt="Release"></a>
+  <a href="https://pkg.go.dev/github.com/tailflow/tailflow"><img src="https://img.shields.io/badge/Go-1.26-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go 1.26"></a>
+  <a href="https://github.com/tailflowio/tailflow-agent/blob/develop/LICENSE"><img src="https://img.shields.io/github/license/tailflowio/tailflow-agent?style=flat-square&color=blue" alt="License"></a>
+  <a href="https://github.com/tailflowio/tailflow-agent"><img src="https://img.shields.io/badge/coverage-100%25-brightgreen?style=flat-square" alt="Coverage"></a>
+  <a href="https://github.com/tailflowio/tailflow-agent"><img src="https://img.shields.io/github/stars/tailflowio/tailflow-agent?style=flat-square&color=yellow" alt="Stars"></a>
+</p>
+
+<p align="center">
   <a href="#quick-start">Quick Start</a> &bull;
   <a href="#use-cases">Use Cases</a> &bull;
   <a href="#actions">Actions</a> &bull;
@@ -469,16 +477,17 @@ tailflow serve --selfhosted \
 
 ### How it works
 
-1. **Registration** - Agent sends workflow metadata to `/register`. The SaaS responds with an `agent_id` and optional config overrides.
-2. **Event ingestion** - Workflow events (step started/completed/failed, logs) are batched and flushed to `/ingest` every 1s.
-3. **Heartbeat** - Agent sends uptime, active execution count, and system metrics (CPU, memory, goroutines) to `/heartbeat` every 10s.
+1. **Registration** - Agent sends workflow metadata to `/api/v1/agent/register`. The SaaS responds with an `agent_id` and optional config overrides.
+2. **Event ingestion** - Workflow events (step started/completed/failed, logs) are batched and flushed to `/api/v1/agent/ingest` every 1s.
+3. **Heartbeat** - Agent sends uptime, active execution count, and system metrics (CPU, memory, goroutines, network) to `/api/v1/agent/heartbeat` every 10s.
 
 ### Protocol
 
-**`POST /register`** (agent -> SaaS)
+**`POST /api/v1/agent/register`** (agent -> SaaS)
 ```json
 {
   "session_id": "uuid",
+  "agent_name": "my-agent",
   "workflow_name": "ping",
   "workflow_description": "Ping a host",
   "workflow_tags": ["example", "network"],
@@ -498,16 +507,25 @@ tailflow serve --selfhosted \
 }
 ```
 
-**`POST /ingest`** (every flush interval)
+**`POST /api/v1/agent/ingest`** (every flush interval)
 ```json
 {
   "agent_id": "uuid",
   "session_id": "uuid",
-  "events": [{"type": "step.started", "timestamp": "...", "step_id": "ping", ...}]
+  "events": [
+    {
+      "type": "step.started",
+      "timestamp": "2025-01-15T10:30:00Z",
+      "execution_id": "exec-uuid",
+      "step_id": "ping",
+      "data": {},
+      "message": ""
+    }
+  ]
 }
 ```
 
-**`POST /heartbeat`** (every heartbeat interval)
+**`POST /api/v1/agent/heartbeat`** (every heartbeat interval)
 ```json
 {
   "agent_id": "uuid",
@@ -518,7 +536,11 @@ tailflow serve --selfhosted \
     "cpu_percent": 12.5,
     "rss_kb": 45000,
     "goroutines": 8,
-    "heap_mb": 3.2
+    "heap_mb": 3.2,
+    "net_rx_bytes": 123456,
+    "net_tx_bytes": 78900,
+    "uptime_s": 3600,
+    "available": true
   }
 }
 ```
@@ -532,18 +554,11 @@ tailflow serve --selfhosted \
 ### Test locally
 
 ```bash
-# Terminal 1: start the debug export server
-go run ./examples/debug-export-server/
-
-# Terminal 2: start agent with export
-tailflow serve --selfhosted --exporter-url http://localhost:9090 --exporter-key test examples/ping.yaml
-```
-
-Or with Docker:
-
-```bash
-cd personal_examples
-docker compose -f docker-compose.export.yaml up --build
+tailflow serve --selfhosted \
+  --exporter-url http://localhost:9090 \
+  --exporter-key test \
+  --exporter-name my-agent \
+  examples/ping.yaml
 ```
 
 ---
@@ -725,6 +740,34 @@ steps:                            # Workflow steps (DAG)
       when: "expression"
       max_iterations: 10
 ```
+
+### Sensitive Fields
+
+Declare sensitive key names at the workflow top-level to automatically mask their values in all external outputs (SSE events, SaaS exporter, REST API). Internal step-to-step resolution keeps the real values.
+
+```yaml
+version: "2.0"
+name: "payment"
+
+sensitive:
+  - token
+  - refresh_token
+  - card_number
+  - api_key
+  - password
+
+params:
+  - name: api_key
+    type: string
+
+steps:
+  - id: auth
+    action: http
+    config:
+      url: "https://api.example.com/auth"
+```
+
+Any key matching a name in the `sensitive` list is replaced with `[SENSITIVE]` **recursively** — at any depth, in params, step outputs, and configs — across all external channels. Steps still receive the real values via template resolution (`{{ steps.auth.output.token }}`).
 
 ### Template expressions
 

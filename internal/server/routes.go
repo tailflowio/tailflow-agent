@@ -8,8 +8,15 @@ import (
 	"github.com/tailflow/tailflow/web"
 )
 
+// distSubFS returns the embedded UI filesystem. Override in tests.
+var distSubFS = func() (fs.FS, error) { return fs.Sub(web.DistFS, "dist") }
+
 func (s *Server) setupRoutes() {
-	// API - Workflow (single workflow)
+	s.setupAPIRoutes()
+	s.setupUIRoutes()
+}
+
+func (s *Server) setupAPIRoutes() {
 	s.mux.HandleFunc("GET /api/workflow", s.handleGetWorkflow)
 	s.mux.HandleFunc("GET /api/workflow/graph", s.handleGetWorkflowGraph)
 	s.mux.HandleFunc("GET /api/workflow/activity", s.handleGetWorkflowActivity)
@@ -17,26 +24,21 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("POST /api/workflow/run", s.handleRunWorkflow)
 	s.mux.HandleFunc("GET /api/workflow/steps/{id}", s.handleGetStepDetail)
 
-	// API - Metrics
 	s.mux.HandleFunc("GET /api/metrics", s.handleGetMetrics)
 
-	// API - Executions
 	s.mux.HandleFunc("GET /api/executions", s.handleListExecutions)
 	s.mux.HandleFunc("GET /api/executions/{id}", s.handleGetExecution)
 	s.mux.HandleFunc("POST /api/executions/{id}/cancel", s.handleCancelExecution)
 	s.mux.HandleFunc("GET /api/executions/{id}/events", s.handleSSE)
 	s.mux.HandleFunc("GET /api/events", s.handleGlobalSSE)
 
-	// API - Public (triggers)
 	s.mux.HandleFunc("/api/public/", s.handlePublicTrigger)
-
-	// API - Wait webhook
 	s.mux.HandleFunc("/api/wait/", s.handleWaitWebhook)
+}
 
-	// Embedded UI (SPA)
-	distFS, err := fs.Sub(web.DistFS, "dist")
+func (s *Server) setupUIRoutes() {
+	distFS, err := distSubFS()
 	if err != nil {
-		// Fallback to simple HTML
 		s.mux.HandleFunc("/", s.handleFallbackUI)
 		return
 	}
@@ -44,22 +46,18 @@ func (s *Server) setupRoutes() {
 	fileServer := http.FileServer(http.FS(distFS))
 
 	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// API routes are already handled above
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			http.NotFound(w, r)
 			return
 		}
 
-		// Try to serve static file
 		path := r.URL.Path
 		if path == "/" {
 			path = "/index.html"
 		}
 
-		// Check if file exists in dist
 		f, err := distFS.Open(strings.TrimPrefix(path, "/"))
 		if err != nil {
-			// SPA fallback: serve index.html for all non-file routes
 			r.URL.Path = "/"
 			fileServer.ServeHTTP(w, r)
 
@@ -67,7 +65,6 @@ func (s *Server) setupRoutes() {
 		}
 
 		f.Close()
-
 		fileServer.ServeHTTP(w, r)
 	})
 }

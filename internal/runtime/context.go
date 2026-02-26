@@ -58,12 +58,14 @@ func NewExecutionContext(executionID, workflowName string, params map[string]any
 func (c *ExecutionContext) SetStepResult(stepID string, result *StepResult) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	c.Steps[stepID] = result
 }
 
 func (c *ExecutionContext) GetStepResult(stepID string) (*StepResult, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+
 	r, ok := c.Steps[stepID]
 
 	return r, ok
@@ -72,18 +74,21 @@ func (c *ExecutionContext) GetStepResult(stepID string) (*StepResult, bool) {
 func (c *ExecutionContext) ClearStepResult(stepID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	delete(c.Steps, stepID)
 }
 
 func (c *ExecutionContext) SetVariable(key string, value any) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	c.Variables[key] = value
 }
 
 func (c *ExecutionContext) GetVariable(key string) (any, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+
 	v, ok := c.Variables[key]
 
 	return v, ok
@@ -94,11 +99,13 @@ func (c *ExecutionContext) ToMap() map[string]any {
 	defer c.mu.RUnlock()
 
 	stepsMap := make(map[string]any, len(c.Steps))
+
 	for id, r := range c.Steps {
 		stepMap := map[string]any{
 			"status": r.Status,
 			"output": r.Output,
 		}
+
 		if r.Error != nil {
 			stepMap["error"] = map[string]any{
 				"message": r.Error.Message,
@@ -106,6 +113,7 @@ func (c *ExecutionContext) ToMap() map[string]any {
 				"step_id": r.Error.StepID,
 			}
 		}
+
 		stepsMap[id] = stepMap
 	}
 

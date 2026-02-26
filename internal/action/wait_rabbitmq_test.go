@@ -207,3 +207,73 @@ func (s *WaitRabbitMQActionTestSuite) TestExecuteContextCancelled() {
 	_, err := act.Execute(actCtx)
 	s.Error(err)
 }
+
+func (s *WaitRabbitMQActionTestSuite) TestExecuteInvalidTimeout() {
+	act := NewWaitRabbitMQAction()
+
+	services := &runtime.ActionServices{
+		WaitRabbitMQRegister: func(url, queue, matchField, matchValue string, ctx context.Context) (<-chan map[string]any, func()) {
+			return make(chan map[string]any), func() {}
+		},
+	}
+
+	execCtx := runtime.NewExecutionContext("exec-1", "test-wf", nil, nil)
+	execCtx.Services = services
+
+	actCtx := &ActionContext{
+		Context:  context.Background(),
+		Config:   map[string]any{"url": "amqp://localhost", "queue": "q", "timeout": "not-a-duration"},
+		ExecCtx:  execCtx,
+		StepID:   "wait-rmq",
+		Logger:   slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+		Services: services,
+	}
+
+	_, err := act.Execute(actCtx)
+	s.Error(err)
+	s.Contains(err.Error(), "invalid timeout")
+}
+
+func (s *WaitRabbitMQActionTestSuite) TestExecuteWithMatchFieldsAndEmitWaiting() {
+	act := NewWaitRabbitMQAction()
+
+	ch := make(chan map[string]any, 1)
+	var waitingCalled bool
+	var waitingDetails map[string]any
+
+	services := &runtime.ActionServices{
+		WaitRabbitMQRegister: func(url, queue, matchField, matchValue string, ctx context.Context) (<-chan map[string]any, func()) {
+			return ch, func() {}
+		},
+		EmitWaiting: func(execID, stepID, waitType string, details map[string]any) {
+			waitingCalled = true
+			waitingDetails = details
+		},
+	}
+
+	execCtx := runtime.NewExecutionContext("exec-1", "test-wf", nil, nil)
+	execCtx.Services = services
+
+	actCtx := &ActionContext{
+		Context: context.Background(),
+		Config: map[string]any{
+			"url":         "amqp://localhost",
+			"queue":       "q",
+			"timeout":     "2s",
+			"match":       "order_id",
+			"match_value": "123",
+		},
+		ExecCtx:  execCtx,
+		StepID:   "wait-rmq",
+		Logger:   slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+		Services: services,
+	}
+
+	ch <- map[string]any{"body": "test"}
+
+	_, err := act.Execute(actCtx)
+	s.NoError(err)
+	s.True(waitingCalled)
+	s.Equal("order_id", waitingDetails["match"])
+	s.Equal("123", waitingDetails["match_value"])
+}

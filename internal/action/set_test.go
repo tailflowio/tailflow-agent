@@ -29,7 +29,7 @@ func TestSetAction(t *testing.T) {
 
 func (s *SetActionTestSuite) SetupTest() {}
 
-func (s *SetActionTestSuite) TestExecute() {
+func (s *SetActionTestSuite) TestExecute_SetsVariables() {
 	a := NewSetAction()
 	ctx := newTestContext(map[string]any{
 		"name":  "Alice",
@@ -53,4 +53,10 @@ func (s *SetActionTestSuite) TestValidateEmpty() {
 	a := NewSetAction()
 	err := a.Validate(newTestContext(nil))
 	s.Error(err)
+}
+
+func (s *SetActionTestSuite) TestValidateOK() {
+	a := NewSetAction()
+	err := a.Validate(newTestContext(map[string]any{"key": "value"}))
+	s.NoError(err)
 }

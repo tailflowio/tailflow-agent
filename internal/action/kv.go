@@ -6,7 +6,6 @@ import (
 	"time"
 )
 
-// KVGetAction retrieves a value from the KV store.
 type KVGetAction struct{}
 
 func NewKVGetAction() Action { return &KVGetAction{} }
@@ -35,7 +34,6 @@ func (a *KVGetAction) Execute(ctx *ActionContext) (any, error) {
 	}, nil
 }
 
-// KVSetAction stores a value in the KV store.
 type KVSetAction struct{}
 
 func NewKVSetAction() Action { return &KVSetAction{} }

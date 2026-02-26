@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -114,49 +115,7 @@ func (r *cliRenderer) buildTree(wf *parser.Workflow) error {
 
 		visited[node.Step.ID] = true
 
-		s := stepIndex[node.Step.ID]
-
-		title := s.Title
-		if title == "" {
-			title = s.ID
-		}
-
-		st := &stepTracker{
-			id:       s.ID,
-			title:    title,
-			action:   s.Action,
-			depth:    depth,
-			isLast:   isLast,
-			parentID: parentID,
-		}
-
-		if s.Goto != nil {
-			st.gotoTarget = s.Goto.Target
-			st.gotoMaxIter = s.Goto.MaxIterations
-		}
-
-		if s.Action == "loop" {
-			if rawActions, ok := s.Config["actions"]; ok {
-				if arr, ok := rawActions.([]any); ok {
-					for _, item := range arr {
-						if m, ok := item.(map[string]any); ok {
-							actName, _ := m["action"].(string)
-							actTitle, _ := m["title"].(string)
-
-							if actName != "" {
-								st.pipelineActions = append(st.pipelineActions, pipelineAction{
-									action: actName,
-									title:  actTitle,
-								})
-							}
-						}
-					}
-				}
-			}
-		}
-
-		r.steps[s.ID] = st
-		r.order = append(r.order, s.ID)
+		r.addStepTracker(stepIndex[node.Step.ID], depth, parentID, isLast)
 
 		for i, child := range node.Children {
 			last := i == len(node.Children)-1
@@ -169,24 +128,92 @@ func (r *cliRenderer) buildTree(wf *parser.Workflow) error {
 		dfs(root, 0, "", last)
 	}
 
+	r.buildLoopDisplays()
+
+	return nil
+}
+
+func (r *cliRenderer) addStepTracker(s parser.Step, depth int, parentID string, isLast bool) {
+	title := s.Title
+	if title == "" {
+		title = s.ID
+	}
+
+	st := &stepTracker{
+		id:       s.ID,
+		title:    title,
+		action:   s.Action,
+		depth:    depth,
+		isLast:   isLast,
+		parentID: parentID,
+	}
+
+	if s.Goto != nil {
+		st.gotoTarget = s.Goto.Target
+		st.gotoMaxIter = s.Goto.MaxIterations
+	}
+
+	if s.Action == "loop" {
+		st.pipelineActions = parsePipelineActions(s.Config)
+	}
+
+	r.steps[s.ID] = st
+	r.order = append(r.order, s.ID)
+}
+
+func parsePipelineActions(config map[string]any) []pipelineAction {
+	rawActions, ok := config["actions"]
+	if !ok {
+		return nil
+	}
+
+	arr, ok := rawActions.([]any)
+	if !ok {
+		return nil
+	}
+
+	var actions []pipelineAction
+
+	for _, item := range arr {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		actName, _ := m["action"].(string)
+		actTitle, _ := m["title"].(string)
+
+		if actName != "" {
+			actions = append(actions, pipelineAction{action: actName, title: actTitle})
+		}
+	}
+
+	return actions
+}
+
+func (r *cliRenderer) buildLoopDisplays() {
 	orderIdx := make(map[string]int, len(r.order))
+
 	for i, id := range r.order {
 		orderIdx[id] = i
 	}
 
 	for _, id := range r.order {
 		st := r.steps[id]
-		if st.gotoTarget != "" {
-			if ti, ok := orderIdx[st.gotoTarget]; ok {
-				gi := orderIdx[id]
-				r.loopDisplays = append(r.loopDisplays, loopDisplay{startIdx: ti, endIdx: gi})
-			}
+		if st.gotoTarget == "" {
+			continue
 		}
+
+		ti, ok := orderIdx[st.gotoTarget]
+		if !ok {
+			continue
+		}
+
+		gi := orderIdx[id]
+		r.loopDisplays = append(r.loopDisplays, loopDisplay{startIdx: ti, endIdx: gi})
 	}
 
 	r.hasLoops = len(r.loopDisplays) > 0
-
-	return nil
 }
 
 func (r *cliRenderer) treePrefix(stepID string) string {
@@ -300,73 +327,81 @@ func (r *cliRenderer) printTree() {
 	}
 
 	for idx, id := range r.order {
-		st := r.steps[id]
-		bracket := r.bracketChar(idx, false)
-		prefix := r.treePrefix(id)
-
-		label := fmt.Sprintf("%s [%s]", st.title, st.action)
-		idPart := st.id + " "
-
-		const totalWidth = 45
-
-		usedWidth := bracketWidth + len(prefix) + len(idPart) + len(label)
-		dots := totalWidth - usedWidth
-
-		if dots < 2 {
-			dots = 2
-		}
-
-		dotStr := strings.Repeat("·", dots) + " "
-
-		fmt.Printf("  %s%s%s%s%s\n",
-			r.c("33", bracket),
-			r.c("90", prefix),
-			r.c("1", idPart),
-			r.c("90", dotStr),
-			r.c("90", label),
-		)
-
-		if len(st.pipelineActions) > 0 {
-			contPrefix := r.treeContinuation(id)
-			midBracket := r.bracketChar(idx, false)
-
-			for i, pa := range st.pipelineActions {
-				var connector string
-				if i == len(st.pipelineActions)-1 {
-					connector = "└─ "
-				} else {
-					connector = "├─ "
-				}
-
-				paLabel := pa.action
-				if pa.title != "" {
-					paLabel = pa.title + " [" + pa.action + "]"
-				}
-
-				fmt.Printf("  %s%s%s%s\n",
-					r.c("33", midBracket),
-					r.c("90", contPrefix+connector),
-					r.c("33", fmt.Sprintf("%d. ", i+1)),
-					r.c("90", paLabel),
-				)
-			}
-		}
-
-		if st.gotoTarget != "" {
-			closeBracket := r.bracketChar(idx, true)
-			gotoLabel := fmt.Sprintf("↻ goto %s", st.gotoTarget)
-			if st.gotoMaxIter > 0 {
-				gotoLabel += fmt.Sprintf(" (max %d)", st.gotoMaxIter)
-			}
-
-			fmt.Printf("  %s%s\n",
-				r.c("33", closeBracket),
-				r.c("33", gotoLabel),
-			)
-		}
+		r.printTreeStep(idx, id, bracketWidth)
 	}
 
 	fmt.Println()
+}
+
+func (r *cliRenderer) printTreeStep(idx int, id string, bracketWidth int) {
+	st := r.steps[id]
+	bracket := r.bracketChar(idx, false)
+	prefix := r.treePrefix(id)
+
+	label := fmt.Sprintf("%s [%s]", st.title, st.action)
+	idPart := st.id + " "
+
+	const totalWidth = 45
+
+	usedWidth := bracketWidth + len(prefix) + len(idPart) + len(label)
+	dots := max(totalWidth-usedWidth, 2)
+	dotStr := strings.Repeat("·", dots) + " "
+
+	fmt.Printf("  %s%s%s%s%s\n",
+		r.c("33", bracket),
+		r.c("90", prefix),
+		r.c("1", idPart),
+		r.c("90", dotStr),
+		r.c("90", label),
+	)
+
+	if len(st.pipelineActions) > 0 {
+		r.printTreePipelineActions(idx, id, st.pipelineActions)
+	}
+
+	if st.gotoTarget != "" {
+		r.printTreeGoto(idx, st)
+	}
+}
+
+func (r *cliRenderer) printTreePipelineActions(idx int, id string, actions []pipelineAction) {
+	contPrefix := r.treeContinuation(id)
+	midBracket := r.bracketChar(idx, false)
+
+	for i, pa := range actions {
+		var connector string
+		if i == len(actions)-1 {
+			connector = "└─ "
+		} else {
+			connector = "├─ "
+		}
+
+		paLabel := pa.action
+		if pa.title != "" {
+			paLabel = pa.title + " [" + pa.action + "]"
+		}
+
+		fmt.Printf("  %s%s%s%s\n",
+			r.c("33", midBracket),
+			r.c("90", contPrefix+connector),
+			r.c("33", fmt.Sprintf("%d. ", i+1)),
+			r.c("90", paLabel),
+		)
+	}
+}
+
+func (r *cliRenderer) printTreeGoto(idx int, st *stepTracker) {
+	closeBracket := r.bracketChar(idx, true)
+
+	gotoLabel := "↻ goto " + st.gotoTarget
+	if st.gotoMaxIter > 0 {
+		gotoLabel += fmt.Sprintf(" (max %d)", st.gotoMaxIter)
+	}
+
+	fmt.Printf("  %s%s\n",
+		r.c("33", closeBracket),
+		r.c("33", gotoLabel),
+	)
 }
 
 func (r *cliRenderer) eraseActive() {
@@ -384,24 +419,14 @@ func (r *cliRenderer) eraseActive() {
 func (r *cliRenderer) redrawActive() {
 	if !r.isTTY {
 		r.activeLines = 0
+
 		return
 	}
 
 	lines := 0
 
 	if r.loopIteration > 1 {
-		var iterLabel string
-		if r.loopMaxIter > 0 {
-			iterLabel = fmt.Sprintf("iteration %d/%d", r.loopIteration, r.loopMaxIter)
-		} else {
-			iterLabel = fmt.Sprintf("iteration %d", r.loopIteration)
-		}
-
-		fmt.Printf("  %s  %s  %s\n",
-			r.c("33", "↻"),
-			r.c("1", iterLabel),
-			r.c("90", r.stepTitle(r.loopStepID)),
-		)
+		r.printLoopIterationLine()
 
 		lines++
 	}
@@ -409,23 +434,7 @@ func (r *cliRenderer) redrawActive() {
 	now := time.Now()
 
 	for _, id := range r.activeSteps {
-		st := r.steps[id]
-		elapsed := now.Sub(st.start).Truncate(100 * time.Millisecond)
-
-		if st.lastLog != "" {
-			log := st.lastLog
-			if len(log) > 40 {
-				log = log[:37] + "..."
-			}
-
-			fmt.Printf("  %s  %s %s %s\n",
-				r.c("36", "⟳"), st.title,
-				r.c("90", log),
-				r.c("90", "── "+elapsed.String()),
-			)
-		} else {
-			fmt.Printf("  %s  %s %s\n", r.c("36", "⟳"), st.title, r.c("90", elapsed.String()))
-		}
+		r.printActiveStepLine(r.steps[id], now)
 
 		lines++
 	}
@@ -433,7 +442,43 @@ func (r *cliRenderer) redrawActive() {
 	r.activeLines = lines
 }
 
-func (r *cliRenderer) printLine(format string, args ...any) {
+func (r *cliRenderer) printLoopIterationLine() {
+	var iterLabel string
+	if r.loopMaxIter > 0 {
+		iterLabel = fmt.Sprintf("iteration %d/%d", r.loopIteration, r.loopMaxIter)
+	} else {
+		iterLabel = fmt.Sprintf("iteration %d", r.loopIteration)
+	}
+
+	fmt.Printf("  %s  %s  %s\n",
+		r.c("33", "↻"),
+		r.c("1", iterLabel),
+		r.c("90", r.stepTitle(r.loopStepID)),
+	)
+}
+
+func (r *cliRenderer) printActiveStepLine(st *stepTracker, now time.Time) {
+	elapsed := now.Sub(st.start).Truncate(100 * time.Millisecond)
+
+	if st.lastLog == "" {
+		fmt.Printf("  %s  %s %s\n", r.c("36", "⟳"), st.title, r.c("90", elapsed.String()))
+
+		return
+	}
+
+	log := st.lastLog
+	if len(log) > 40 {
+		log = log[:37] + "..."
+	}
+
+	fmt.Printf("  %s  %s %s %s\n",
+		r.c("36", "⟳"), st.title,
+		r.c("90", log),
+		r.c("90", "── "+elapsed.String()),
+	)
+}
+
+func (r *cliRenderer) printLinef(format string, args ...any) {
 	r.eraseActive()
 	fmt.Printf(format, args...)
 	r.redrawActive()
@@ -469,7 +514,7 @@ func (r *cliRenderer) inLoop(stepID string) bool {
 }
 
 func (r *cliRenderer) endLoop() {
-	r.printLine("  %s  %s\n",
+	r.printLinef("  %s  %s\n",
 		r.c("32", "✓"),
 		r.c("1", fmt.Sprintf("loop completed (%d iterations)", r.loopIteration)),
 	)
@@ -501,16 +546,18 @@ func (r *cliRenderer) isPipelineResult(msg string) bool {
 
 func (r *cliRenderer) printPipelineLine(msg string) {
 	if strings.Contains(msg, " FAILED (") {
-		if idx := strings.Index(msg, "): "); idx != -1 {
+		idx := strings.Index(msg, "): ")
+		if idx != -1 {
 			status := msg[:idx+1]
 			errMsg := msg[idx+3:]
-			r.printLine("  %s   %s\n", r.c("90", "│"), r.c("31", status))
-			r.printLine("  %s     %s\n", r.c("90", "│"), r.c("31", errMsg))
+
+			r.printLinef("  %s   %s\n", r.c("90", "│"), r.c("31", status))
+			r.printLinef("  %s     %s\n", r.c("90", "│"), r.c("31", errMsg))
 		} else {
-			r.printLine("  %s   %s\n", r.c("90", "│"), r.c("31", msg))
+			r.printLinef("  %s   %s\n", r.c("90", "│"), r.c("31", msg))
 		}
 	} else {
-		r.printLine("  %s   %s\n", r.c("90", "│"), r.c("90", msg))
+		r.printLinef("  %s   %s\n", r.c("90", "│"), r.c("90", msg))
 	}
 }
 
@@ -536,157 +583,186 @@ func (r *cliRenderer) handleEvent(ev event.Event) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	switch ev.Type {
+	switch ev.Type { //nolint:exhaustive // non-display events handled by default
 	case event.WorkflowStarted:
-		r.printLine("  %s %s\n", r.c("1;34", "▶"), r.c("1", "Execution started"))
-
+		r.printLinef("  %s %s\n", r.c("1;34", "▶"), r.c("1", "Execution started"))
 	case event.StepStarted:
-		if r.loopIteration > 0 && !r.loopBody[ev.StepID] {
-			r.endLoop()
-		}
-
-		st := r.steps[ev.StepID]
-		if st != nil {
-			st.status = statusRunning
-			st.start = ev.Timestamp
-		}
-
-		r.addActive(ev.StepID)
-
-		if r.inLoop(ev.StepID) {
-			r.eraseActive()
-			r.redrawActive()
-		} else if r.isTTY {
-			r.eraseActive()
-			r.redrawActive()
-		} else {
-			title := r.stepTitle(ev.StepID)
-			extra := r.attemptSuffix(ev)
-
-			fmt.Printf("  %s  %s%s\n", r.c("36", "⟳"), title, extra)
-		}
-
+		r.handleStepStarted(ev)
 	case event.StepCompleted:
-		st := r.steps[ev.StepID]
-		if st != nil {
-			st.status = statusCompleted
-			st.duration = ev.Timestamp.Sub(st.start)
-		}
-
-		r.removeActive(ev.StepID)
-
-		if r.inLoop(ev.StepID) {
-			r.eraseActive()
-			r.redrawActive()
-		} else {
-			title := r.stepTitle(ev.StepID)
-			dur := r.formatDuration(ev.StepID)
-
-			r.printLine("  %s  %s %s\n", r.c("32", "✓"), title, r.c("90", dur))
-		}
-
+		r.handleStepCompleted(ev)
 	case event.StepFailed:
-		st := r.steps[ev.StepID]
-		if st != nil {
-			st.status = statusFailed
-			st.duration = ev.Timestamp.Sub(st.start)
-			st.errMsg = ev.Message
-		}
-
-		r.removeActive(ev.StepID)
-
-		if r.inLoop(ev.StepID) {
-			r.eraseActive()
-			r.redrawActive()
-		} else {
-			title := r.stepTitle(ev.StepID)
-			dur := r.formatDuration(ev.StepID)
-			msg := ev.Message
-
-			r.printLine("  %s  %s %s: %s\n", r.c("31", "✗"), title, r.c("90", dur), r.c("31", msg))
-		}
-
+		r.handleStepFailed(ev)
 	case event.StepSkipped:
-		st := r.steps[ev.StepID]
-		if st != nil {
-			st.status = statusSkipped
-		}
-
-		r.removeActive(ev.StepID)
-
-		if r.inLoop(ev.StepID) {
-			r.eraseActive()
-			r.redrawActive()
-		} else {
-			title := r.stepTitle(ev.StepID)
-
-			r.printLine("  %s  %s %s\n", r.c("33", "⏭"), title, r.c("90", "— skipped"))
-		}
-
+		r.handleStepSkipped(ev)
 	case event.StepLog:
-		if r.isStreamLog(ev) {
-			if r.isPipelineResult(ev.Message) {
-				if !r.inLoop(ev.StepID) {
-					r.printPipelineLine(ev.Message)
-				}
-			} else {
-				if st := r.steps[ev.StepID]; st != nil {
-					st.lastLog = ev.Message
-				}
-
-				if r.isTTY {
-					r.eraseActive()
-					r.redrawActive()
-				}
-			}
-		} else {
-			r.printLine("  %s   %s\n", r.c("90", "│"), r.c("90", ev.Message))
-		}
-
+		r.handleStepLog(ev)
 	case event.StepGoto:
-		iteration := 2
-		if ev.Data != nil {
-			if iter, ok := ev.Data["iteration"].(float64); ok {
-				iteration = int(iter)
-			}
-		}
-
-		if iteration <= 2 {
-			r.printLine("  %s  %s\n", r.c("33", "↻"), ev.Message)
-
-			r.loopBody = make(map[string]bool)
-
-			if ev.Data != nil {
-				if body, ok := ev.Data["body"].([]any); ok {
-					for _, b := range body {
-						if s, ok := b.(string); ok {
-							r.loopBody[s] = true
-						}
-					}
-				}
-			}
-
-			r.loopStepID = ev.StepID
-			r.loopIteration = iteration
-
-			if ev.Data != nil {
-				if maxIter, ok := ev.Data["max_iterations"].(float64); ok {
-					r.loopMaxIter = int(maxIter)
-				}
-			}
-		} else {
-			r.loopIteration = iteration
-
-			r.eraseActive()
-			r.redrawActive()
-		}
-
+		r.handleStepGoto(ev)
 	case event.StepWaiting:
 		title := r.stepTitle(ev.StepID)
-		r.printLine("  %s  %s %s\n", r.c("33", "⏳"), title, ev.Message)
-
-	case event.StepInput, event.StepOutput, event.WorkflowCompleted:
+		r.printLinef("  %s  %s %s\n", r.c("33", "⏳"), title, ev.Message)
+	default:
 		return
+	}
+}
+
+func (r *cliRenderer) handleStepStarted(ev event.Event) {
+	if r.loopIteration > 0 && !r.loopBody[ev.StepID] {
+		r.endLoop()
+	}
+
+	st := r.steps[ev.StepID]
+	if st != nil {
+		st.status = statusRunning
+		st.start = ev.Timestamp
+	}
+
+	r.addActive(ev.StepID)
+
+	switch {
+	case r.inLoop(ev.StepID), r.isTTY:
+		r.eraseActive()
+		r.redrawActive()
+	default:
+		title := r.stepTitle(ev.StepID)
+		extra := r.attemptSuffix(ev)
+
+		fmt.Printf("  %s  %s%s\n", r.c("36", "⟳"), title, extra)
+	}
+}
+
+func (r *cliRenderer) handleStepCompleted(ev event.Event) {
+	st := r.steps[ev.StepID]
+	if st != nil {
+		st.status = statusCompleted
+		st.duration = ev.Timestamp.Sub(st.start)
+	}
+
+	r.removeActive(ev.StepID)
+
+	if r.inLoop(ev.StepID) {
+		r.eraseActive()
+		r.redrawActive()
+
+		return
+	}
+
+	title := r.stepTitle(ev.StepID)
+	dur := r.formatDuration(ev.StepID)
+
+	r.printLinef("  %s  %s %s\n", r.c("32", "✓"), title, r.c("90", dur))
+}
+
+func (r *cliRenderer) handleStepFailed(ev event.Event) {
+	st := r.steps[ev.StepID]
+	if st != nil {
+		st.status = statusFailed
+		st.duration = ev.Timestamp.Sub(st.start)
+		st.errMsg = ev.Message
+	}
+
+	r.removeActive(ev.StepID)
+
+	if r.inLoop(ev.StepID) {
+		r.eraseActive()
+		r.redrawActive()
+
+		return
+	}
+
+	title := r.stepTitle(ev.StepID)
+	dur := r.formatDuration(ev.StepID)
+
+	r.printLinef("  %s  %s %s: %s\n", r.c("31", "✗"), title, r.c("90", dur), r.c("31", ev.Message))
+}
+
+func (r *cliRenderer) handleStepSkipped(ev event.Event) {
+	st := r.steps[ev.StepID]
+	if st != nil {
+		st.status = statusSkipped
+	}
+
+	r.removeActive(ev.StepID)
+
+	if r.inLoop(ev.StepID) {
+		r.eraseActive()
+		r.redrawActive()
+
+		return
+	}
+
+	title := r.stepTitle(ev.StepID)
+
+	r.printLinef("  %s  %s %s\n", r.c("33", "⏭"), title, r.c("90", "— skipped"))
+}
+
+func (r *cliRenderer) handleStepLog(ev event.Event) {
+	if !r.isStreamLog(ev) {
+		r.printLinef("  %s   %s\n", r.c("90", "│"), r.c("90", ev.Message))
+
+		return
+	}
+
+	if r.isPipelineResult(ev.Message) {
+		if !r.inLoop(ev.StepID) {
+			r.printPipelineLine(ev.Message)
+		}
+
+		return
+	}
+
+	st := r.steps[ev.StepID]
+	if st != nil {
+		st.lastLog = ev.Message
+	}
+
+	if r.isTTY {
+		r.eraseActive()
+		r.redrawActive()
+	}
+}
+
+func (r *cliRenderer) handleStepGoto(ev event.Event) {
+	iteration := 2
+
+	if ev.Data != nil {
+		if iter, ok := ev.Data["iteration"].(float64); ok {
+			iteration = int(iter)
+		}
+	}
+
+	if iteration > 2 {
+		r.loopIteration = iteration
+		r.eraseActive()
+		r.redrawActive()
+
+		return
+	}
+
+	r.printLinef("  %s  %s\n", r.c("33", "↻"), ev.Message)
+	r.initLoopBody(ev, iteration)
+}
+
+func (r *cliRenderer) initLoopBody(ev event.Event, iteration int) {
+	r.loopBody = make(map[string]bool)
+
+	if ev.Data != nil {
+		if body, ok := ev.Data["body"].([]any); ok {
+			for _, b := range body {
+				if s, ok := b.(string); ok {
+					r.loopBody[s] = true
+				}
+			}
+		}
+	}
+
+	r.loopStepID = ev.StepID
+	r.loopIteration = iteration
+
+	if ev.Data != nil {
+		if maxIter, ok := ev.Data["max_iterations"].(float64); ok {
+			r.loopMaxIter = int(maxIter)
+		}
 	}
 }
 
@@ -715,19 +791,24 @@ func (r *cliRenderer) printSummary(result *engine.ExecuteResult, elapsed time.Du
 	r.eraseActive()
 
 	if r.loopIteration > 0 {
-		fmt.Printf("  %s  %s\n",
-			r.c("32", "✓"),
-			r.c("1", fmt.Sprintf("loop completed (%d iterations)", r.loopIteration)),
-		)
-
-		r.loopBody = nil
-		r.loopIteration = 0
-		r.loopMaxIter = 0
-		r.loopStepID = ""
+		r.endLoop()
 	}
 
-	var succeeded, failed, skipped int
+	succeeded, failed, skipped := r.countStepStatuses()
 
+	fmt.Println()
+	r.printWorkflowResult(result)
+
+	fmt.Printf("    %d steps: %s, %s, %s ─ %s\n",
+		len(r.steps),
+		r.c("32", fmt.Sprintf("%d succeeded", succeeded)),
+		r.c("31", fmt.Sprintf("%d failed", failed)),
+		r.c("33", fmt.Sprintf("%d skipped", skipped)),
+		r.c("1", elapsed.Round(time.Millisecond).String()),
+	)
+}
+
+func (r *cliRenderer) countStepStatuses() (succeeded, failed, skipped int) {
 	for _, st := range r.steps {
 		switch st.status { //nolint:exhaustive // only counting terminal states
 		case statusCompleted:
@@ -739,11 +820,10 @@ func (r *cliRenderer) printSummary(result *engine.ExecuteResult, elapsed time.Du
 		}
 	}
 
-	total := len(r.steps)
-	dur := elapsed.Round(time.Millisecond)
+	return succeeded, failed, skipped
+}
 
-	fmt.Println()
-
+func (r *cliRenderer) printWorkflowResult(result *engine.ExecuteResult) {
 	switch result.Status {
 	case runtime.StatusSuccess:
 		fmt.Printf("  %s %s\n", r.c("32", "✓"), r.c("1;32", "Workflow completed successfully"))
@@ -756,14 +836,6 @@ func (r *cliRenderer) printSummary(result *engine.ExecuteResult, elapsed time.Du
 			fmt.Printf("    %s\n", r.c("31", "Error: "+result.Error.Error()))
 		}
 	}
-
-	fmt.Printf("    %d steps: %s, %s, %s ─ %s\n",
-		total,
-		r.c("32", fmt.Sprintf("%d succeeded", succeeded)),
-		r.c("31", fmt.Sprintf("%d failed", failed)),
-		r.c("33", fmt.Sprintf("%d skipped", skipped)),
-		r.c("1", dur.String()),
-	)
 }
 
 func detectNoColor(flagValue bool) bool {
@@ -800,15 +872,16 @@ func flagOrEnv(flagVal, envName string) string {
 	if flagVal != "" {
 		return flagVal
 	}
+
 	return os.Getenv(envName)
 }
 
 func main() {
 	var (
-		noColorFlag    bool
-		exporterURL    string
-		exporterKey    string
-		exporterName   string
+		noColorFlag  bool
+		exporterURL  string
+		exporterKey  string
+		exporterName string
 	)
 
 	rootCmd := &cobra.Command{
@@ -849,7 +922,7 @@ func runCmd(noColorFlag *bool, exporterURL, exporterKey, exporterName *string) *
 			name := flagOrEnv(*exporterName, "TAILFLOW_EXPORTER_NAME")
 
 			if url != "" && name == "" {
-				return fmt.Errorf("--exporter-name (or TAILFLOW_EXPORTER_NAME) is required when exporter is enabled")
+				return errors.New("--exporter-name (or TAILFLOW_EXPORTER_NAME) is required when exporter is enabled")
 			}
 
 			return executeRun(args[0], params, data, noColor, url, key, name)
@@ -891,7 +964,7 @@ func serveCmd(exporterURL, exporterKey, exporterName *string) *cobra.Command {
 			name := flagOrEnv(*exporterName, "TAILFLOW_EXPORTER_NAME")
 
 			if url != "" && name == "" {
-				return fmt.Errorf("--exporter-name (or TAILFLOW_EXPORTER_NAME) is required when exporter is enabled")
+				return errors.New("--exporter-name (or TAILFLOW_EXPORTER_NAME) is required when exporter is enabled")
 			}
 
 			return executeServe(args[0], port, maxExecs, selfHosted, url, key, name)
@@ -904,13 +977,34 @@ func serveCmd(exporterURL, exporterKey, exporterName *string) *cobra.Command {
 	return cmd
 }
 
+type runResources struct {
+	bus          *event.Bus
+	exporter     *export.Exporter
+	exportCancel context.CancelFunc
+	tickDone     chan struct{}
+	wg           sync.WaitGroup
+}
+
+func (rr *runResources) shutdown() {
+	rr.bus.Close()
+	rr.wg.Wait()
+
+	if rr.tickDone != nil {
+		close(rr.tickDone)
+	}
+
+	rr.exportCancel()
+
+	if rr.exporter != nil {
+		rr.exporter.Shutdown()
+	}
+}
+
 func executeRun(path string, rawParams []string, data string, noColor bool, exportURL, apiKey, exporterName string) error {
 	wf, err := parser.Parse(path)
 	if err != nil {
 		return err
 	}
-
-	params := parseParams(rawParams)
 
 	renderer := &cliRenderer{
 		noColor: noColor,
@@ -926,15 +1020,33 @@ func executeRun(path string, rawParams []string, data string, noColor bool, expo
 	bus := event.NewBus()
 	defer bus.Close()
 
+	exec, services, closeFn, err := setupActionRegistry(wf, bus)
+	if err != nil {
+		return err
+	}
+
+	defer closeFn()
+
+	res := setupRunResources(bus, renderer, exportURL, apiKey, exporterName, wf)
+	opts := buildExecutionOptions(renderer, wf, path, data, services)
+
+	renderer.printTree()
+
+	return runAndReport(renderer, exec, wf, parseParams(rawParams), opts, res)
+}
+
+func setupActionRegistry(
+	wf *parser.Workflow, bus *event.Bus,
+) (*engine.Executor, *runtime.ActionServices, func(), error) {
 	reg := action.NewRegistry()
 	action.RegisterBuiltins(reg)
 
 	dbPool := runtime.NewMemoryDBPool()
-	defer dbPool.Close()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError + 1}))
 
 	services := &runtime.ActionServices{
 		DBPool:     dbPool,
-		TxRegistry: runtime.NewMemoryTxRegistry(),
+		TxRegistry: runtime.NewMemoryTxRegistry(logger),
 		Locker:     runtime.NewMemoryLocker(),
 		KVStore:    runtime.NewMemoryKVStore(),
 	}
@@ -942,73 +1054,40 @@ func executeRun(path string, rawParams []string, data string, noColor bool, expo
 	reg.SetAllowlist(cliAllowedActions(reg.Names()))
 
 	for _, step := range wf.Steps {
-		_, err = reg.Create(step.Action)
+		_, err := reg.Create(step.Action)
 		if err != nil {
-			return fmt.Errorf("step %q uses %q which requires 'tailflow serve'", step.ID, step.Action)
+			dbPool.Close()
+
+			return nil, nil, nil, fmt.Errorf("step %q uses %q which requires 'tailflow serve'", step.ID, step.Action)
 		}
 	}
 
-	// Silence engine logs in CLI mode; the event renderer covers all output.
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError + 1}))
-	exec := engine.NewExecutor(reg, bus, logger)
+	exec := engine.NewExecutor(reg, bus, logger, wf.Sensitive)
 
-	var exporter *export.Exporter
-	exportCancel := func() {} // no-op default
+	return exec, services, func() { dbPool.Close() }, nil
+}
 
-	if exportURL != "" {
-		var triggerType string
-		if t := wf.Trigger; t != nil {
-			switch {
-			case t.HTTP != nil:
-				triggerType = "http"
-			case t.Webhook != nil:
-				triggerType = "webhook"
-			case t.Schedule != nil:
-				triggerType = "schedule"
-			case t.RabbitMQ != nil:
-				triggerType = "rabbitmq"
-			}
-		}
-
-		exportLogger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-		exporter = export.New(export.Config{
-			ExportURL:           exportURL,
-			APIKey:              apiKey,
-			AgentName:           exporterName,
-			EventBus:            bus,
-			Logger:              exportLogger,
-			WorkflowName:        wf.Name,
-			WorkflowDescription: wf.Description,
-			WorkflowTags:        wf.Tags,
-			TriggerType:         triggerType,
-			StepsCount:          len(wf.Steps),
-			Version:             version,
-			Revision:            wf.Revision,
-		})
-
-		var exportCtx context.Context
-		exportCtx, exportCancel = context.WithCancel(context.Background())
-		exporter.Start(exportCtx)
+func setupRunResources(
+	bus *event.Bus, renderer *cliRenderer,
+	exportURL, apiKey, exporterName string, wf *parser.Workflow,
+) *runResources {
+	res := &runResources{
+		bus:          bus,
+		exportCancel: func() {},
 	}
+
+	res.exporter, res.exportCancel = setupExporter(exportURL, apiKey, exporterName, bus, wf)
 
 	ch := bus.Subscribe(1000)
 
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-
-	go func() {
-		defer wg.Done()
-
+	res.wg.Go(func() {
 		for ev := range ch {
 			renderer.handleEvent(ev)
 		}
-	}()
-
-	var tickDone chan struct{}
+	})
 
 	if renderer.isTTY {
-		tickDone = make(chan struct{})
+		res.tickDone = make(chan struct{})
 
 		go func() {
 			ticker := time.NewTicker(100 * time.Millisecond)
@@ -1018,13 +1097,70 @@ func executeRun(path string, rawParams []string, data string, noColor bool, expo
 				select {
 				case <-ticker.C:
 					renderer.tick()
-				case <-tickDone:
+				case <-res.tickDone:
 					return
 				}
 			}
 		}()
 	}
 
+	return res
+}
+
+func setupExporter(
+	exportURL, apiKey, exporterName string, bus *event.Bus, wf *parser.Workflow,
+) (*export.Exporter, context.CancelFunc) {
+	if exportURL == "" {
+		return nil, func() {}
+	}
+
+	triggerType := resolveTriggerType(wf)
+
+	exportLogger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	exporter := export.New(export.Config{
+		ExportURL:           exportURL,
+		APIKey:              apiKey,
+		AgentName:           exporterName,
+		EventBus:            bus,
+		Logger:              exportLogger,
+		WorkflowName:        wf.Name,
+		WorkflowDescription: wf.Description,
+		WorkflowTags:        wf.Tags,
+		TriggerType:         triggerType,
+		StepsCount:          len(wf.Steps),
+		Version:             version,
+		Revision:            wf.Revision,
+	})
+
+	exportCtx, exportCancel := context.WithCancel(context.Background())
+	exporter.Start(exportCtx)
+
+	return exporter, exportCancel
+}
+
+func resolveTriggerType(wf *parser.Workflow) string {
+	t := wf.Trigger
+	if t == nil {
+		return ""
+	}
+
+	switch {
+	case t.HTTP != nil:
+		return "http"
+	case t.Webhook != nil:
+		return "webhook"
+	case t.Schedule != nil:
+		return "schedule"
+	case t.RabbitMQ != nil:
+		return "rabbitmq"
+	default:
+		return ""
+	}
+}
+
+func buildExecutionOptions(
+	renderer *cliRenderer, wf *parser.Workflow, path, data string, services *runtime.ActionServices,
+) []engine.ExecuteOptions {
 	baseOpts := engine.ExecuteOptions{Services: services}
 
 	if wf.Trigger != nil {
@@ -1041,10 +1177,14 @@ func executeRun(path string, rawParams []string, data string, noColor bool, expo
 		baseOpts.TriggerData = buildCLITriggerData(wf, data)
 	}
 
-	opts := []engine.ExecuteOptions{baseOpts}
+	return []engine.ExecuteOptions{baseOpts}
+}
 
-	renderer.printTree()
-
+func runAndReport(
+	renderer *cliRenderer, exec *engine.Executor,
+	wf *parser.Workflow, params map[string]any,
+	opts []engine.ExecuteOptions, res *runResources,
+) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
@@ -1052,35 +1192,14 @@ func executeRun(path string, rawParams []string, data string, noColor bool, expo
 
 	result, err := exec.Execute(ctx, wf, params, opts...)
 	if err != nil {
-		bus.Close()
-		wg.Wait()
-
-		if tickDone != nil {
-			close(tickDone)
-		}
-
-		if exporter != nil {
-			exportCancel()
-			exporter.Shutdown()
-		}
+		res.shutdown()
 
 		return fmt.Errorf("execution failed: %w", err)
 	}
 
 	elapsed := time.Since(start)
 
-	// Shut down in order: close bus → wait renderer → wait exporter → print summary.
-	bus.Close()
-	wg.Wait()
-
-	if tickDone != nil {
-		close(tickDone)
-	}
-
-	if exporter != nil {
-		exportCancel()
-		exporter.Shutdown()
-	}
+	res.shutdown()
 
 	renderer.printSummary(result, elapsed)
 	fmt.Println()
@@ -1112,6 +1231,7 @@ func buildCLITriggerData(wf *parser.Workflow, data string) map[string]any {
 
 	if data != "" {
 		var body any
+
 		err := json.Unmarshal([]byte(data), &body)
 		if err == nil {
 			triggerData["body"] = body
@@ -1173,7 +1293,7 @@ func executeServe(path string, port int, maxExecs int, selfHosted bool, exportUR
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	exec := engine.NewExecutor(reg, bus, logger)
+	exec := engine.NewExecutor(reg, bus, logger, wf.Sensitive)
 
 	execStore := store.NewExecutionStore(maxExecs)
 

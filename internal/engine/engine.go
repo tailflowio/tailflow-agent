@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"regexp"
 	goruntime "runtime"
@@ -19,18 +20,20 @@ import (
 )
 
 type Executor struct {
-	registry *action.Registry
-	bus      *event.Bus
-	eval     *runtime.ExprEvaluator
-	logger   *slog.Logger
+	registry  *action.Registry
+	bus       *event.Bus
+	eval      *runtime.ExprEvaluator
+	logger    *slog.Logger
+	sensitive *SensitiveRegistry
 }
 
-func NewExecutor(registry *action.Registry, bus *event.Bus, logger *slog.Logger) *Executor {
+func NewExecutor(registry *action.Registry, bus *event.Bus, logger *slog.Logger, sensitiveKeys []string) *Executor {
 	return &Executor{
-		registry: registry,
-		bus:      bus,
-		eval:     runtime.NewExprEvaluator(),
-		logger:   logger,
+		registry:  registry,
+		bus:       bus,
+		eval:      runtime.NewExprEvaluator(),
+		logger:    logger,
+		sensitive: NewSensitiveRegistry(sensitiveKeys),
 	}
 }
 
@@ -60,111 +63,39 @@ func (e *Executor) Execute(
 
 	startedAt := time.Now()
 
-	// Resolve params with defaults
-	resolvedParams := make(map[string]any)
-
-	for _, p := range wf.Params {
-		if v, ok := params[p.Name]; ok {
-			resolvedParams[p.Name] = v
-		} else if p.Default != nil {
-			resolvedParams[p.Name] = p.Default
-		} else if p.Required {
-			return nil, fmt.Errorf("required parameter %q not provided", p.Name)
-		}
-	}
-	// Validate param patterns
-	for _, p := range wf.Params {
-		if p.Pattern == "" {
-			continue
-		}
-		v, ok := resolvedParams[p.Name]
-		if !ok {
-			continue
-		}
-		s, ok := v.(string)
-		if !ok {
-			continue
-		}
-		re, err := regexp.Compile("^(?:" + p.Pattern + ")$")
-		if err != nil {
-			return nil, fmt.Errorf("invalid pattern for parameter %q: %w", p.Name, err)
-		}
-		if !re.MatchString(s) {
-			return nil, fmt.Errorf("parameter %q value %q does not match pattern %q", p.Name, s, p.Pattern)
-		}
+	resolvedParams, err := e.resolveParams(wf, params)
+	if err != nil {
+		return nil, err
 	}
 
-	// Include any extra params
-	for k, v := range params {
-		if _, exists := resolvedParams[k]; !exists {
-			resolvedParams[k] = v
-		}
-	}
-
-	// Resolve env vars
-	resolvedEnv := make(map[string]string, len(wf.Env))
-
-	for k, v := range wf.Env {
-		expanded := os.ExpandEnv(v)
-		ctxMap := map[string]any{"params": resolvedParams}
-
-		resolved, err := e.eval.ResolveTemplate(expanded, ctxMap)
-		if err != nil {
-			return nil, fmt.Errorf("resolve env %q: %w", k, err)
-		}
-
-		resolvedEnv[k] = resolved
+	resolvedEnv, err := e.resolveEnv(wf, resolvedParams)
+	if err != nil {
+		return nil, err
 	}
 
 	execCtx := runtime.NewExecutionContext(executionID, wf.Name, resolvedParams, resolvedEnv)
-
-	// Inject trigger data if provided
 	if len(opts) > 0 && opts[0].TriggerData != nil {
 		execCtx.TriggerData = opts[0].TriggerData
 	}
 
-	// Inject services if provided
 	if len(opts) > 0 && opts[0].Services != nil {
 		execCtx.Services = opts[0].Services
 	}
 
 	e.bus.Publish(event.NewEvent(event.WorkflowStarted, executionID, "", fmt.Sprintf("workflow %q started", wf.Name)))
 
-	// Build DAG
 	dag, err := BuildDAG(wf.Steps)
 	if err != nil {
 		return nil, fmt.Errorf("build DAG: %w", err)
 	}
 
-	// Execute DAG
 	execErr := e.executeDAG(ctx, dag, execCtx)
 
-	// Workflow-level on_error: runs if any error occurred
 	if len(wf.OnError) > 0 && (execErr != nil || hasFailedSteps(execCtx)) {
 		e.executeOnError(ctx, parser.Step{OnError: wf.OnError}, execCtx)
 	}
 
-	status := runtime.StatusSuccess
-	hasErrors := false
-
-	if execErr != nil {
-		if ctx.Err() != nil {
-			status = runtime.StatusCancelled
-		} else {
-			status = runtime.StatusFailed
-		}
-	} else {
-		// Check if any steps failed with continue policy (no propagated error)
-		for _, sr := range execCtx.Steps {
-			if sr.Status == runtime.StatusFailed {
-				hasErrors = true
-				status = runtime.StatusCompletedWithErrors
-
-				break
-			}
-		}
-	}
-
+	status, hasErrors := e.determineStatus(ctx, execErr, execCtx)
 	finishedAt := time.Now()
 	e.bus.Publish(event.Event{
 		Type:        event.WorkflowCompleted,
@@ -174,7 +105,7 @@ func (e *Executor) Execute(
 		Data:        map[string]any{"status": status},
 	})
 
-	result := &ExecuteResult{
+	return &ExecuteResult{
 		ExecutionID: executionID,
 		Status:      status,
 		HasErrors:   hasErrors,
@@ -182,9 +113,91 @@ func (e *Executor) Execute(
 		Error:       execErr,
 		StartedAt:   startedAt,
 		FinishedAt:  finishedAt,
+	}, nil
+}
+
+func (e *Executor) resolveParams(wf *parser.Workflow, params map[string]any) (map[string]any, error) {
+	resolved := make(map[string]any)
+
+	for _, p := range wf.Params {
+		if v, ok := params[p.Name]; ok {
+			resolved[p.Name] = v
+		} else if p.Default != nil {
+			resolved[p.Name] = p.Default
+		} else if p.Required {
+			return nil, fmt.Errorf("required parameter %q not provided", p.Name)
+		}
 	}
 
-	return result, nil
+	for _, p := range wf.Params {
+		if p.Pattern == "" {
+			continue
+		}
+
+		v, ok := resolved[p.Name]
+		if !ok {
+			continue
+		}
+
+		s, ok := v.(string)
+		if !ok {
+			continue
+		}
+
+		re, err := regexp.Compile("^(?:" + p.Pattern + ")$")
+		if err != nil {
+			return nil, fmt.Errorf("invalid pattern for parameter %q: %w", p.Name, err)
+		}
+
+		if !re.MatchString(s) {
+			return nil, fmt.Errorf("parameter %q value %q does not match pattern %q", p.Name, s, p.Pattern)
+		}
+	}
+
+	for k, v := range params {
+		_, exists := resolved[k]
+		if !exists {
+			resolved[k] = v
+		}
+	}
+
+	return resolved, nil
+}
+
+func (e *Executor) resolveEnv(wf *parser.Workflow, resolvedParams map[string]any) (map[string]string, error) {
+	resolved := make(map[string]string, len(wf.Env))
+
+	for k, v := range wf.Env {
+		expanded := os.ExpandEnv(v)
+		ctxMap := map[string]any{"params": resolvedParams}
+
+		val, err := e.eval.ResolveTemplate(expanded, ctxMap)
+		if err != nil {
+			return nil, fmt.Errorf("resolve env %q: %w", k, err)
+		}
+
+		resolved[k] = val
+	}
+
+	return resolved, nil
+}
+
+func (e *Executor) determineStatus(ctx context.Context, execErr error, execCtx *runtime.ExecutionContext) (string, bool) {
+	if execErr != nil && ctx.Err() != nil {
+		return runtime.StatusCancelled, false
+	}
+
+	if execErr != nil {
+		return runtime.StatusFailed, false
+	}
+
+	for _, sr := range execCtx.Steps {
+		if sr.Status == runtime.StatusFailed {
+			return runtime.StatusCompletedWithErrors, true
+		}
+	}
+
+	return runtime.StatusSuccess, false
 }
 
 type loopInfo struct {
@@ -192,16 +205,28 @@ type loopInfo struct {
 	bodySet map[string]bool
 }
 
-func (e *Executor) executeDAG(ctx context.Context, dag *DAG, execCtx *runtime.ExecutionContext) error {
-	// Track in-degree for each node
+// dagState holds shared mutable state for a DAG execution.
+type dagState struct {
+	mu             sync.Mutex
+	wg             sync.WaitGroup
+	firstErr       error
+	ready          chan *DAGNode
+	done           chan struct{}
+	completed      int
+	total          int
+	inDegree       map[string]int
+	gotoLoops      map[string]loopInfo
+	gotoIterations map[string]int
+	sem            chan struct{}
+}
+
+func newDAGState(dag *DAG) *dagState {
 	inDegree := make(map[string]int, len(dag.Nodes))
 	for id, node := range dag.Nodes {
 		inDegree[id] = len(node.Parents)
 	}
 
-	// Precompute goto loop info
-	gotoLoops := map[string]loopInfo{}
-	gotoIterations := map[string]int{}
+	gotoLoops := make(map[string]loopInfo)
 
 	for id, node := range dag.Nodes {
 		if node.Step.Goto != nil {
@@ -216,179 +241,128 @@ func (e *Executor) executeDAG(ctx context.Context, dag *DAG, execCtx *runtime.Ex
 		}
 	}
 
-	// Semaphore for concurrency control
-	sem := make(chan struct{}, goruntime.NumCPU())
-
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	var firstErr error
-
-	// ready channel for nodes that are ready to execute
 	ready := make(chan *DAGNode, len(dag.Nodes))
-
-	// Queue root nodes
 	for _, root := range dag.Roots {
 		ready <- root
 	}
 
-	done := make(chan struct{})
-	completed := 0
-	total := len(dag.Nodes)
+	return &dagState{
+		ready:          ready,
+		done:           make(chan struct{}),
+		total:          len(dag.Nodes),
+		inDegree:       inDegree,
+		gotoLoops:      gotoLoops,
+		gotoIterations: make(map[string]int),
+		sem:            make(chan struct{}, goruntime.NumCPU()),
+	}
+}
 
-	go func() {
-		for node := range ready {
-			mu.Lock()
-			if firstErr != nil {
-				mu.Unlock()
-				// Mark as skipped
-				execCtx.SetStepResult(node.Step.ID, &runtime.StepResult{Status: runtime.StatusSkipped})
-				e.bus.Publish(event.NewEvent(event.StepSkipped, execCtx.ExecutionID, node.Step.ID, "skipped due to prior failure"))
-				mu.Lock()
+func (e *Executor) executeDAG(ctx context.Context, dag *DAG, execCtx *runtime.ExecutionContext) error {
+	ds := newDAGState(dag)
 
-				completed++
-				if completed >= total {
-					mu.Unlock()
-					close(done)
+	go e.dagLoop(ctx, dag, execCtx, ds)
 
-					return
-				}
-				mu.Unlock()
-				// Propagate skip to children
-				for _, child := range node.Children {
-					mu.Lock()
-					inDegree[child.Step.ID]--
-					shouldEnqueue := inDegree[child.Step.ID] <= 0
-					mu.Unlock()
+	<-ds.done
+	ds.wg.Wait()
 
-					if shouldEnqueue {
-						ready <- child
-					}
-				}
+	return ds.firstErr
+}
 
-				continue
-			}
-			mu.Unlock()
+func (e *Executor) dagLoop(ctx context.Context, dag *DAG, execCtx *runtime.ExecutionContext, ds *dagState) {
+	for node := range ds.ready {
+		ds.mu.Lock()
+		hasError := ds.firstErr != nil
+		ds.mu.Unlock()
 
-			wg.Add(1)
-			sem <- struct{}{} // Acquire semaphore
+		if hasError {
+			e.skipNode(node, execCtx, ds)
 
-			go func(n *DAGNode) {
-				defer wg.Done()
-				defer func() { <-sem }() // Release semaphore
-
-				err := e.executeNode(ctx, n, execCtx)
-
-				mu.Lock()
-				if err != nil && firstErr == nil {
-					firstErr = fmt.Errorf("step %q: %w", n.Step.ID, err)
-				}
-
-				completed++
-
-				// Check goto condition after successful execution
-				if err == nil && n.Step.Goto != nil {
-					li, hasLoop := gotoLoops[n.Step.ID]
-					if hasLoop {
-						maxIter := n.Step.Goto.MaxIterations
-						shouldGoto := false
-						gotoResult, evalErr := e.eval.EvalBool(n.Step.Goto.When, execCtx.ToMap())
-
-						if evalErr == nil && gotoResult && gotoIterations[n.Step.ID] < maxIter {
-							shouldGoto = true
-						}
-
-						if shouldGoto {
-							gotoIterations[n.Step.ID]++
-							iter := gotoIterations[n.Step.ID]
-
-							// Reset loop body: clear results and recompute in-degrees
-							for _, bid := range li.body {
-								inDegree[bid] = loopInDegree(dag, li.bodySet, bid)
-								completed--
-
-								execCtx.ClearStepResult(bid)
-							}
-							// Enqueue nodes in the body with inDegree == 0
-							var readyNodes []*DAGNode
-
-							for _, bid := range li.body {
-								if inDegree[bid] == 0 {
-									readyNodes = append(readyNodes, dag.Nodes[bid])
-								}
-							}
-							mu.Unlock()
-
-							// Emit step.goto event
-							e.bus.Publish(event.Event{
-								Type:        event.StepGoto,
-								Timestamp:   time.Now(),
-								ExecutionID: execCtx.ExecutionID,
-								StepID:      n.Step.ID,
-								Message:     fmt.Sprintf("goto %s (iteration %d/%d)", n.Step.Goto.Target, iter+1, maxIter),
-								Data: map[string]any{
-									"target":         n.Step.Goto.Target,
-									"iteration":      iter + 1,
-									"max_iterations": maxIter,
-									"body":           li.body,
-								},
-							})
-
-							for _, rn := range readyNodes {
-								ready <- rn
-							}
-
-							return // Do NOT propagate to children
-						}
-					}
-				}
-
-				allDone := completed >= total
-				mu.Unlock()
-
-				if allDone {
-					close(done)
-					return
-				}
-
-				// Decrement in-degree of children and enqueue if ready
-				for _, child := range n.Children {
-					mu.Lock()
-					inDegree[child.Step.ID]--
-					shouldEnqueue := inDegree[child.Step.ID] <= 0
-					mu.Unlock()
-
-					if shouldEnqueue {
-						ready <- child
-					}
-				}
-			}(node)
+			continue
 		}
-	}()
 
-	<-done
-	wg.Wait()
+		ds.wg.Add(1)
 
-	return firstErr
+		ds.sem <- struct{}{}
+
+		go e.runDAGNode(ctx, node, execCtx, dag, ds)
+	}
+}
+
+func (e *Executor) skipNode(node *DAGNode, execCtx *runtime.ExecutionContext, ds *dagState) {
+	execCtx.SetStepResult(node.Step.ID, &runtime.StepResult{Status: runtime.StatusSkipped})
+	e.bus.Publish(event.NewEvent(event.StepSkipped, execCtx.ExecutionID, node.Step.ID, "skipped due to prior failure"))
+
+	ds.mu.Lock()
+	ds.completed++
+	allDone := ds.completed >= ds.total
+	ds.mu.Unlock()
+
+	if allDone {
+		close(ds.done)
+
+		return
+	}
+
+	e.enqueueChildren(node.Children, ds)
+}
+
+func (e *Executor) runDAGNode(ctx context.Context, n *DAGNode, execCtx *runtime.ExecutionContext, dag *DAG, ds *dagState) {
+	defer ds.wg.Done()
+	defer func() { <-ds.sem }()
+
+	err := e.executeNode(ctx, n, execCtx)
+
+	ds.mu.Lock()
+	if err != nil && ds.firstErr == nil {
+		ds.firstErr = fmt.Errorf("step %q: %w", n.Step.ID, err)
+	}
+
+	ds.completed++
+
+	if err == nil && n.Step.Goto != nil {
+		readyNodes, triggered := e.handleGoto(n, execCtx, dag, ds.gotoLoops, ds.gotoIterations, ds.inDegree, &ds.completed)
+		if triggered {
+			ds.mu.Unlock()
+
+			for _, rn := range readyNodes {
+				ds.ready <- rn
+			}
+
+			return
+		}
+	}
+
+	allDone := ds.completed >= ds.total
+	ds.mu.Unlock()
+
+	if allDone {
+		close(ds.done)
+
+		return
+	}
+
+	e.enqueueChildren(n.Children, ds)
+}
+
+func (e *Executor) enqueueChildren(children []*DAGNode, ds *dagState) {
+	for _, child := range children {
+		ds.mu.Lock()
+		ds.inDegree[child.Step.ID]--
+		shouldEnqueue := ds.inDegree[child.Step.ID] <= 0
+		ds.mu.Unlock()
+
+		if shouldEnqueue {
+			ds.ready <- child
+		}
+	}
 }
 
 func (e *Executor) executeNode(ctx context.Context, node *DAGNode, execCtx *runtime.ExecutionContext) error {
 	step := node.Step
 	logger := e.logger.With("step", step.ID)
 
-	// Evaluate "when" condition
-	if step.When != "" {
-		result, err := e.eval.EvalBool(step.When, execCtx.ToMap())
-		if err != nil {
-			return fmt.Errorf("eval when condition: %w", err)
-		}
-
-		if !result {
-			execCtx.SetStepResult(step.ID, &runtime.StepResult{Status: runtime.StatusSkipped})
-			e.bus.Publish(event.NewEvent(event.StepSkipped, execCtx.ExecutionID, step.ID, "condition not met"))
-			logger.Info("skipped (when condition false)")
-
-			return nil
-		}
+	if skipped, err := e.evaluateWhenCondition(step, execCtx, logger); skipped || err != nil {
+		return err
 	}
 
 	e.bus.Publish(event.NewEvent(event.StepStarted, execCtx.ExecutionID, step.ID, fmt.Sprintf("step %q started", step.ID)))
@@ -396,44 +370,67 @@ func (e *Executor) executeNode(ctx context.Context, node *DAGNode, execCtx *runt
 
 	stepStartedAt := time.Now()
 
-	// For loop actions, defer resolution of action_config and actions (they contain
-	// {{ loop.* }} templates that can only be resolved at iteration time inside RunAction).
-	var rawActionConfig map[string]any
-	var rawActionsArray []any
-
-	configToResolve := step.Config
-
-	if step.Action == "loop" {
-		needsCopy := false
-
-		if ac, ok := step.Config["action_config"]; ok {
-			rawActionConfig, _ = ac.(map[string]any)
-			needsCopy = true
-		}
-
-		if aa, ok := step.Config["actions"]; ok {
-			rawActionsArray, _ = aa.([]any)
-			needsCopy = true
-		}
-
-		if needsCopy {
-			configToResolve = make(map[string]any, len(step.Config))
-
-			for k, v := range step.Config {
-				if k != "action_config" && k != "actions" {
-					configToResolve[k] = v
-				}
-			}
-		}
+	resolvedConfig, err := e.resolveStepConfig(step, execCtx)
+	if err != nil {
+		return err
 	}
 
-	// Resolve config templates
+	act, err := e.registry.Create(step.Action)
+	if err != nil {
+		return err
+	}
+
+	e.emitStepInput(step, resolvedConfig, execCtx)
+
+	emitLog := e.newLogEmitter(step.ID, execCtx)
+	actCtx := e.createActionContext(ctx, step, resolvedConfig, execCtx, logger, emitLog)
+
+	err = act.Validate(actCtx)
+	if err != nil {
+		return fmt.Errorf("validate: %w", err)
+	}
+
+	output, execErr := e.executeWithRetry(ctx, step, act, actCtx, execCtx, logger)
+	if execErr != nil {
+		return e.handleStepError(ctx, step, output, execErr, execCtx, &stepStartedAt, logger)
+	}
+
+	e.recordStepSuccess(step, output, execCtx, &stepStartedAt, logger)
+
+	return nil
+}
+
+func (e *Executor) evaluateWhenCondition(
+	step parser.Step, execCtx *runtime.ExecutionContext, logger *slog.Logger,
+) (skipped bool, err error) {
+	if step.When == "" {
+		return false, nil
+	}
+
+	result, err := e.eval.EvalBool(step.When, execCtx.ToMap())
+	if err != nil {
+		return false, fmt.Errorf("eval when condition: %w", err)
+	}
+
+	if !result {
+		execCtx.SetStepResult(step.ID, &runtime.StepResult{Status: runtime.StatusSkipped})
+		e.bus.Publish(event.NewEvent(event.StepSkipped, execCtx.ExecutionID, step.ID, "condition not met"))
+		logger.Info("skipped (when condition false)")
+
+		return true, nil
+	}
+
+	return false, nil
+}
+
+func (e *Executor) resolveStepConfig(step parser.Step, execCtx *runtime.ExecutionContext) (map[string]any, error) {
+	configToResolve, rawActionConfig, rawActionsArray := e.extractLoopConfig(step)
+
 	resolvedConfig, err := e.eval.ResolveConfig(configToResolve, execCtx.ToMap())
 	if err != nil {
-		return fmt.Errorf("resolve config: %w", err)
+		return nil, fmt.Errorf("resolve config: %w", err)
 	}
 
-	// Re-inject raw action_config / actions so the loop action can pass them to RunAction
 	if rawActionConfig != nil {
 		resolvedConfig["action_config"] = rawActionConfig
 	}
@@ -442,15 +439,59 @@ func (e *Executor) executeNode(ctx context.Context, node *DAGNode, execCtx *runt
 		resolvedConfig["actions"] = rawActionsArray
 	}
 
-	// Create action
-	act, err := e.registry.Create(step.Action)
-	if err != nil {
-		return err
+	return resolvedConfig, nil
+}
+
+func (e *Executor) extractLoopConfig(
+	step parser.Step,
+) (configToResolve map[string]any, rawActionConfig map[string]any, rawActionsArray []any) {
+	configToResolve = step.Config
+
+	if step.Action != "loop" {
+		return configToResolve, nil, nil
 	}
 
-	// Emit step.input with useful data (not raw scripts)
+	needsCopy := false
+
+	if ac, ok := step.Config["action_config"]; ok {
+		rawActionConfig, _ = ac.(map[string]any)
+		needsCopy = true
+	}
+
+	if aa, ok := step.Config["actions"]; ok {
+		rawActionsArray, _ = aa.([]any)
+		needsCopy = true
+	}
+
+	if needsCopy {
+		configToResolve = make(map[string]any, len(step.Config))
+
+		for k, v := range step.Config {
+			if k != "action_config" && k != "actions" {
+				configToResolve[k] = v
+			}
+		}
+	}
+
+	return configToResolve, rawActionConfig, rawActionsArray
+}
+
+func (e *Executor) emitStepInput(step parser.Step, resolvedConfig map[string]any, execCtx *runtime.ExecutionContext) {
+	inputData := e.prepareStepInput(step, resolvedConfig, execCtx)
+
+	e.bus.Publish(e.sensitive.MaskEvent(event.Event{
+		Type:        event.StepInput,
+		Timestamp:   time.Now(),
+		ExecutionID: execCtx.ExecutionID,
+		StepID:      step.ID,
+		Message:     fmt.Sprintf("step %q input", step.ID),
+		Data:        inputData,
+	}))
+}
+
+func (e *Executor) prepareStepInput(step parser.Step, resolvedConfig map[string]any, execCtx *runtime.ExecutionContext) map[string]any {
 	inputData := map[string]any{}
-	// Resolved config minus script source code
+
 	filteredConfig := make(map[string]any, len(resolvedConfig))
 
 	for k, v := range resolvedConfig {
@@ -462,11 +503,11 @@ func (e *Executor) executeNode(ctx context.Context, node *DAGNode, execCtx *runt
 	if len(filteredConfig) > 0 {
 		inputData["config"] = filteredConfig
 	}
-	// Trigger data if available
+
 	if len(execCtx.TriggerData) > 0 {
 		inputData["trigger"] = execCtx.TriggerData
 	}
-	// Outputs from dependency steps
+
 	deps := make(map[string]any)
 
 	for _, dep := range step.DependsOn {
@@ -479,84 +520,97 @@ func (e *Executor) executeNode(ctx context.Context, node *DAGNode, execCtx *runt
 		inputData["deps"] = deps
 	}
 
-	e.bus.Publish(event.Event{
-		Type:        event.StepInput,
-		Timestamp:   time.Now(),
-		ExecutionID: execCtx.ExecutionID,
-		StepID:      step.ID,
-		Message:     fmt.Sprintf("step %q input", step.ID),
-		Data:        inputData,
-	})
+	return inputData
+}
 
-	emitLog := func(msg string) {
+func (e *Executor) newLogEmitter(stepID string, execCtx *runtime.ExecutionContext) func(string) {
+	return func(msg string) {
 		e.bus.Publish(event.Event{
 			Type:        event.StepLog,
 			Timestamp:   time.Now(),
 			ExecutionID: execCtx.ExecutionID,
-			StepID:      step.ID,
+			StepID:      stepID,
 			Message:     msg,
 			Data:        map[string]any{"stream": true},
 		})
 	}
+}
 
-	actCtx := &action.ActionContext{
-		Context:  ctx,
-		Config:   resolvedConfig,
-		ExecCtx:  execCtx,
-		StepID:   step.ID,
-		Logger:   logger,
-		Services: execCtx.Services,
-		EmitLog:  emitLog,
-		RunAction: func(actionName string, rawConfig map[string]any, loopVars map[string]any) (any, error) {
-			// Build merged context: execCtx.ToMap() + "loop" key
-			ctxMap := execCtx.ToMap()
-			ctxMap["loop"] = loopVars
-
-			// Resolve config templates with merged context
-			resolved, err := e.eval.ResolveConfig(rawConfig, ctxMap)
-			if err != nil {
-				return nil, fmt.Errorf("resolve loop action config: %w", err)
-			}
-
-			// Create action instance
-			subAct, err := e.registry.Create(actionName)
-			if err != nil {
-				return nil, fmt.Errorf("create loop action %q: %w", actionName, err)
-			}
-
-			// Build sub-ActionContext
-			subCtx := &action.ActionContext{
-				Context:  ctx,
-				Config:   resolved,
-				ExecCtx:  execCtx,
-				StepID:   step.ID,
-				Logger:   logger,
-				Services: execCtx.Services,
-				EmitLog:  emitLog,
-			}
-
-			err = subAct.Validate(subCtx)
-			if err != nil {
-				return nil, fmt.Errorf("validate loop action %q: %w", actionName, err)
-			}
-
-			// Execute
-			return subAct.Execute(subCtx)
-		},
+func (e *Executor) createActionContext(
+	ctx context.Context, step parser.Step, resolvedConfig map[string]any,
+	execCtx *runtime.ExecutionContext, logger *slog.Logger, emitLog func(string),
+) *action.ActionContext {
+	return &action.ActionContext{
+		Context:   ctx,
+		Config:    resolvedConfig,
+		ExecCtx:   execCtx,
+		StepID:    step.ID,
+		Logger:    logger,
+		Services:  execCtx.Services,
+		EmitLog:   emitLog,
+		RunAction: e.newRunAction(ctx, step, execCtx, logger, emitLog),
 	}
+}
 
-	err = act.Validate(actCtx)
-	if err != nil {
-		return fmt.Errorf("validate: %w", err)
+func (e *Executor) newRunAction(
+	ctx context.Context, step parser.Step,
+	execCtx *runtime.ExecutionContext, logger *slog.Logger, emitLog func(string),
+) func(string, map[string]any, map[string]any) (any, error) {
+	return func(actionName string, rawConfig map[string]any, loopVars map[string]any) (any, error) {
+		ctxMap := execCtx.ToMap()
+		ctxMap["loop"] = loopVars
+
+		resolved, resolveErr := e.eval.ResolveConfig(rawConfig, ctxMap)
+		if resolveErr != nil {
+			return nil, fmt.Errorf("resolve loop action config: %w", resolveErr)
+		}
+
+		subAct, createErr := e.registry.Create(actionName)
+		if createErr != nil {
+			return nil, fmt.Errorf("create loop action %q: %w", actionName, createErr)
+		}
+
+		subCtx := &action.ActionContext{
+			Context:  ctx,
+			Config:   resolved,
+			ExecCtx:  execCtx,
+			StepID:   step.ID,
+			Logger:   logger,
+			Services: execCtx.Services,
+			EmitLog:  emitLog,
+		}
+
+		validateErr := subAct.Validate(subCtx)
+		if validateErr != nil {
+			return nil, fmt.Errorf("validate loop action %q: %w", actionName, validateErr)
+		}
+
+		return subAct.Execute(subCtx)
 	}
+}
 
-	// Execute with retry
+func (e *Executor) executeWithRetry(
+	ctx context.Context, step parser.Step, act action.Action,
+	actCtx *action.ActionContext, execCtx *runtime.ExecutionContext, logger *slog.Logger,
+) (any, error) {
 	maxAttempts := 1
+
 	var retryDelay time.Duration
 
 	if step.Retry != nil {
 		maxAttempts = step.Retry.MaxAttempts
-		retryDelay, _ = step.Retry.ParsedDelay()
+
+		var delayErr error
+
+		retryDelay, delayErr = step.Retry.ParsedDelay()
+		if delayErr != nil {
+			logger.WarnContext(ctx, "invalid retry delay, using default",
+				"delay", step.Retry.Delay,
+				"error", delayErr,
+			)
+
+			retryDelay = time.Second
+		}
 	}
 
 	var output any
@@ -564,154 +618,185 @@ func (e *Executor) executeNode(ctx context.Context, node *DAGNode, execCtx *runt
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if attempt > 1 {
-			logger.Info("retrying", "attempt", attempt, "max", maxAttempts)
-			e.bus.Publish(event.Event{
-				Type:        event.StepStarted,
-				Timestamp:   time.Now(),
-				ExecutionID: execCtx.ExecutionID,
-				StepID:      step.ID,
-				Message:     fmt.Sprintf("retry attempt %d/%d", attempt, maxAttempts),
-				Data:        map[string]any{"attempt": attempt},
-			})
-
-			select {
-			case <-time.After(retryDelay):
-			case <-ctx.Done():
-				return ctx.Err()
+			err := e.waitForRetry(ctx, step, attempt, maxAttempts, retryDelay, execCtx, logger)
+			if err != nil {
+				return nil, err
 			}
 		}
 
-		// Handle timeout
-		execCtxInner := ctx
-
-		if step.Timeout != "" {
-			dur, err := time.ParseDuration(step.Timeout)
-			if err == nil {
-				var cancel context.CancelFunc
-				execCtxInner, cancel = context.WithTimeout(ctx, dur)
-				defer cancel()
-			}
-		}
-
-		actCtx.Context = execCtxInner
+		timeoutCtx, timeoutCancel := e.applyTimeout(ctx, step)
+		actCtx.Context = timeoutCtx
 
 		output, execErr = act.Execute(actCtx)
+
+		timeoutCancel()
+
 		if execErr == nil {
 			break
 		}
 	}
 
-	if execErr != nil {
-		policy := step.ErrorPolicy // "", "stop", "continue", "ignore"
+	return output, execErr
+}
 
-		if policy == "ignore" {
-			// Suppress error: mark as success with suppressed error in output
-			suppressedOutput := map[string]any{"_suppressed_error": execErr.Error()}
+func (e *Executor) waitForRetry(
+	ctx context.Context, step parser.Step, attempt, maxAttempts int,
+	retryDelay time.Duration, execCtx *runtime.ExecutionContext, logger *slog.Logger,
+) error {
+	logger.Info("retrying", "attempt", attempt, "max", maxAttempts)
+	e.bus.Publish(event.Event{
+		Type:        event.StepStarted,
+		Timestamp:   time.Now(),
+		ExecutionID: execCtx.ExecutionID,
+		StepID:      step.ID,
+		Message:     fmt.Sprintf("retry attempt %d/%d", attempt, maxAttempts),
+		Data:        map[string]any{"attempt": attempt},
+	})
 
-			if outMap, ok := output.(map[string]any); ok {
-				for k, v := range outMap {
-					suppressedOutput[k] = v
-				}
-			}
+	select {
+	case <-time.After(retryDelay):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
 
-			now := time.Now()
-			execCtx.SetStepResult(step.ID, &runtime.StepResult{
-				Status:     runtime.StatusSuccess,
-				Output:     suppressedOutput,
-				StartedAt:  &stepStartedAt,
-				FinishedAt: &now,
-			})
-			logger.Warn("error ignored (error_policy=ignore)", "error", execErr)
-			e.bus.Publish(event.Event{
-				Type:        event.StepCompleted,
-				Timestamp:   time.Now(),
-				ExecutionID: execCtx.ExecutionID,
-				StepID:      step.ID,
-				Message:     fmt.Sprintf("step %q completed (error ignored)", step.ID),
-				Data:        map[string]any{"output": suppressedOutput},
-			})
-
-			return nil
-		}
-
-		failedAt := time.Now()
-		execCtx.SetStepResult(step.ID, &runtime.StepResult{
-			Status:     runtime.StatusFailed,
-			Output:     output,
-			Error:      stepError(step.ID, execErr),
-			StartedAt:  &stepStartedAt,
-			FinishedAt: &failedAt,
-		})
-		e.bus.Publish(event.Event{
-			Type:        event.StepFailed,
-			Timestamp:   time.Now(),
-			ExecutionID: execCtx.ExecutionID,
-			StepID:      step.ID,
-			Message:     execErr.Error(),
-		})
-		logger.Error("failed", "error", execErr)
-
-		// Execute on_error steps
-		if len(step.OnError) > 0 {
-			e.executeOnError(ctx, step, execCtx)
-		}
-
-		if policy == "continue" {
-			// Step failed but dependants can still execute
-			logger.Warn("continuing despite error (error_policy=continue)")
-			return nil
-		}
-
-		// Default: "stop" or empty — propagate error
-		return execErr
+func (e *Executor) applyTimeout(ctx context.Context, step parser.Step) (context.Context, context.CancelFunc) {
+	if step.Timeout == "" {
+		return ctx, func() {}
 	}
 
+	dur, err := time.ParseDuration(step.Timeout)
+	if err == nil {
+		return context.WithTimeout(ctx, dur)
+	}
+
+	return ctx, func() {}
+}
+
+func (e *Executor) handleStepError(
+	ctx context.Context, step parser.Step, output any, execErr error,
+	execCtx *runtime.ExecutionContext, stepStartedAt *time.Time, logger *slog.Logger,
+) error {
+	if step.ErrorPolicy == "ignore" {
+		return e.handleIgnoredError(step, output, execErr, execCtx, stepStartedAt, logger)
+	}
+
+	failedAt := time.Now()
+	execCtx.SetStepResult(step.ID, &runtime.StepResult{
+		Status:     runtime.StatusFailed,
+		Output:     output,
+		Error:      stepError(step.ID, execErr),
+		StartedAt:  stepStartedAt,
+		FinishedAt: &failedAt,
+	})
+
+	e.bus.Publish(event.Event{
+		Type:        event.StepFailed,
+		Timestamp:   time.Now(),
+		ExecutionID: execCtx.ExecutionID,
+		StepID:      step.ID,
+		Message:     execErr.Error(),
+	})
+	logger.Error("failed", "error", execErr)
+
+	if len(step.OnError) > 0 {
+		e.executeOnError(ctx, step, execCtx)
+	}
+
+	if step.ErrorPolicy == "continue" {
+		logger.Warn("continuing despite error (error_policy=continue)")
+
+		return nil
+	}
+
+	return execErr
+}
+
+func (e *Executor) handleIgnoredError(
+	step parser.Step, output any, execErr error,
+	execCtx *runtime.ExecutionContext, stepStartedAt *time.Time, logger *slog.Logger,
+) error {
+	suppressedOutput := map[string]any{"_suppressed_error": execErr.Error()}
+
+	if outMap, ok := output.(map[string]any); ok {
+		maps.Copy(suppressedOutput, outMap)
+	}
+
+	now := time.Now()
+	execCtx.SetStepResult(step.ID, &runtime.StepResult{
+		Status:     runtime.StatusSuccess,
+		Output:     suppressedOutput,
+		StartedAt:  stepStartedAt,
+		FinishedAt: &now,
+	})
+	logger.Warn("error ignored (error_policy=ignore)", "error", execErr)
+
+	e.bus.Publish(e.sensitive.MaskEvent(event.Event{
+		Type:        event.StepCompleted,
+		Timestamp:   time.Now(),
+		ExecutionID: execCtx.ExecutionID,
+		StepID:      step.ID,
+		Message:     fmt.Sprintf("step %q completed (error ignored)", step.ID),
+		Data:        map[string]any{"output": suppressedOutput},
+	}))
+
+	return nil
+}
+
+func (e *Executor) recordStepSuccess(
+	step parser.Step, output any, execCtx *runtime.ExecutionContext,
+	stepStartedAt *time.Time, logger *slog.Logger,
+) {
 	completedAt := time.Now()
 
 	execCtx.SetStepResult(step.ID, &runtime.StepResult{
 		Status:     runtime.StatusSuccess,
 		Output:     output,
-		StartedAt:  &stepStartedAt,
+		StartedAt:  stepStartedAt,
 		FinishedAt: &completedAt,
 	})
 
-	// Emit step.log for log actions so the message appears in the event stream
-	if step.Action == "log" {
-		if outMap, ok := output.(map[string]any); ok {
-			logMsg, _ := outMap["message"].(string)
-			logLevel, _ := outMap["level"].(string)
-			e.bus.Publish(event.Event{
-				Type:        event.StepLog,
-				Timestamp:   time.Now(),
-				ExecutionID: execCtx.ExecutionID,
-				StepID:      step.ID,
-				Message:     logMsg,
-				Data:        map[string]any{"level": logLevel},
-			})
-		}
-	}
+	e.emitLogActionOutput(step, output, execCtx)
 
-	// Emit step.output with result data
-	e.bus.Publish(event.Event{
+	e.bus.Publish(e.sensitive.MaskEvent(event.Event{
 		Type:        event.StepOutput,
 		Timestamp:   time.Now(),
 		ExecutionID: execCtx.ExecutionID,
 		StepID:      step.ID,
 		Message:     fmt.Sprintf("step %q output", step.ID),
 		Data:        map[string]any{"output": output},
-	})
+	}))
 
-	e.bus.Publish(event.Event{
+	e.bus.Publish(e.sensitive.MaskEvent(event.Event{
 		Type:        event.StepCompleted,
 		Timestamp:   time.Now(),
 		ExecutionID: execCtx.ExecutionID,
 		StepID:      step.ID,
 		Message:     fmt.Sprintf("step %q completed", step.ID),
 		Data:        map[string]any{"output": output},
-	})
+	}))
 	logger.Info("completed")
+}
 
-	return nil
+func (e *Executor) emitLogActionOutput(step parser.Step, output any, execCtx *runtime.ExecutionContext) {
+	if step.Action != "log" {
+		return
+	}
+
+	if outMap, ok := output.(map[string]any); ok {
+		logMsg, _ := outMap["message"].(string)
+		logLevel, _ := outMap["level"].(string)
+
+		e.bus.Publish(event.Event{
+			Type:        event.StepLog,
+			Timestamp:   time.Now(),
+			ExecutionID: execCtx.ExecutionID,
+			StepID:      step.ID,
+			Message:     logMsg,
+			Data:        map[string]any{"level": logLevel},
+		})
+	}
 }
 
 func (e *Executor) executeOnError(ctx context.Context, step parser.Step, execCtx *runtime.ExecutionContext) {
@@ -757,6 +842,7 @@ func stepError(stepID string, err error) *runtime.StepError {
 	} else if errors.Is(err, context.Canceled) {
 		code = "cancelled"
 	}
+
 	return &runtime.StepError{Message: err.Error(), Code: code, StepID: stepID}
 }
 
@@ -766,5 +852,6 @@ func hasFailedSteps(execCtx *runtime.ExecutionContext) bool {
 			return true
 		}
 	}
+
 	return false
 }

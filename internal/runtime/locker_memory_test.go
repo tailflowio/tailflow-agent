@@ -17,6 +17,10 @@ func TestMemoryLocker(t *testing.T) {
 	suite.Run(t, new(MemoryLockerTestSuite))
 }
 
+func (s *MemoryLockerTestSuite) SetupTest() {
+	// required by convention
+}
+
 func (s *MemoryLockerTestSuite) TestLockUnlock() {
 	l := NewMemoryLocker()
 	ctx := context.Background()

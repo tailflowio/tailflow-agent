@@ -5,6 +5,9 @@ import (
 	"time"
 )
 
+// jsonUnmarshalFn is used by SnapshotData. Override in tests to simulate unmarshal errors.
+var jsonUnmarshalFn = json.Unmarshal
+
 type EventType string
 
 const (
@@ -47,14 +50,18 @@ func SnapshotData(data map[string]any) map[string]any {
 	if data == nil {
 		return nil
 	}
+
 	b, err := json.Marshal(data)
 	if err != nil {
 		return nil
 	}
+
 	var cp map[string]any
-	err = json.Unmarshal(b, &cp)
+
+	err = jsonUnmarshalFn(b, &cp)
 	if err != nil {
 		return nil
 	}
+
 	return cp
 }

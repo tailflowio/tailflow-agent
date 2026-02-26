@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/suite"
@@ -15,6 +16,9 @@ type MemoryKVStoreTestSuite struct {
 
 func TestMemoryKVStore(t *testing.T) {
 	suite.Run(t, new(MemoryKVStoreTestSuite))
+}
+
+func (s *MemoryKVStoreTestSuite) SetupTest() { // required by convention
 }
 
 func (s *MemoryKVStoreTestSuite) TestGetNotFound() {
@@ -37,7 +41,7 @@ func (s *MemoryKVStoreTestSuite) TestSetAndGet() {
 	s.Equal("value1", val)
 }
 
-func (s *MemoryKVStoreTestSuite) TestOverwrite() {
+func (s *MemoryKVStoreTestSuite) TestOverwrite_ReplacesValue() {
 	st := NewMemoryKVStore()
 	ctx := context.Background()
 
@@ -71,21 +75,21 @@ func (s *MemoryKVStoreTestSuite) TestConcurrentAccess() {
 }
 
 func (s *MemoryKVStoreTestSuite) TestTTL_Expired() {
-	st := NewMemoryKVStore()
-	ctx := context.Background()
+	synctest.Test(s.T(), func(t *testing.T) {
+		st := NewMemoryKVStore()
+		ctx := context.Background()
 
-	st.Set(ctx, "key1", "value1", 10*time.Millisecond)
+		st.Set(ctx, "key1", "value1", 10*time.Millisecond)
 
-	// Should be found immediately
-	val, found := st.Get(ctx, "key1")
-	s.True(found)
-	s.Equal("value1", val)
+		val, found := st.Get(ctx, "key1")
+		s.True(found)
+		s.Equal("value1", val)
 
-	// Wait for expiration
-	s.Eventually(func() bool {
-		_, found := st.Get(ctx, "key1")
-		return !found
-	}, 2*time.Second, 10*time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
+
+		_, found = st.Get(ctx, "key1")
+		s.False(found)
+	})
 }
 
 func (s *MemoryKVStoreTestSuite) TestTTL_NotExpired() {
@@ -111,21 +115,19 @@ func (s *MemoryKVStoreTestSuite) TestTTL_ZeroPermanent() {
 }
 
 func (s *MemoryKVStoreTestSuite) TestOverwriteResetsTTL() {
-	st := NewMemoryKVStore()
-	ctx := context.Background()
+	synctest.Test(s.T(), func(t *testing.T) {
+		st := NewMemoryKVStore()
+		ctx := context.Background()
 
-	// Set with short TTL
-	st.Set(ctx, "key1", "value1", 10*time.Millisecond)
+		st.Set(ctx, "key1", "value1", 10*time.Millisecond)
+		st.Set(ctx, "key1", "value2", 0)
 
-	// Overwrite with no TTL (permanent)
-	st.Set(ctx, "key1", "value2", 0)
+		time.Sleep(20 * time.Millisecond)
 
-	// Should still exist because TTL was reset (wait long enough for original TTL to expire)
-	time.Sleep(20 * time.Millisecond)
-
-	val, found := st.Get(ctx, "key1")
-	s.True(found)
-	s.Equal("value2", val)
+		val, found := st.Get(ctx, "key1")
+		s.True(found)
+		s.Equal("value2", val)
+	})
 }
 
 func (s *MemoryKVStoreTestSuite) TestDelete_Existing() {
@@ -152,13 +154,16 @@ func (s *MemoryKVStoreTestSuite) TestDelete_NonExistent() {
 }
 
 func (s *MemoryKVStoreTestSuite) TestDelete_Expired() {
-	st := NewMemoryKVStore()
-	ctx := context.Background()
+	synctest.Test(s.T(), func(t *testing.T) {
+		st := NewMemoryKVStore()
+		ctx := context.Background()
 
-	st.Set(ctx, "key1", "value1", 10*time.Millisecond)
+		st.Set(ctx, "key1", "value1", 10*time.Millisecond)
 
-	s.Eventually(func() bool {
+		time.Sleep(20 * time.Millisecond)
+
 		deleted, err := st.Delete(ctx, "key1")
-		return err == nil && !deleted
-	}, 2*time.Second, 10*time.Millisecond)
+		s.NoError(err)
+		s.False(deleted)
+	})
 }

@@ -121,8 +121,15 @@ func (c *Collector) updateCPUPercent(metrics *ProcessMetrics, cpuTicks int64) {
 	c.prevTime = now
 }
 
+// procStatPath, procStatusPath, procNetDevPath are overridden in tests on non-Linux.
+var (
+	procStatPath   = "/proc/self/stat"
+	procStatusPath = "/proc/self/status"
+	procNetDevPath = "/proc/self/net/dev"
+)
+
 func readCPUTicks() (int64, bool) {
-	data, err := os.ReadFile("/proc/self/stat")
+	data, err := os.ReadFile(procStatPath)
 	if err != nil {
 		return 0, false
 	}
@@ -151,7 +158,7 @@ func readCPUTicks() (int64, bool) {
 }
 
 func readRSSKB() (int64, bool) {
-	f, err := os.Open("/proc/self/status")
+	f, err := os.Open(procStatusPath)
 	if err != nil {
 		return 0, false
 	}
@@ -184,7 +191,7 @@ func readRSSKB() (int64, bool) {
 }
 
 func readNetDev() (rx int64, tx int64, ok bool) {
-	f, err := os.Open("/proc/self/net/dev")
+	f, err := os.Open(procNetDevPath)
 	if err != nil {
 		return 0, 0, false
 	}

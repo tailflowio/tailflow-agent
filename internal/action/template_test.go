@@ -16,7 +16,7 @@ func TestTemplateAction(t *testing.T) {
 
 func (s *TemplateActionTestSuite) SetupTest() {}
 
-func (s *TemplateActionTestSuite) TestExecute() {
+func (s *TemplateActionTestSuite) TestExecute_InterpolatesData() {
 	a := NewTemplateAction()
 	ctx := newTestContext(map[string]any{
 		"template": "Hello, {{ .name }}!",
@@ -60,4 +60,22 @@ func (s *TemplateActionTestSuite) TestValidateMissingTemplate() {
 	a := NewTemplateAction()
 	err := a.Validate(newTestContext(map[string]any{}))
 	s.Error(err)
+}
+
+func (s *TemplateActionTestSuite) TestValidateOK() {
+	a := NewTemplateAction()
+	err := a.Validate(newTestContext(map[string]any{"template": "hello"}))
+	s.NoError(err)
+}
+
+func (s *TemplateActionTestSuite) TestExecuteError() {
+	a := NewTemplateAction()
+	ctx := newTestContext(map[string]any{
+		// Call a function that doesn't exist - this will cause a template execution error
+		"template": "{{ call .nonexistent }}",
+	})
+
+	_, err := a.Execute(ctx)
+	s.Error(err)
+	s.Contains(err.Error(), "template")
 }

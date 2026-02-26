@@ -12,6 +12,7 @@ type Workflow struct {
 	Author      string            `json:"author,omitempty"      yaml:"author,omitempty"`
 	Params      []Param           `json:"params,omitempty"      yaml:"params,omitempty"`
 	Env         map[string]string `json:"env,omitempty"         yaml:"env,omitempty"`
+	Sensitive   []string          `json:"sensitive,omitempty"   yaml:"sensitive,omitempty"`
 	Trigger     *Trigger          `json:"trigger,omitempty"     yaml:"trigger,omitempty"`
 	OnError     []Step            `json:"on_error,omitempty"    yaml:"on_error,omitempty"`
 	Steps       []Step            `json:"steps"                 yaml:"steps"`

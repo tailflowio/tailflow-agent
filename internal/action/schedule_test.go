@@ -2,6 +2,7 @@ package action
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"testing"
@@ -115,4 +116,112 @@ func (s *ScheduleActionTestSuite) TestExecuteWithDelay() {
 	s.NotEmpty(outMap["scheduled_at"])
 	s.Equal(30*time.Minute, scheduledDelay)
 	s.Equal("value", scheduledParams["key"])
+}
+
+func (s *ScheduleActionTestSuite) TestComputeDelayAtFuture() {
+	futureTime := time.Now().Add(2 * time.Hour).Format(time.RFC3339)
+	d := computeDelay(map[string]any{"at": futureTime})
+	// Should be roughly 2 hours (allow some slack for test execution)
+	s.InDelta(2*time.Hour, d, float64(5*time.Second))
+}
+
+func (s *ScheduleActionTestSuite) TestComputeDelayAtPast() {
+	pastTime := time.Now().Add(-1 * time.Hour).Format(time.RFC3339)
+	d := computeDelay(map[string]any{"at": pastTime})
+	s.Equal(time.Duration(0), d)
+}
+
+func (s *ScheduleActionTestSuite) TestComputeDelayNoConfig() {
+	d := computeDelay(map[string]any{})
+	s.Equal(time.Duration(0), d)
+}
+
+func (s *ScheduleActionTestSuite) TestExtractParamsNone() {
+	params := extractParams(map[string]any{})
+	s.Nil(params)
+}
+
+func (s *ScheduleActionTestSuite) TestExtractParamsNonMap() {
+	params := extractParams(map[string]any{"params": "not-a-map"})
+	s.Nil(params)
+}
+
+func (s *ScheduleActionTestSuite) TestValidateNonStringDelay() {
+	a := &ScheduleAction{}
+	ctx := &ActionContext{
+		Context: context.Background(),
+		Config:  map[string]any{"delay": 123},
+	}
+	err := a.Validate(ctx)
+	s.Error(err)
+	s.Contains(err.Error(), "must be a string")
+}
+
+func (s *ScheduleActionTestSuite) TestValidateNonStringAt() {
+	a := &ScheduleAction{}
+	ctx := &ActionContext{
+		Context: context.Background(),
+		Config:  map[string]any{"at": 123},
+	}
+	err := a.Validate(ctx)
+	s.Error(err)
+	s.Contains(err.Error(), "must be an RFC3339")
+}
+
+func (s *ScheduleActionTestSuite) TestExecuteScheduleError() {
+	a := NewScheduleAction()
+
+	ctx := &ActionContext{
+		Context: context.Background(),
+		Config:  map[string]any{"delay": "1m"},
+		Logger:  slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+		Services: &runtime.ActionServices{
+			ScheduleExecution: func(delay time.Duration, params map[string]any) (string, error) {
+				return "", fmt.Errorf("storage full")
+			},
+		},
+	}
+
+	_, err := a.Execute(ctx)
+	s.Error(err)
+	s.Contains(err.Error(), "storage full")
+}
+
+func (s *ScheduleActionTestSuite) TestExecuteWithAt() {
+	a := NewScheduleAction()
+
+	futureTime := time.Now().Add(1 * time.Hour).Format(time.RFC3339)
+	var scheduledDelay time.Duration
+
+	ctx := &ActionContext{
+		Context: context.Background(),
+		Config:  map[string]any{"at": futureTime},
+		Logger:  slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+		Services: &runtime.ActionServices{
+			ScheduleExecution: func(delay time.Duration, params map[string]any) (string, error) {
+				scheduledDelay = delay
+				return "sched-id", nil
+			},
+		},
+	}
+
+	out, err := a.Execute(ctx)
+	s.Require().NoError(err)
+	s.Equal("sched-id", out.(map[string]any)["execution_id"])
+	s.InDelta(1*time.Hour, scheduledDelay, float64(5*time.Second))
+}
+
+func (s *ScheduleActionTestSuite) TestExecuteNilScheduleExecution() {
+	a := NewScheduleAction()
+
+	ctx := &ActionContext{
+		Context:  context.Background(),
+		Config:   map[string]any{"delay": "1m"},
+		Logger:   slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+		Services: &runtime.ActionServices{},
+	}
+
+	_, err := a.Execute(ctx)
+	s.Error(err)
+	s.Contains(err.Error(), "server mode")
 }

@@ -100,18 +100,20 @@ func (s *ContextTestSuite) TestToMap_NoError() {
 func (s *ContextTestSuite) TestConcurrentAccess() {
 	ctx := NewExecutionContext("exec-1", "test-wf", nil, nil)
 
-	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
-		wg.Add(2)
-		stepID := "step" + string(rune('a'+i%26))
-		go func() {
-			defer wg.Done()
-			ctx.SetStepResult(stepID, &StepResult{Status: "success"})
-		}()
-		go func() {
-			defer wg.Done()
-			ctx.GetStepResult(stepID)
-		}()
-	}
-	wg.Wait()
+	s.NotPanics(func() {
+		var wg sync.WaitGroup
+		for i := 0; i < 100; i++ {
+			wg.Add(2)
+			stepID := "step" + string(rune('a'+i%26))
+			go func() {
+				defer wg.Done()
+				ctx.SetStepResult(stepID, &StepResult{Status: "success"})
+			}()
+			go func() {
+				defer wg.Done()
+				ctx.GetStepResult(stepID)
+			}()
+		}
+		wg.Wait()
+	}, "concurrent access to ExecutionContext should not panic")
 }

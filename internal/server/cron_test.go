@@ -12,15 +12,19 @@ import (
 
 type CronSchedulerTestSuite struct {
 	suite.Suite
+	logger *slog.Logger
 }
 
 func TestCronScheduler(t *testing.T) {
 	suite.Run(t, new(CronSchedulerTestSuite))
 }
 
+func (s *CronSchedulerTestSuite) SetupTest() {
+	s.logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+}
+
 func (s *CronSchedulerTestSuite) TestAddAndRun() {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	cs := NewCronScheduler(logger)
+	cs := NewCronScheduler(s.logger)
 
 	var count atomic.Int32
 	err := cs.Add("* * * * * *", func() { // every second (cron/v3 supports seconds with 6 fields via cron.SecondOptional)
@@ -46,17 +50,29 @@ func (s *CronSchedulerTestSuite) TestAddAndRun() {
 }
 
 func (s *CronSchedulerTestSuite) TestInvalidSpec() {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	cs := NewCronScheduler(logger)
+	cs := NewCronScheduler(s.logger)
 
 	err := cs.Add("invalid cron", func() {})
 	s.Error(err)
 }
 
-func (s *CronSchedulerTestSuite) TestStop() {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	cs := NewCronScheduler(logger)
+func (s *CronSchedulerTestSuite) TestStop_AfterStart() {
+	cs := NewCronScheduler(s.logger)
 
 	cs.Start()
-	cs.Stop() // Should not panic
+	s.NotPanics(func() {
+		cs.Stop()
+	}, "Stop after Start should not panic")
+}
+
+func (s *CronSchedulerTestSuite) TestNextRun_Valid() {
+	// Use a standard 5-field cron expression: every minute
+	next := NextRun("* * * * *")
+	s.NotNil(next, "NextRun should return a non-nil time for a valid spec")
+	s.True(next.After(time.Now().Add(-1*time.Second)), "next run should be in the future")
+}
+
+func (s *CronSchedulerTestSuite) TestNextRun_Invalid() {
+	next := NextRun("invalid cron expression")
+	s.Nil(next, "NextRun should return nil for an invalid spec")
 }

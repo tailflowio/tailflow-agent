@@ -99,3 +99,31 @@ func (s *StringReplaceActionTestSuite) TestMultiplePatterns() {
 	s.Require().NoError(err)
 	s.Equal("##  ###  Trafic OK", out.(map[string]any)["result"])
 }
+
+func (s *StringReplaceActionTestSuite) TestValidateOK() {
+	a := NewStringReplaceAction()
+	err := a.Validate(newTestContext(map[string]any{
+		"input":   "hello",
+		"pattern": "world",
+	}))
+	s.NoError(err)
+}
+
+func (s *StringReplaceActionTestSuite) TestValidateInvalidRegexInArray() {
+	a := NewStringReplaceAction()
+	err := a.Validate(newTestContext(map[string]any{
+		"input":   "hello",
+		"pattern": []any{"[invalid"},
+	}))
+	s.Error(err)
+	s.Contains(err.Error(), "invalid pattern")
+}
+
+func (s *StringReplaceActionTestSuite) TestValidateValidArrayPattern() {
+	a := NewStringReplaceAction()
+	err := a.Validate(newTestContext(map[string]any{
+		"input":   "hello",
+		"pattern": []any{`\d+`, `[a-z]+`},
+	}))
+	s.NoError(err)
+}

@@ -312,6 +312,14 @@ if response.Data == nil {
 }
 ```
 
+#### ❌ NEVER use separator/divider comments
+```go
+// ❌ NO section separators
+// ---------- helpers ----------
+// --- Validate tests ---
+// ---------------------------------------------------------------------------
+```
+
 #### ❌ NEVER comment (99% of cases)
 ```go
 // ❌ ALL these cases: ZERO comments

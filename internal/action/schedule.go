@@ -9,7 +9,6 @@ import (
 // ScheduleAction schedules a future workflow execution.
 type ScheduleAction struct{}
 
-// NewScheduleAction creates a new ScheduleAction.
 func NewScheduleAction() Action { return &ScheduleAction{} }
 
 // Validate checks the schedule action configuration.

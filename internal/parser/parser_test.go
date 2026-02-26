@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/suite"
@@ -12,6 +13,10 @@ type ParserTestSuite struct {
 
 func TestParser(t *testing.T) {
 	suite.Run(t, new(ParserTestSuite))
+}
+
+func (s *ParserTestSuite) SetupTest() {
+	// required by convention
 }
 
 func (s *ParserTestSuite) TestParseBytes_ValidWorkflow() {
@@ -266,16 +271,187 @@ func (s *ParserTestSuite) TestValidate_MultipleTriggers() {
 	s.ErrorContains(err, "only have one trigger")
 }
 
-func (s *ParserTestSuite) TestRetryConfig_ParsedDelay() {
-	r := &RetryConfig{MaxAttempts: 3, Delay: "5s"}
-	d, err := r.ParsedDelay()
+func (s *ParserTestSuite) TestParse_ValidFile() {
+	// Write a temporary YAML file
+	tmpFile := s.T().TempDir() + "/test.yaml"
+	content := `version: "2.0"
+name: "file-test"
+steps:
+  - id: step1
+    action: log
+    config:
+      message: "hello"
+`
+	err := os.WriteFile(tmpFile, []byte(content), 0644)
 	s.Require().NoError(err)
-	s.Equal(5_000_000_000, int(d))
+
+	wf, err := Parse(tmpFile)
+	s.Require().NoError(err)
+	s.Equal("file-test", wf.Name)
+	s.Len(wf.Steps, 1)
 }
 
-func (s *ParserTestSuite) TestRetryConfig_ParsedDelay_Default() {
-	r := &RetryConfig{MaxAttempts: 3}
-	d, err := r.ParsedDelay()
+func (s *ParserTestSuite) TestParse_FileNotFound() {
+	_, err := Parse("/nonexistent/path/file.yaml")
+	s.Error(err)
+	s.Contains(err.Error(), "read workflow file")
+}
+
+func (s *ParserTestSuite) TestParse_InvalidYAML() {
+	tmpFile := s.T().TempDir() + "/bad.yaml"
+	err := os.WriteFile(tmpFile, []byte(":::invalid:::yaml"), 0644)
 	s.Require().NoError(err)
-	s.Equal(1_000_000_000, int(d))
+
+	_, err = Parse(tmpFile)
+	s.Error(err)
+}
+
+func (s *ParserTestSuite) TestParseBytes_InvalidYAML() {
+	_, err := ParseBytes([]byte("not: valid: yaml: ["))
+	s.Error(err)
+	s.Contains(err.Error(), "parse YAML")
+}
+
+func (s *ParserTestSuite) TestParseBytes_ValidationFails() {
+	yaml := `
+version: "1.0"
+name: "test"
+steps:
+  - id: s1
+    action: log
+`
+	_, err := ParseBytes([]byte(yaml))
+	s.Error(err)
+	s.Contains(err.Error(), "unsupported version")
+}
+
+func (s *ParserTestSuite) TestValidate_HTTPTriggerMissingPath() {
+	w := &Workflow{
+		Version: "2.0",
+		Name:    "test",
+		Trigger: &Trigger{HTTP: &HTTPTrigger{Method: "GET"}},
+		Steps:   []Step{{ID: "s1", Action: "log"}},
+	}
+	err := Validate(w)
+	s.ErrorContains(err, "path")
+}
+
+func (s *ParserTestSuite) TestValidate_HTTPTriggerMissingMethod() {
+	w := &Workflow{
+		Version: "2.0",
+		Name:    "test",
+		Trigger: &Trigger{HTTP: &HTTPTrigger{Path: "/test"}},
+		Steps:   []Step{{ID: "s1", Action: "log"}},
+	}
+	err := Validate(w)
+	s.ErrorContains(err, "method")
+}
+
+func (s *ParserTestSuite) TestValidate_WebhookTriggerMissingPath() {
+	w := &Workflow{
+		Version: "2.0",
+		Name:    "test",
+		Trigger: &Trigger{Webhook: &WebhookTrigger{}},
+		Steps:   []Step{{ID: "s1", Action: "log"}},
+	}
+	err := Validate(w)
+	s.ErrorContains(err, "path")
+}
+
+func (s *ParserTestSuite) TestValidate_RabbitMQTriggerMissingURL() {
+	w := &Workflow{
+		Version: "2.0",
+		Name:    "test",
+		Trigger: &Trigger{RabbitMQ: &RabbitMQTrigger{Queue: "q1"}},
+		Steps:   []Step{{ID: "s1", Action: "log"}},
+	}
+	err := Validate(w)
+	s.ErrorContains(err, "url")
+}
+
+func (s *ParserTestSuite) TestValidate_RabbitMQTriggerMissingQueue() {
+	w := &Workflow{
+		Version: "2.0",
+		Name:    "test",
+		Trigger: &Trigger{RabbitMQ: &RabbitMQTrigger{URL: "amqp://localhost"}},
+		Steps:   []Step{{ID: "s1", Action: "log"}},
+	}
+	err := Validate(w)
+	s.ErrorContains(err, "queue")
+}
+
+func (s *ParserTestSuite) TestValidate_ParamMissingName() {
+	w := &Workflow{
+		Version: "2.0",
+		Name:    "test",
+		Params:  []Param{{Type: "string"}},
+		Steps:   []Step{{ID: "s1", Action: "log"}},
+	}
+	err := Validate(w)
+	s.ErrorContains(err, "must have a name")
+}
+
+func (s *ParserTestSuite) TestValidate_ParamMissingType() {
+	w := &Workflow{
+		Version: "2.0",
+		Name:    "test",
+		Params:  []Param{{Name: "p"}},
+		Steps:   []Step{{ID: "s1", Action: "log"}},
+	}
+	err := Validate(w)
+	s.ErrorContains(err, "must have a type")
+}
+
+func (s *ParserTestSuite) TestValidate_OnError_MissingID() {
+	w := &Workflow{
+		Version: "2.0",
+		Name:    "test",
+		Steps: []Step{{
+			ID:     "s1",
+			Action: "log",
+			OnError: []Step{{Action: "log"}},
+		}},
+	}
+	err := Validate(w)
+	s.ErrorContains(err, "on_error")
+	s.ErrorContains(err, "must have an id")
+}
+
+func (s *ParserTestSuite) TestValidate_OnError_MissingAction() {
+	w := &Workflow{
+		Version: "2.0",
+		Name:    "test",
+		Steps: []Step{{
+			ID:     "s1",
+			Action: "log",
+			OnError: []Step{{ID: "err1"}},
+		}},
+	}
+	err := Validate(w)
+	s.ErrorContains(err, "on_error")
+	s.ErrorContains(err, "must have an action")
+}
+
+func (s *ParserTestSuite) TestValidate_WorkflowOnError_MissingID() {
+	w := &Workflow{
+		Version: "2.0",
+		Name:    "test",
+		Steps:   []Step{{ID: "s1", Action: "log"}},
+		OnError: []Step{{Action: "log"}},
+	}
+	err := Validate(w)
+	s.ErrorContains(err, "workflow on_error")
+	s.ErrorContains(err, "must have an id")
+}
+
+func (s *ParserTestSuite) TestValidate_WorkflowOnError_MissingAction() {
+	w := &Workflow{
+		Version: "2.0",
+		Name:    "test",
+		Steps:   []Step{{ID: "s1", Action: "log"}},
+		OnError: []Step{{ID: "err1"}},
+	}
+	err := Validate(w)
+	s.ErrorContains(err, "workflow on_error")
+	s.ErrorContains(err, "must have an action")
 }

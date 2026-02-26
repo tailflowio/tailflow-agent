@@ -2,12 +2,22 @@ package action
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/suite"
 	"github.com/tailflow/tailflow/internal/runtime"
 )
+
+// errorKVStore wraps MemoryKVStore but always returns an error on Delete.
+type errorKVStore struct {
+	runtime.MemoryKVStore
+}
+
+func (e *errorKVStore) Delete(_ context.Context, _ string) (bool, error) {
+	return false, fmt.Errorf("delete failed")
+}
 
 func newTestContextWithKVStore(config map[string]any) (*ActionContext, *runtime.MemoryKVStore) {
 	kvStore := runtime.NewMemoryKVStore()
@@ -144,8 +154,6 @@ func (s *KVActionTestSuite) TestSetWithTTL() {
 	s.Equal("5m0s", result["ttl"])
 }
 
-// --- kv.delete tests ---
-
 func (s *KVActionTestSuite) TestDeleteMissingKey() {
 	a := NewKVDeleteAction()
 	ctx, _ := newTestContextWithKVStore(map[string]any{})
@@ -193,4 +201,24 @@ func (s *KVActionTestSuite) TestDeleteNonExistent() {
 	result := out.(map[string]any)
 	s.Equal("missing", result["key"])
 	s.False(result["deleted"].(bool))
+}
+
+func (s *KVActionTestSuite) TestDeleteError() {
+	a := NewKVDeleteAction()
+	errStore := &errorKVStore{}
+	services := &runtime.ActionServices{
+		KVStore: errStore,
+	}
+	ctx := &ActionContext{
+		Context:  context.Background(),
+		Config:   map[string]any{"key": "mykey"},
+		ExecCtx:  runtime.NewExecutionContext("test-exec", "test-wf", nil, nil),
+		StepID:   "test-step",
+		Logger:   slog.Default(),
+		Services: services,
+	}
+
+	_, err := a.Execute(ctx)
+	s.Error(err)
+	s.Contains(err.Error(), "delete failed")
 }
