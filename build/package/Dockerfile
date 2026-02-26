@@ -7,7 +7,7 @@ COPY web/frontend/ ./
 RUN npx vite build
 
 # Stage 2: Build Go binary
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26-alpine AS builder
 RUN apk add --no-cache ca-certificates tzdata
 ARG VERSION=dev
 WORKDIR /app
