@@ -55,6 +55,7 @@ func Validate(w *Workflow) error {
 		validateParams,
 		validateTrigger,
 		validateOnError,
+		validateTesting,
 	} {
 		err := fn(w)
 		if err != nil {
@@ -169,6 +170,38 @@ func validateTrigger(w *Workflow) error {
 
 		if t.RabbitMQ.Queue == "" {
 			return errors.New("validation: rabbitmq trigger must have a queue")
+		}
+	}
+
+	return nil
+}
+
+func validateTesting(w *Workflow) error {
+	for _, s := range w.Steps {
+		names := make(map[string]bool, len(s.Testing))
+
+		for i, tc := range s.Testing {
+			if tc.Name == "" {
+				return fmt.Errorf("validation: step %q testing[%d] must have a name", s.ID, i)
+			}
+
+			if names[tc.Name] {
+				return fmt.Errorf("validation: step %q has duplicate test case name %q", s.ID, tc.Name)
+			}
+
+			names[tc.Name] = true
+
+			if tc.Output != nil && tc.Error != nil {
+				return fmt.Errorf("validation: step %q test case %q cannot have both output and error", s.ID, tc.Name)
+			}
+
+			if tc.Expect != nil && tc.Expect.Status != "" {
+				switch tc.Expect.Status {
+				case "success", "failed", "skipped":
+				default:
+					return fmt.Errorf("validation: step %q test case %q has invalid expect status %q", s.ID, tc.Name, tc.Expect.Status)
+				}
+			}
 		}
 	}
 

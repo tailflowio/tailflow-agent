@@ -416,6 +416,18 @@ TailFlow ships with **34 built-in actions**:
     target: my-step
     when: "steps.my-step.output.status == 'retry'"
     max_iterations: 5
+  testing:                          # Inline test cases (tailflow test)
+    - name: "happy-path"
+      output:                       # Mock: skip execution, inject output
+        order_id: 42
+    - name: "api-down"
+      error:                        # Mock error: inject failure
+        message: "connection refused"
+    - name: "verify-result"
+      expect:                       # Assertion: run normally, then verify
+        status: "success"
+        output:
+          order_id: 42
 ```
 
 ---
@@ -658,6 +670,37 @@ Validate a workflow file without executing it.
 tailflow validate <workflow.yaml>
 ```
 
+### `tailflow test`
+
+Run inline test cases defined in workflow steps.
+
+```bash
+# Run all test cases
+tailflow test <workflow.yaml>
+
+# Run a specific test case
+tailflow test <workflow.yaml> --case happy-path
+
+# List all test cases as a matrix
+tailflow test <workflow.yaml> --list
+```
+
+| Flag | Description |
+|------|-------------|
+| `--case` | Run a specific test case by name |
+| `--list` | Display the test case matrix (steps vs cases) |
+
+When no `--case` is specified, all cases are executed and a summary is printed:
+
+```
+Testing "my-workflow"...
+
+  happy-path           ✓ passed (45ms)
+  api-down             ✓ passed (12ms)
+
+2/2 passed
+```
+
 ### Global flags
 
 | Flag | Env variable | Description |
@@ -757,6 +800,78 @@ steps:                            # Workflow steps (DAG)
       target: step-id
       when: "expression"
       max_iterations: 10
+    testing:                      # Inline test cases (tailflow test)
+      - name: "case-name"
+        output: { ... }           # Mock output (skip execution)
+        error:                    # Mock error (skip execution)
+          message: "..."
+          code: "..."
+        expect:                   # Assertion (verify after execution)
+          status: "success"
+          output: { ... }         # Partial deep match
+          error:
+            message: "..."
+            code: "..."
+```
+
+### Inline Testing
+
+Define test cases directly in your workflow steps. When running `tailflow test`, steps with a matching case name get their action skipped and output/error mocked. Steps without a matching case execute normally with data cascading from the DAG.
+
+**Three modes:**
+
+| Mode | Fields | Behavior |
+|------|--------|----------|
+| **Mock output** | `output` only | Skip execution, inject output |
+| **Mock error** | `error` only | Skip execution, inject error (respects `error_policy`) |
+| **Assertion** | `expect` only | Execute normally, then verify result (partial deep match) |
+| **Mock + Assert** | `output` + `expect` | Inject output AND verify it matches expectations |
+
+**Partial deep match:** The `expect.output` check is partial — your expected map only needs to contain the keys you care about. The actual output can have extra keys.
+
+```yaml
+steps:
+  - id: fetch-user
+    action: http
+    config:
+      url: "https://api.example.com/users/1"
+    testing:
+      - name: "happy-path"
+        output:
+          id: 1
+          name: "Alice"
+          email: "alice@example.com"
+
+      - name: "not-found"
+        error:
+          message: "user not found"
+          code: "not_found"
+
+      - name: "check-format"
+        expect:
+          status: "success"
+          output:
+            id: 1
+
+  - id: greet
+    action: log
+    depends_on: [fetch-user]
+    config:
+      message: "Hello, {{ steps.fetch-user.output.name }}!"
+```
+
+```bash
+tailflow test workflow.yaml --list
+#                     fetch-user        greet
+#   happy-path        mock              (runs)
+#   not-found         mock error        (runs)
+#   check-format      expect            (runs)
+
+tailflow test workflow.yaml --case happy-path
+# fetch-user is mocked → greet runs with mocked data
+
+tailflow test workflow.yaml
+# Runs all 3 cases, prints summary
 ```
 
 ### Sensitive Fields

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"fmt"
+	"maps"
 	"sync"
 	"time"
 )
@@ -33,6 +34,7 @@ type ExecutionContext struct {
 	Variables    map[string]any  // user-defined variables (via "set" action)
 	TriggerData  map[string]any  // trigger context (method, path, headers, body, query)
 	Services     *ActionServices // server-side services (nil in CLI mode)
+	TestCaseName string          // non-empty when running in test mode
 }
 
 func NewExecutionContext(executionID, workflowName string, params map[string]any, env map[string]string) *ExecutionContext {
@@ -103,7 +105,7 @@ func (c *ExecutionContext) ToMap() map[string]any {
 	for id, r := range c.Steps {
 		stepMap := map[string]any{
 			"status": r.Status,
-			"output": r.Output,
+			"output": deepCopyAny(r.Output),
 		}
 
 		if r.Error != nil {
@@ -117,15 +119,39 @@ func (c *ExecutionContext) ToMap() map[string]any {
 		stepsMap[id] = stepMap
 	}
 
+	envCopy := make(map[string]string, len(c.Env))
+	maps.Copy(envCopy, c.Env)
+
 	m := map[string]any{
-		"params":  c.Params,
-		"env":     c.Env,
+		"params":  deepCopyAny(c.Params),
+		"env":     envCopy,
 		"steps":   stepsMap,
-		"vars":    c.Variables,
-		"trigger": c.TriggerData,
+		"vars":    deepCopyAny(c.Variables),
+		"trigger": deepCopyAny(c.TriggerData),
 	}
 
 	return m
+}
+
+func deepCopyAny(v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		cp := make(map[string]any, len(val))
+		for k, item := range val {
+			cp[k] = deepCopyAny(item)
+		}
+
+		return cp
+	case []any:
+		cp := make([]any, len(val))
+		for i, item := range val {
+			cp[i] = deepCopyAny(item)
+		}
+
+		return cp
+	default:
+		return v
+	}
 }
 
 func (c *ExecutionContext) ResolveParam(name string) (any, error) {

@@ -131,6 +131,44 @@ func (s *ExecutionContextTestSuite) TestToMap_WithStepError() {
 	s.Equal("step1", errMap["step_id"])
 }
 
+func (s *ExecutionContextTestSuite) TestToMap_DeepCopyIsolation() {
+	ctx := NewExecutionContext("exec-1", "wf", nil, nil)
+	ctx.SetStepResult("step1", &StepResult{
+		Status: StatusSuccess,
+		Output: map[string]any{
+			"items": []any{"a", "b"},
+			"nested": map[string]any{
+				"key": "val",
+			},
+		},
+	})
+	ctx.SetVariable("list", []any{1, 2, 3})
+
+	m := ctx.ToMap()
+
+	steps := m["steps"].(map[string]any)
+	step1 := steps["step1"].(map[string]any)
+	output := step1["output"].(map[string]any)
+	items := output["items"].([]any)
+	s.Equal([]any{"a", "b"}, items)
+
+	vars := m["vars"].(map[string]any)
+	varList := vars["list"].([]any)
+	s.Equal([]any{1, 2, 3}, varList)
+
+	items[0] = "MUTATED"
+	varList[0] = 999
+
+	original, _ := ctx.GetStepResult("step1")
+	origOutput := original.Output.(map[string]any)
+	origItems := origOutput["items"].([]any)
+	s.Equal("a", origItems[0])
+
+	origVar, _ := ctx.GetVariable("list")
+	origList := origVar.([]any)
+	s.Equal(1, origList[0])
+}
+
 func (s *ExecutionContextTestSuite) TestResolveParam_Found() {
 	ctx := NewExecutionContext("exec-1", "wf", map[string]any{"env": "prod"}, nil)
 
