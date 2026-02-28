@@ -139,7 +139,7 @@ func parseHTTPResponse(resp *http.Response) (map[string]any, error) {
 	return output, nil
 }
 
-func checkExpectedStatus(ctx *ActionContext, _ map[string]any, statusCode int) error {
+func checkExpectedStatus(ctx *ActionContext, output map[string]any, statusCode int) error {
 	expect, ok := ctx.Config["expect"]
 	if !ok {
 		return nil
@@ -155,18 +155,48 @@ func checkExpectedStatus(ctx *ActionContext, _ map[string]any, statusCode int) e
 		return nil
 	}
 
+	var expected int
+
 	switch es := expectedStatus.(type) {
 	case int:
-		if es != statusCode {
-			return fmt.Errorf("http: expected status %d, got %d", es, statusCode)
-		}
+		expected = es
 	case float64:
-		if int(es) != statusCode {
-			return fmt.Errorf("http: expected status %d, got %d", int(es), statusCode)
-		}
+		expected = int(es)
+	default:
+		return nil
 	}
 
-	return nil
+	if expected == statusCode {
+		return nil
+	}
+
+	body := truncateBody(output["body"], 512)
+
+	return fmt.Errorf("http: expected status %d, got %d — %s", expected, statusCode, body)
+}
+
+func truncateBody(body any, maxLen int) string {
+	var s string
+
+	switch b := body.(type) {
+	case string:
+		s = b
+	case nil:
+		return "(empty body)"
+	default:
+		data, err := json.Marshal(b)
+		if err != nil {
+			return fmt.Sprintf("%v", b)
+		}
+
+		s = string(data)
+	}
+
+	if len(s) <= maxLen {
+		return s
+	}
+
+	return s[:maxLen] + "…"
 }
 
 func headerToMap(h http.Header) map[string]string {

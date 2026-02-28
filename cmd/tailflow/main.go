@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -57,6 +58,7 @@ type stepTracker struct {
 	pipelineActions []pipelineAction
 	gotoTarget      string // target step ID for goto, empty if none
 	gotoMaxIter     int    // max_iterations for goto
+	mergeMarker     string // "┐", "┤", "┘" — merge connector for convergent nodes
 }
 
 type loopDisplay struct {
@@ -129,6 +131,7 @@ func (r *cliRenderer) buildTree(wf *parser.Workflow) error {
 		dfs(root, 0, "", last)
 	}
 
+	r.resolveConvergentNodes(dag)
 	r.buildLoopDisplays()
 
 	return nil
@@ -160,6 +163,151 @@ func (r *cliRenderer) addStepTracker(s parser.Step, depth int, parentID string, 
 
 	r.steps[s.ID] = st
 	r.order = append(r.order, s.ID)
+}
+
+func (r *cliRenderer) resolveConvergentNodes(dag *engine.DAG) {
+	processed := make(map[string]bool)
+
+	for {
+		found := false
+
+		for _, id := range r.order {
+			if processed[id] {
+				continue
+			}
+
+			node := dag.Nodes[id]
+			if len(node.Parents) <= 1 {
+				continue
+			}
+
+			parentIDs := make([]string, 0, len(node.Parents))
+			sharedParent := ""
+			allSiblings := true
+
+			for i, p := range node.Parents {
+				pid := p.Step.ID
+				st := r.steps[pid]
+
+				if st == nil {
+					allSiblings = false
+					break
+				}
+
+				if i == 0 {
+					sharedParent = st.parentID
+				} else if st.parentID != sharedParent {
+					allSiblings = false
+					break
+				}
+
+				parentIDs = append(parentIDs, pid)
+			}
+
+			if !allSiblings {
+				processed[id] = true
+				continue
+			}
+
+			orderIdx := make(map[string]int, len(r.order))
+			for i, oid := range r.order {
+				orderIdx[oid] = i
+			}
+
+			sort.Slice(parentIDs, func(a, b int) bool {
+				return orderIdx[parentIDs[a]] < orderIdx[parentIDs[b]]
+			})
+
+			descSet := map[string]bool{id: true}
+
+			var collect func(string)
+			collect = func(nid string) {
+				for _, c := range dag.Nodes[nid].Children {
+					if !descSet[c.Step.ID] {
+						descSet[c.Step.ID] = true
+						collect(c.Step.ID)
+					}
+				}
+			}
+
+			collect(id)
+
+			var subtree, remaining []string
+
+			for _, oid := range r.order {
+				if descSet[oid] {
+					subtree = append(subtree, oid)
+				} else {
+					remaining = append(remaining, oid)
+				}
+			}
+
+			lastParentID := parentIDs[len(parentIDs)-1]
+			lastParentIdx := -1
+
+			for i, oid := range remaining {
+				if oid == lastParentID {
+					lastParentIdx = i
+					break
+				}
+			}
+
+			if lastParentIdx == -1 {
+				processed[id] = true
+				continue
+			}
+
+			lastParentDepth := r.steps[lastParentID].depth
+			insertIdx := lastParentIdx + 1
+
+			for insertIdx < len(remaining) {
+				if r.steps[remaining[insertIdx]].depth <= lastParentDepth {
+					break
+				}
+
+				insertIdx++
+			}
+
+			for i := insertIdx - 1; i > lastParentIdx; i-- {
+				if r.steps[remaining[i]].parentID == lastParentID {
+					r.steps[remaining[i]].isLast = false
+					break
+				}
+			}
+
+			newOrder := make([]string, 0, len(r.order))
+			newOrder = append(newOrder, remaining[:insertIdx]...)
+			newOrder = append(newOrder, subtree...)
+			newOrder = append(newOrder, remaining[insertIdx:]...)
+			r.order = newOrder
+
+			childSt := r.steps[id]
+			childSt.parentID = lastParentID
+			childSt.isLast = true
+
+			for i, pid := range parentIDs {
+				pst := r.steps[pid]
+
+				switch {
+				case i == 0:
+					pst.mergeMarker = "┐"
+				case i == len(parentIDs)-1:
+					pst.mergeMarker = "┘"
+				default:
+					pst.mergeMarker = "┤"
+				}
+			}
+
+			processed[id] = true
+			found = true
+
+			break
+		}
+
+		if !found {
+			break
+		}
+	}
 }
 
 func parsePipelineActions(config map[string]any) []pipelineAction {
@@ -348,12 +496,18 @@ func (r *cliRenderer) printTreeStep(idx int, id string, bracketWidth int) {
 	dots := max(totalWidth-usedWidth, 2)
 	dotStr := strings.Repeat("·", dots) + " "
 
-	fmt.Printf("  %s%s%s%s%s\n",
+	var mergeSuffix string
+	if st.mergeMarker != "" {
+		mergeSuffix = " ──" + st.mergeMarker
+	}
+
+	fmt.Printf("  %s%s%s%s%s%s\n",
 		r.c("33", bracket),
 		r.c("90", prefix),
 		r.c("1", idPart),
 		r.c("90", dotStr),
 		r.c("90", label),
+		r.c("36", mergeSuffix),
 	)
 
 	if len(st.pipelineActions) > 0 {
@@ -1470,6 +1624,8 @@ func executeValidate(path string, noColor bool) error {
 		os.Exit(1)
 	}
 
+	r.wfName = wf.Name
+
 	reg := action.NewRegistry()
 	action.RegisterBuiltins(reg)
 
@@ -1481,14 +1637,16 @@ func executeValidate(path string, noColor bool) error {
 		}
 	}
 
-	_, err = engine.BuildDAG(wf.Steps)
-	if err != nil {
-		fmt.Printf("  %s %s\n", r.c("31", "✗"), r.c("31", "Validation failed: "+err.Error()))
+	buildErr := r.buildTree(wf)
+	if buildErr != nil {
+		fmt.Printf("  %s %s\n", r.c("31", "✗"), r.c("31", "Validation failed: "+buildErr.Error()))
 		os.Exit(1)
 	}
 
 	fmt.Printf("  %s %s\n", r.c("32", "✓"),
 		r.c("32", fmt.Sprintf("Workflow %q is valid (%d steps, %d params)", wf.Name, len(wf.Steps), len(wf.Params))))
+
+	r.printTree()
 
 	return nil
 }
