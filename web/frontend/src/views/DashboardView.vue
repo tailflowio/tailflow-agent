@@ -209,6 +209,16 @@ function ago(d: string) {
 
 <template>
   <div v-if="workflow">
+    <!-- Shared sparkline gradient (transparent top → 10% bottom) -->
+    <svg class="absolute w-0 h-0 overflow-hidden text-g-12" aria-hidden="true">
+      <defs>
+        <linearGradient id="spark-grad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="currentColor" stop-opacity="0" />
+          <stop offset="100%" stop-color="currentColor" stop-opacity="0.1" />
+        </linearGradient>
+      </defs>
+    </svg>
+
     <!-- Header -->
     <div class="flex items-start justify-between mb-6">
       <div>
@@ -279,7 +289,7 @@ function ago(d: string) {
       <div v-if="sysMetrics.available" class="grid grid-cols-5 gap-3">
         <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden anim-enter">
           <svg v-if="cpuHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" preserveAspectRatio="none">
-            <path :d="sparklinePath(cpuHistory, 200, 80)" fill="currentColor" class="text-g-12/5" />
+            <path :d="sparklinePath(cpuHistory, 200, 80)" fill="url(#spark-grad)" />
           </svg>
           <div class="relative">
             <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.cpu') }}</p>
@@ -288,7 +298,7 @@ function ago(d: string) {
         </div>
         <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden anim-enter delay-1">
           <svg v-if="memHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" preserveAspectRatio="none">
-            <path :d="sparklinePath(memHistory, 200, 80)" fill="currentColor" class="text-g-12/5" />
+            <path :d="sparklinePath(memHistory, 200, 80)" fill="url(#spark-grad)" />
           </svg>
           <div class="relative">
             <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.memory') }}</p>
@@ -297,7 +307,7 @@ function ago(d: string) {
         </div>
         <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden anim-enter delay-2">
           <svg v-if="goroutineHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" preserveAspectRatio="none">
-            <path :d="sparklinePath(goroutineHistory, 200, 80)" fill="currentColor" class="text-g-12/5" />
+            <path :d="sparklinePath(goroutineHistory, 200, 80)" fill="url(#spark-grad)" />
           </svg>
           <div class="relative">
             <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.goroutines') }}</p>
@@ -306,7 +316,7 @@ function ago(d: string) {
         </div>
         <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden anim-enter delay-3">
           <svg v-if="netRxHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" preserveAspectRatio="none">
-            <path :d="sparklinePath(netRxHistory, 200, 80)" fill="currentColor" class="text-g-12/5" />
+            <path :d="sparklinePath(netRxHistory, 200, 80)" fill="url(#spark-grad)" />
           </svg>
           <div class="relative">
             <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.network') }}</p>
@@ -325,7 +335,7 @@ function ago(d: string) {
       <div v-else class="grid grid-cols-5 gap-3">
         <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden anim-enter">
           <svg v-if="goroutineHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" preserveAspectRatio="none">
-            <path :d="sparklinePath(goroutineHistory, 200, 80)" fill="currentColor" class="text-g-12/5" />
+            <path :d="sparklinePath(goroutineHistory, 200, 80)" fill="url(#spark-grad)" />
           </svg>
           <div class="relative">
             <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.goroutines') }}</p>
@@ -334,7 +344,7 @@ function ago(d: string) {
         </div>
         <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden anim-enter delay-1">
           <svg v-if="memHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" preserveAspectRatio="none">
-            <path :d="sparklinePath(memHistory, 200, 80)" fill="currentColor" class="text-g-12/5" />
+            <path :d="sparklinePath(memHistory, 200, 80)" fill="url(#spark-grad)" />
           </svg>
           <div class="relative">
             <p class="text-xs text-g-9 mb-1.5">Heap</p>
