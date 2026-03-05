@@ -22,7 +22,10 @@ jobs:
           go-version-file: go.mod
 
       - name: Create web/dist placeholder for embed
-        run: mkdir -p web/dist && touch web/dist/.gitkeep
+        run: |
+          mkdir -p web/dist/assets
+          echo '<!DOCTYPE html><html><head><title>TailFlow</title></head><body></body></html>' > web/dist/index.html
+          echo '// placeholder' > web/dist/assets/DashboardView-jnNJTy3N.js
 
       - uses: golangci/golangci-lint-action@v7
         with:
@@ -39,7 +42,10 @@ jobs:
           go-version-file: go.mod
 
       - name: Create web/dist placeholder for embed
-        run: mkdir -p web/dist && touch web/dist/.gitkeep
+        run: |
+          mkdir -p web/dist/assets
+          echo '<!DOCTYPE html><html><head><title>TailFlow</title></head><body></body></html>' > web/dist/index.html
+          echo '// placeholder' > web/dist/assets/DashboardView-jnNJTy3N.js
 
       - name: Run tests with coverage
         run: bash scripts/cover.sh
