@@ -76,11 +76,9 @@ func (s *SSETestSuite) TestHandleSSE_ConnectsAndSendsConnectedEvent() {
 		req := httptest.NewRequest("GET", "/api/executions/exec-1/events", nil).WithContext(ctx)
 
 		go srv.Handler().ServeHTTP(w, req)
-		time.Sleep(flushInterval)
 		synctest.Wait()
 
 		cancel()
-		time.Sleep(flushInterval)
 		synctest.Wait()
 
 		body := w.Body.String()
@@ -386,8 +384,6 @@ func (s *SSETestSuite) TestWriteSSEEvent_Format() {
 	s.Equal("exec-1", parsed.ExecutionID)
 	s.Equal("step-a", parsed.StepID)
 }
-
-// --- Additional coverage tests ---
 
 func (s *SSETestSuite) TestLoopTracker_Track_GotoWithNilData() {
 	lt := &loopTracker{}
@@ -710,8 +706,6 @@ func (s *SSETestSuite) TestReplayStoredEvents_EmptyStore() {
 	s.Equal(0, count)
 	s.False(done)
 }
-
-// --- handleSSE: skips already-replayed live events ---
 
 func (s *SSETestSuite) TestHandleSSE_SkipsAlreadyReplayedEvents() {
 	synctest.Test(s.T(), func(t *testing.T) {

@@ -117,13 +117,11 @@ func (s *ServerTestSuite) TestRun_StartsAndShutdowns() {
 	}
 }
 
-// --- New with Redis env var ---
-
 func (s *ServerTestSuite) TestNew_WithRedisURL_FailsGracefully() {
 	original := newRedisKVStoreFn
 	s.T().Cleanup(func() { newRedisKVStoreFn = original })
 
-	newRedisKVStoreFn = func(url string) (runtime.KVStore, error) {
+	newRedisKVStoreFn = func(_ context.Context, url string) (runtime.KVStore, error) {
 		return nil, errors.New("redis connect failed")
 	}
 
@@ -139,7 +137,7 @@ func (s *ServerTestSuite) TestNew_WithRedisURL_Success() {
 	s.T().Cleanup(func() { newRedisKVStoreFn = original })
 
 	mockKV := runtime.NewMemoryKVStore()
-	newRedisKVStoreFn = func(url string) (runtime.KVStore, error) {
+	newRedisKVStoreFn = func(_ context.Context, url string) (runtime.KVStore, error) {
 		return mockKV, nil
 	}
 
@@ -150,16 +148,12 @@ func (s *ServerTestSuite) TestNew_WithRedisURL_Success() {
 	s.NotNil(srv.kvStore)
 }
 
-// --- WaitRegistry accessor ---
-
 func (s *ServerTestSuite) TestWaitRegistry_ReturnsNonNil() {
 	srv := newTestServer(s.T())
 	wr := srv.WaitRegistry()
 	s.NotNil(wr)
 	s.Equal(srv.waitRegistry, wr)
 }
-
-// --- addScheduledTimer / cancelScheduledTimers ---
 
 func (s *ServerTestSuite) TestAddScheduledTimer_AppendsTimer() {
 	srv := newTestServer(s.T())
@@ -188,8 +182,6 @@ func (s *ServerTestSuite) TestCancelScheduledTimers_StopsAllTimers() {
 
 	s.Nil(srv.scheduledTimers)
 }
-
-// --- startExporter tests ---
 
 func (s *ServerTestSuite) TestStartExporter_NoExportURL_Noop() {
 	srv := newTestServer(s.T())
@@ -286,8 +278,6 @@ func (s *ServerTestSuite) TestStartExporter_NilTrigger() {
 	s.NotNil(srv.exporter)
 }
 
-// --- startCronScheduler tests ---
-
 func (s *ServerTestSuite) TestStartCronScheduler_NilTrigger() {
 	srv := newTestServer(s.T())
 	srv.config.Workflow.Trigger = nil
@@ -331,8 +321,6 @@ func (s *ServerTestSuite) TestStartCronScheduler_InvalidCron() {
 	s.Contains(err.Error(), "invalid cron expression")
 	s.Nil(cronSched)
 }
-
-// --- startRabbitMQConsumer tests ---
 
 func (s *ServerTestSuite) TestStartRabbitMQConsumer_NilTrigger() {
 	srv := newTestServer(s.T())
@@ -471,8 +459,6 @@ func (s *ServerTestSuite) TestStartRabbitMQConsumer_OnMessage_WithAckFn() {
 	}, 5*time.Second, 50*time.Millisecond)
 }
 
-// --- shutdownServices tests ---
-
 func (s *ServerTestSuite) TestShutdownServices_WithCronAndRMQ() {
 	srv := newTestServer(s.T())
 
@@ -517,8 +503,6 @@ func (s *ServerTestSuite) TestShutdownServices_WithCronAndRMQ() {
 	s.True(mockConn.closed)
 }
 
-// --- runWorkflowAsync with OnComplete callback ---
-
 func (s *ServerTestSuite) TestRunWorkflowAsync_WithOnComplete() {
 	srv := newTestServer(s.T())
 
@@ -559,8 +543,6 @@ func (s *ServerTestSuite) TestRunWorkflowAsync_WithTriggerData() {
 	}, 5*time.Second, 50*time.Millisecond)
 }
 
-// --- Run with listen error ---
-
 func (s *ServerTestSuite) TestRun_ListenError() {
 	srv := newTestServer(s.T())
 
@@ -587,8 +569,6 @@ func (s *ServerTestSuite) TestRun_ListenError() {
 	ln.Close()
 }
 
-// --- Run with cron error ---
-
 func (s *ServerTestSuite) TestRun_CronSchedulerError() {
 	srv := newTestServer(s.T())
 	srv.config.Workflow.Trigger = &parser.Trigger{
@@ -602,8 +582,6 @@ func (s *ServerTestSuite) TestRun_CronSchedulerError() {
 	s.Require().Error(err)
 	s.Contains(err.Error(), "invalid cron expression")
 }
-
-// --- Run with rabbitmq error ---
 
 func (s *ServerTestSuite) TestRun_RabbitMQConsumerError() {
 	original := newRabbitMQConsumerFn
@@ -631,8 +609,6 @@ func (s *ServerTestSuite) TestRun_RabbitMQConsumerError() {
 	s.Contains(err.Error(), "rabbitmq consumer")
 }
 
-// --- startMetricsRefresh ---
-
 func (s *ServerTestSuite) TestStartMetricsRefresh_PublishesMetrics() {
 	srv := newTestServer(s.T())
 
@@ -640,10 +616,13 @@ func (s *ServerTestSuite) TestStartMetricsRefresh_PublishesMetrics() {
 	defer srv.config.EventBus.Unsubscribe(ch)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	srv.startMetricsRefresh(ctx)
 
 	var metricsReceived bool
 	timeout := time.After(3 * time.Second)
+
 	for !metricsReceived {
 		select {
 		case ev := <-ch:
@@ -656,11 +635,9 @@ func (s *ServerTestSuite) TestStartMetricsRefresh_PublishesMetrics() {
 		}
 	}
 
-	cancel()
 	s.True(metricsReceived)
 }
 
-// helper to create a test server with a custom workflow YAML
 func newTestServerWithWorkflow(t *testing.T, yaml string) *Server {
 	t.Helper()
 
@@ -688,8 +665,6 @@ func newTestServerWithWorkflow(t *testing.T, yaml string) *Server {
 	})
 }
 
-// --- startCronScheduler: cron callback fires ---
-
 func (s *ServerTestSuite) TestStartCronScheduler_CronCallbackFires() {
 	srv := newTestServer(s.T())
 	srv.config.Workflow.Trigger = &parser.Trigger{
@@ -708,4 +683,143 @@ func (s *ServerTestSuite) TestStartCronScheduler_CronCallbackFires() {
 		execs := srv.config.ExecutionStore.List()
 		return len(execs) > 0
 	}, 5*time.Second, 100*time.Millisecond)
+}
+
+// ensureWorkflowCompleted – already stored (early return)
+func (s *ServerTestSuite) TestEnsureWorkflowCompleted_AlreadyStored() {
+	srv := newTestServer(s.T())
+
+	execID := "ewc-already"
+	srv.config.ExecutionStore.Add(&store.Execution{
+		ID: execID, WorkflowName: "test", Status: runtime.StatusSuccess,
+		StartedAt: time.Now(),
+	})
+
+	// Pre-append a WorkflowCompleted event
+	srv.config.ExecutionStore.AppendEvent(execID, event.Event{
+		Type:        event.WorkflowCompleted,
+		ExecutionID: execID,
+		Data:        map[string]any{"status": "success"},
+	})
+
+	ch := srv.config.EventBus.Subscribe(10)
+	defer srv.config.EventBus.Unsubscribe(ch)
+
+	// Call ensureWorkflowCompleted — should return early since event already exists
+	result := &engine.ExecuteResult{Status: runtime.StatusSuccess}
+	srv.ensureWorkflowCompleted(execID, result, nil, context.Background())
+
+	// No additional event should be appended
+	events := srv.config.ExecutionStore.GetEvents(execID)
+	s.Len(events, 1)
+
+	// Verify nothing was published to the bus
+	select {
+	case <-ch:
+		s.Fail("no event should be published when WorkflowCompleted already stored")
+	case <-time.After(100 * time.Millisecond):
+		// expected: no event published
+	}
+}
+
+// ensureWorkflowCompleted – error with cancelled context
+func (s *ServerTestSuite) TestEnsureWorkflowCompleted_ErrorCancelled() {
+	srv := newTestServer(s.T())
+
+	execID := "ewc-cancel"
+	srv.config.ExecutionStore.Add(&store.Execution{
+		ID: execID, WorkflowName: "test", Status: runtime.StatusRunning,
+		StartedAt: time.Now(),
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	srv.ensureWorkflowCompleted(execID, nil, errors.New("context cancelled"), ctx)
+
+	events := srv.config.ExecutionStore.GetEvents(execID)
+	s.Require().Len(events, 1)
+	s.Equal(event.WorkflowCompleted, events[0].Type)
+	s.Equal(runtime.StatusCancelled, events[0].Data["status"])
+}
+
+// ensureWorkflowCompleted – error without cancelled context
+func (s *ServerTestSuite) TestEnsureWorkflowCompleted_ErrorFailed() {
+	srv := newTestServer(s.T())
+
+	execID := "ewc-fail"
+	srv.config.ExecutionStore.Add(&store.Execution{
+		ID: execID, WorkflowName: "test", Status: runtime.StatusRunning,
+		StartedAt: time.Now(),
+	})
+
+	srv.ensureWorkflowCompleted(execID, nil, errors.New("exec failed"), context.Background())
+
+	events := srv.config.ExecutionStore.GetEvents(execID)
+	s.Require().Len(events, 1)
+	s.Equal(event.WorkflowCompleted, events[0].Type)
+	s.Equal(runtime.StatusFailed, events[0].Data["status"])
+}
+
+// ensureWorkflowCompleted – success with result
+func (s *ServerTestSuite) TestEnsureWorkflowCompleted_SuccessWithResult() {
+	srv := newTestServer(s.T())
+
+	execID := "ewc-result"
+	srv.config.ExecutionStore.Add(&store.Execution{
+		ID: execID, WorkflowName: "test", Status: runtime.StatusRunning,
+		StartedAt: time.Now(),
+	})
+
+	result := &engine.ExecuteResult{Status: runtime.StatusCompletedWithErrors}
+	srv.ensureWorkflowCompleted(execID, result, nil, context.Background())
+
+	events := srv.config.ExecutionStore.GetEvents(execID)
+	s.Require().Len(events, 1)
+	s.Equal(event.WorkflowCompleted, events[0].Type)
+	s.Equal(runtime.StatusCompletedWithErrors, events[0].Data["status"])
+}
+
+// ensureWorkflowCompleted – nil error and nil result (defaults to success)
+func (s *ServerTestSuite) TestEnsureWorkflowCompleted_NilResultNilError() {
+	srv := newTestServer(s.T())
+
+	execID := "ewc-default"
+	srv.config.ExecutionStore.Add(&store.Execution{
+		ID: execID, WorkflowName: "test", Status: runtime.StatusRunning,
+		StartedAt: time.Now(),
+	})
+
+	srv.ensureWorkflowCompleted(execID, nil, nil, context.Background())
+
+	events := srv.config.ExecutionStore.GetEvents(execID)
+	s.Require().Len(events, 1)
+	s.Equal(event.WorkflowCompleted, events[0].Type)
+	s.Equal(runtime.StatusSuccess, events[0].Data["status"])
+}
+
+// ensureWorkflowCompleted – publishes to event bus
+func (s *ServerTestSuite) TestEnsureWorkflowCompleted_PublishesEvent() {
+	srv := newTestServer(s.T())
+
+	execID := "ewc-publish"
+	srv.config.ExecutionStore.Add(&store.Execution{
+		ID: execID, WorkflowName: "test", Status: runtime.StatusRunning,
+		StartedAt: time.Now(),
+	})
+
+	ch := srv.config.EventBus.Subscribe(10)
+	defer srv.config.EventBus.Unsubscribe(ch)
+
+	result := &engine.ExecuteResult{Status: runtime.StatusSuccess}
+	srv.ensureWorkflowCompleted(execID, result, nil, context.Background())
+
+	select {
+	case ev := <-ch:
+		s.Equal(event.WorkflowCompleted, ev.Type)
+		s.Equal(execID, ev.ExecutionID)
+		s.Equal(runtime.StatusSuccess, ev.Data["status"])
+	case <-time.After(time.Second):
+		s.Fail("timeout waiting for published event")
+	}
 }

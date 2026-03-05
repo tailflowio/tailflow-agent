@@ -1,0 +1,63 @@
+version: "2.0"
+name: "async-trigger"
+description: "Generate a report in the background, return 202 immediately"
+tags: ["async", "background", "kv"]
+
+trigger:
+  http:
+    method: POST
+    path: /reports/generate
+    async: true
+
+steps:
+  - id: init
+    action: js
+    title: "Initialize report"
+    config:
+      script: |
+        let body = trigger.body;
+        if (!body || !body.type) throw new Error("report type is required");
+        return {
+          report_id: "rpt_" + Math.random().toString(36).substr(2, 9),
+          type: body.type,
+          filters: body.filters || {},
+        };
+
+  - id: save-status
+    action: kv.set
+    title: "Save initial status"
+    depends_on: [init]
+    config:
+      key: "report:{{ steps.init.output.report_id }}"
+      value: "processing"
+      ttl: "1h"
+
+  - id: generate
+    action: delay
+    title: "Simulate report generation"
+    depends_on: [save-status]
+    config:
+      duration: "3s"
+
+  - id: build-result
+    action: js
+    title: "Build report data"
+    depends_on: [generate]
+    config:
+      script: |
+        let init = steps.init.output;
+        return {
+          report_id: init.report_id,
+          type: init.type,
+          rows: 1482,
+          generated_at: new Date().toISOString(),
+        };
+
+  - id: update-status
+    action: kv.set
+    title: "Mark report as completed"
+    depends_on: [build-result]
+    config:
+      key: "report:{{ steps.init.output.report_id }}"
+      value: "completed"
+      ttl: "1h"

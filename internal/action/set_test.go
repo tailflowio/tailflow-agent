@@ -2,6 +2,7 @@ package action
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"testing"
 
@@ -15,7 +16,7 @@ func newTestContext(config map[string]any) *ActionContext {
 		Config:  config,
 		ExecCtx: runtime.NewExecutionContext("test-exec", "test-wf", nil, nil),
 		StepID:  "test-step",
-		Logger:  slog.Default(),
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }
 

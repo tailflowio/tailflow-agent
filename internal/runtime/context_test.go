@@ -151,3 +151,29 @@ func (s *ExecutionContextTestSuite) TestStepError_Error() {
 	e := &StepError{Message: "timeout reached"}
 	s.Equal("timeout reached", e.Error())
 }
+
+func (s *ExecutionContextTestSuite) TestHasFailedSteps_NoSteps() {
+	ctx := NewExecutionContext("exec-1", "wf", nil, nil)
+	s.False(ctx.HasFailedSteps())
+}
+
+func (s *ExecutionContextTestSuite) TestHasFailedSteps_AllSuccess() {
+	ctx := NewExecutionContext("exec-1", "wf", nil, nil)
+	ctx.SetStepResult("step1", &StepResult{Status: StatusSuccess})
+	ctx.SetStepResult("step2", &StepResult{Status: StatusSuccess})
+	s.False(ctx.HasFailedSteps())
+}
+
+func (s *ExecutionContextTestSuite) TestHasFailedSteps_OneFailed() {
+	ctx := NewExecutionContext("exec-1", "wf", nil, nil)
+	ctx.SetStepResult("step1", &StepResult{Status: StatusFailed})
+	s.True(ctx.HasFailedSteps())
+}
+
+func (s *ExecutionContextTestSuite) TestHasFailedSteps_MixedWithOneFailed() {
+	ctx := NewExecutionContext("exec-1", "wf", nil, nil)
+	ctx.SetStepResult("step1", &StepResult{Status: StatusSuccess})
+	ctx.SetStepResult("step2", &StepResult{Status: StatusFailed})
+	ctx.SetStepResult("step3", &StepResult{Status: StatusSkipped})
+	s.True(ctx.HasFailedSteps())
+}

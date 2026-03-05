@@ -7,21 +7,18 @@ import (
 	"github.com/tailflow/tailflow/internal/parser"
 )
 
-// DAGNode represents a node in the execution DAG.
 type DAGNode struct {
 	Step     parser.Step
 	Children []*DAGNode // nodes that depend on this one
 	Parents  []*DAGNode // nodes this one depends on
 }
 
-// DAG is a directed acyclic graph of workflow steps.
 type DAG struct {
 	Nodes map[string]*DAGNode
 	Roots []*DAGNode // nodes with no dependencies (entry points)
 	Order []string   // topological order
 }
 
-// BuildDAG constructs a DAG from workflow steps.
 func BuildDAG(steps []parser.Step) (*DAG, error) {
 	dag := &DAG{
 		Nodes: make(map[string]*DAGNode, len(steps)),
@@ -69,8 +66,6 @@ func BuildDAG(steps []parser.Step) (*DAG, error) {
 	return dag, nil
 }
 
-// validateGotos checks that all goto references point to known steps that
-// appear earlier in topological order, and applies default max-iterations.
 func validateGotos(dag *DAG, steps []parser.Step) error {
 	orderIndex := make(map[string]int, len(dag.Order))
 	for i, id := range dag.Order {
@@ -82,7 +77,8 @@ func validateGotos(dag *DAG, steps []parser.Step) error {
 			continue
 		}
 
-		if _, ok := dag.Nodes[s.Goto.Target]; !ok {
+		_, ok := dag.Nodes[s.Goto.Target]
+		if !ok {
 			return fmt.Errorf("step %q goto references unknown step %q", s.ID, s.Goto.Target)
 		}
 
@@ -98,7 +94,6 @@ func validateGotos(dag *DAG, steps []parser.Step) error {
 	return nil
 }
 
-// topoSort performs Kahn's algorithm for topological sorting.
 func topoSort(dag *DAG) ([]string, error) {
 	inDegree := make(map[string]int, len(dag.Nodes))
 	for id, node := range dag.Nodes {
@@ -110,7 +105,7 @@ func topoSort(dag *DAG) ([]string, error) {
 		queue = append(queue, root.Step.ID)
 	}
 
-	var order []string
+	order := make([]string, 0, len(dag.Nodes))
 
 	for len(queue) > 0 {
 		id := queue[0]

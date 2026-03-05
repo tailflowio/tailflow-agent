@@ -3,6 +3,7 @@ package export
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -19,8 +20,6 @@ type request struct {
 	Body map[string]any
 }
 
-// collectRequests creates a test server that records requests and returns
-// an agent_id on /register.
 func collectRequests(t *testing.T) (*httptest.Server, *[]request, *sync.Mutex) {
 	t.Helper()
 
@@ -31,7 +30,8 @@ func collectRequests(t *testing.T) (*httptest.Server, *[]request, *sync.Mutex) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		err := json.NewDecoder(r.Body).Decode(&body)
+		if err != nil {
 			t.Logf("decode error: %v", err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
@@ -66,7 +66,7 @@ func newTestConfig(url string, bus *event.Bus) Config {
 		ExportURL:           url,
 		APIKey:              "test-key",
 		EventBus:            bus,
-		Logger:              slog.Default(),
+		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
 		WorkflowName:        "test-wf",
 		WorkflowDescription: "A test workflow",
 		WorkflowTags:        []string{"test", "ci"},

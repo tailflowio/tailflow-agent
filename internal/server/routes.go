@@ -24,6 +24,7 @@ func (s *Server) setupAPIRoutes() {
 	s.mux.HandleFunc("POST /api/workflow/run", s.handleRunWorkflow)
 	s.mux.HandleFunc("GET /api/workflow/steps/{id}", s.handleGetStepDetail)
 
+	s.mux.HandleFunc("GET /api/version", s.handleGetVersion)
 	s.mux.HandleFunc("GET /api/metrics", s.handleGetMetrics)
 
 	s.mux.HandleFunc("GET /api/executions", s.handleListExecutions)
@@ -64,7 +65,8 @@ func (s *Server) setupUIRoutes() {
 			return
 		}
 
-		f.Close()
+		_ = f.Close()
+
 		fileServer.ServeHTTP(w, r)
 	})
 }

@@ -6,13 +6,13 @@ import (
 	"log/slog"
 )
 
-// LogAction logs a message at a specified level.
 type LogAction struct{}
 
 func NewLogAction() Action { return &LogAction{} }
 
 func (a *LogAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["message"]; !ok {
+	_, ok := ctx.Config["message"]
+	if !ok {
 		return errors.New("log action requires 'message' in config")
 	}
 
@@ -23,7 +23,9 @@ func (a *LogAction) Execute(ctx *ActionContext) (any, error) {
 	message := fmt.Sprintf("%v", ctx.Config["message"])
 
 	level := "info"
-	if l, ok := ctx.Config["level"]; ok {
+
+	l, ok := ctx.Config["level"]
+	if ok {
 		level = fmt.Sprintf("%v", l)
 	}
 

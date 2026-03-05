@@ -11,7 +11,8 @@ type KVGetAction struct{}
 func NewKVGetAction() Action { return &KVGetAction{} }
 
 func (a *KVGetAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["key"]; !ok {
+	_, ok := ctx.Config["key"]
+	if !ok {
 		return errors.New("kv.get action requires 'key' in config")
 	}
 
@@ -39,11 +40,13 @@ type KVSetAction struct{}
 func NewKVSetAction() Action { return &KVSetAction{} }
 
 func (a *KVSetAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["key"]; !ok {
+	_, ok := ctx.Config["key"]
+	if !ok {
 		return errors.New("kv.set action requires 'key' in config")
 	}
 
-	if _, ok := ctx.Config["value"]; !ok {
+	_, ok = ctx.Config["value"]
+	if !ok {
 		return errors.New("kv.set action requires 'value' in config")
 	}
 
@@ -60,8 +63,10 @@ func (a *KVSetAction) Execute(ctx *ActionContext) (any, error) {
 
 	var ttl time.Duration
 
-	if t, ok := ctx.Config["ttl"]; ok {
-		if d, err := time.ParseDuration(fmt.Sprintf("%v", t)); err == nil {
+	t, ok := ctx.Config["ttl"]
+	if ok {
+		d, err := time.ParseDuration(fmt.Sprintf("%v", t))
+		if err == nil {
 			ttl = d
 		}
 	}
@@ -85,7 +90,8 @@ type KVDeleteAction struct{}
 func NewKVDeleteAction() Action { return &KVDeleteAction{} }
 
 func (a *KVDeleteAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["key"]; !ok {
+	_, ok := ctx.Config["key"]
+	if !ok {
 		return errors.New("kv.delete action requires 'key' in config")
 	}
 

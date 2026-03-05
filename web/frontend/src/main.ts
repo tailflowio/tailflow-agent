@@ -14,6 +14,11 @@ const router = createRouter({
       component: () => import('./views/DashboardView.vue'),
     },
     {
+      path: '/workflow',
+      name: 'workflow',
+      component: () => import('./views/WorkflowView.vue'),
+    },
+    {
       path: '/executions',
       name: 'executions',
       component: () => import('./views/ExecutionsView.vue'),
@@ -25,8 +30,7 @@ const router = createRouter({
     },
     {
       path: '/steps',
-      name: 'steps',
-      component: () => import('./views/StepsListView.vue'),
+      redirect: '/workflow',
     },
     {
       path: '/steps/:id',

@@ -119,3 +119,89 @@ func (s *ValidateActionTestSuite) TestDataNotMap() {
 	result := out.(map[string]any)
 	s.False(result["valid"].(bool))
 }
+
+func (s *ValidateActionTestSuite) TestFailOnError_Fails() {
+	a := NewValidateAction()
+	ctx := newTestContext(map[string]any{
+		"rules":         map[string]any{"email": "required"},
+		"fail_on_error": true,
+	})
+
+	out, err := a.Execute(ctx)
+	s.Error(err)
+	s.Contains(err.Error(), "validation failed")
+
+	result := out.(map[string]any)
+	s.False(result["valid"].(bool))
+}
+
+func (s *ValidateActionTestSuite) TestFailOnError_Passes() {
+	a := NewValidateAction()
+	ctx := newTestContext(map[string]any{
+		"data":          map[string]any{"email": "test@example.com"},
+		"rules":         map[string]any{"email": "required"},
+		"fail_on_error": true,
+	})
+
+	out, err := a.Execute(ctx)
+	s.Require().NoError(err)
+
+	result := out.(map[string]any)
+	s.True(result["valid"].(bool))
+}
+
+// runValidationRules: multiple fields all pass validation (err == nil continue branch).
+func (s *ValidateActionTestSuite) TestRunValidationRules_AllFieldsPass() {
+	rules := map[string]any{
+		"email": "required,email",
+		"name":  "required",
+	}
+	data := map[string]any{
+		"email": "user@example.com",
+		"name":  "Alice",
+	}
+
+	errs := runValidationRules(rules, data)
+	s.Empty(errs)
+}
+
+// runValidationRules: nil data map - field lookups return zero values, triggering
+// validation failures for "required" rules.
+func (s *ValidateActionTestSuite) TestRunValidationRules_NilDataMap() {
+	rules := map[string]any{
+		"name": "required",
+	}
+
+	errs := runValidationRules(rules, nil)
+	s.Require().Len(errs, 1)
+	s.Equal("name", errs[0]["field"])
+	s.Equal("required", errs[0]["tag"])
+}
+
+// runValidationRules: multiple rules with multiple validation errors.
+func (s *ValidateActionTestSuite) TestRunValidationRules_MultipleFieldErrors() {
+	rules := map[string]any{
+		"email": "required,email",
+		"age":   "required",
+	}
+	data := map[string]any{
+		"email": "not-valid",
+	}
+
+	errs := runValidationRules(rules, data)
+	// "email" fails on "email" tag, "age" is nil and fails on "required"
+	s.GreaterOrEqual(len(errs), 2)
+}
+
+// runValidationRules: value is present and valid so err == nil, continue is taken.
+func (s *ValidateActionTestSuite) TestRunValidationRules_FieldPresent_NoError() {
+	rules := map[string]any{
+		"count": "min=0",
+	}
+	data := map[string]any{
+		"count": 10,
+	}
+
+	errs := runValidationRules(rules, data)
+	s.Empty(errs)
+}

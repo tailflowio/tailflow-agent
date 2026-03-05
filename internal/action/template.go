@@ -13,7 +13,8 @@ type TemplateAction struct{}
 func NewTemplateAction() Action { return &TemplateAction{} }
 
 func (a *TemplateAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["template"]; !ok {
+	_, ok := ctx.Config["template"]
+	if !ok {
 		return errors.New("template action requires 'template' in config")
 	}
 
@@ -30,8 +31,10 @@ func (a *TemplateAction) Execute(ctx *ActionContext) (any, error) {
 
 	data := ctx.ExecCtx.ToMap()
 
-	if d, ok := ctx.Config["data"]; ok {
-		if dMap, ok := d.(map[string]any); ok {
+	d, ok := ctx.Config["data"]
+	if ok {
+		dMap, ok := d.(map[string]any)
+		if ok {
 			for k, v := range dMap {
 				data[k] = v
 			}

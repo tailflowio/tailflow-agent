@@ -22,24 +22,33 @@ type loopTracker struct {
 
 func (lt *loopTracker) Track(ev event.Event) {
 	if ev.Type == event.StepGoto && ev.Data != nil {
-		if iter, ok := ev.Data["iteration"].(float64); ok {
-			lt.Iteration = int(iter)
-		}
-
-		if body, ok := ev.Data["body"].([]any); ok {
-			lt.Body = make(map[string]bool, len(body))
-
-			for _, b := range body {
-				if sid, ok := b.(string); ok {
-					lt.Body[sid] = true
-				}
-			}
-		}
+		lt.trackGoto(ev)
 	}
 
 	if ev.Type == event.StepStarted && lt.Iteration > 0 && !lt.Body[ev.StepID] {
 		lt.Body = nil
 		lt.Iteration = 0
+	}
+}
+
+func (lt *loopTracker) trackGoto(ev event.Event) {
+	iter, ok := ev.Data["iteration"].(float64)
+	if ok {
+		lt.Iteration = int(iter)
+	}
+
+	body, ok := ev.Data["body"].([]any)
+	if !ok {
+		return
+	}
+
+	lt.Body = make(map[string]bool, len(body))
+
+	for _, b := range body {
+		sid, ok := b.(string)
+		if ok {
+			lt.Body[sid] = true
+		}
 	}
 }
 
@@ -70,18 +79,22 @@ func (s *Server) replayStoredEvents(
 	w http.ResponseWriter, flusher http.Flusher, executionID string,
 ) (replayedCount int, workflowDone bool) {
 	stored := s.config.ExecutionStore.GetEvents(executionID)
+	sent := 0
 
 	for _, ev := range stored {
 		writeSSEEvent(w, ev)
 
+		sent++
+
 		if ev.Type == "workflow.completed" {
 			workflowDone = true
+			break // stop replaying — nothing should follow workflow.completed
 		}
 	}
 
 	flusher.Flush()
 
-	return len(stored), workflowDone
+	return sent, workflowDone
 }
 
 type sseEventFilter func(ev event.Event) bool
@@ -135,7 +148,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "streaming not supported")
+		s.writeError(r.Context(), w, http.StatusInternalServerError, "streaming not supported")
 		return
 	}
 
@@ -143,7 +156,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 
 	// Subscribe BEFORE reading history to avoid losing events published
 	// between GetEvents and Subscribe.
-	ch := s.config.EventBus.Subscribe(100)
+	ch := s.config.EventBus.Subscribe(10_000)
 	defer s.config.EventBus.Unsubscribe(ch)
 
 	fmt.Fprintf(w, "event: connected\ndata: {\"execution_id\":%q}\n\n", executionID)
@@ -162,27 +175,35 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 			return false
 		}
 
+		lt.Track(ev)
+
+		// Loop body events (iteration > 1) are never stored, so they must
+		// not consume the skip counter — otherwise real post-replay events
+		// get incorrectly skipped.
+		inLoop := lt.InLoop(ev)
+
 		if skipped < replayedCount {
-			skipped++
+			if !inLoop {
+				skipped++
+			}
+
 			return false
 		}
 
-		lt.Track(ev)
-
-		return !lt.InLoop(ev)
+		return !inLoop
 	})
 }
 
 func (s *Server) handleGlobalSSE(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "streaming not supported")
+		s.writeError(r.Context(), w, http.StatusInternalServerError, "streaming not supported")
 		return
 	}
 
 	setSSEHeaders(w)
 
-	ch := s.config.EventBus.Subscribe(100)
+	ch := s.config.EventBus.Subscribe(10_000)
 	defer s.config.EventBus.Unsubscribe(ch)
 
 	fmt.Fprintf(w, "event: connected\ndata: {}\n\n")

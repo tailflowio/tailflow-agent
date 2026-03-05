@@ -378,6 +378,28 @@ func (s *ExecutionStoreTestSuite) TestGetStepMetrics_Nil() {
 	s.Nil(m)
 }
 
+func (s *ExecutionStoreTestSuite) TestGetStepMetrics_StepNotInMetrics() {
+	st := NewExecutionStore(10)
+
+	now := time.Now()
+	st.Add(&Execution{
+		ID:           "exec-1",
+		WorkflowName: "test",
+		Status:       runtime.StatusSuccess,
+		StartedAt:    now,
+		Steps: map[string]*runtime.StepResult{
+			"step1": {Status: runtime.StatusSuccess},
+		},
+	})
+
+	// Refresh populates stepMetrics map with step1 only
+	st.RefreshStepMetrics()
+
+	// stepMetrics is now non-nil but "unknown-step" is not in the map
+	m := st.GetStepMetrics("unknown-step")
+	s.Nil(m)
+}
+
 func (s *ExecutionStoreTestSuite) TestGetAllStepMetrics() {
 	st := NewExecutionStore(10)
 
@@ -424,6 +446,74 @@ func (s *ExecutionStoreTestSuite) TestGetAllStepMetrics_ReturnsCopy() {
 
 	all2 := st.GetAllStepMetrics()
 	s.Equal(1, all2["step1"].TotalExecutions)
+}
+
+func (s *ExecutionStoreTestSuite) TestSnapshot_NilStepsNilParamsNilFinishedAt() {
+	st := NewExecutionStore(10)
+
+	st.Add(&Execution{
+		ID:           "exec-nil",
+		WorkflowName: "test",
+		Status:       runtime.StatusRunning,
+		StartedAt:    time.Now(),
+		Steps:        nil,
+		Params:       nil,
+		FinishedAt:   nil,
+	})
+
+	got, err := st.Get("exec-nil")
+	s.Require().NoError(err)
+	s.Nil(got.Steps)
+	s.Nil(got.Params)
+	s.Nil(got.FinishedAt)
+}
+
+func (s *ExecutionStoreTestSuite) TestSnapshot_WithStepsParamsAndFinishedAt() {
+	st := NewExecutionStore(10)
+
+	now := time.Now()
+	finished := now.Add(1 * time.Second)
+
+	st.Add(&Execution{
+		ID:           "exec-full",
+		WorkflowName: "test",
+		Status:       runtime.StatusSuccess,
+		StartedAt:    now,
+		FinishedAt:   &finished,
+		Params:       map[string]any{"env": "prod", "count": 42},
+		Steps: map[string]*runtime.StepResult{
+			"step1": {Status: runtime.StatusSuccess, Output: "ok"},
+			"step2": {Status: runtime.StatusFailed, Error: &runtime.StepError{Message: "fail"}},
+		},
+	})
+
+	got, err := st.Get("exec-full")
+	s.Require().NoError(err)
+
+	// Verify deep copy of Steps
+	s.Len(got.Steps, 2)
+	s.Equal(runtime.StatusSuccess, got.Steps["step1"].Status)
+	s.Equal(runtime.StatusFailed, got.Steps["step2"].Status)
+
+	// Verify deep copy of Params
+	s.Equal("prod", got.Params["env"])
+	s.Equal(42, got.Params["count"])
+
+	// Verify deep copy of FinishedAt
+	s.NotNil(got.FinishedAt)
+	s.Equal(finished, *got.FinishedAt)
+
+	// Mutating the snapshot should not affect the original
+	got.Params["env"] = "staging"
+	got.Steps["step1"].Status = runtime.StatusFailed
+	newFinished := now.Add(99 * time.Second)
+	got.FinishedAt = &newFinished
+
+	original, err := st.Get("exec-full")
+	s.Require().NoError(err)
+	s.Equal("prod", original.Params["env"])
+	s.Equal(runtime.StatusSuccess, original.Steps["step1"].Status)
+	s.Equal(finished, *original.FinishedAt)
 }
 
 func (s *ExecutionStoreTestSuite) TestRefreshStepMetrics_LastExecution() {

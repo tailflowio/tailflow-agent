@@ -3,6 +3,7 @@ package action
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"testing"
 
@@ -29,7 +30,7 @@ func newTestContextWithKVStore(config map[string]any) (*ActionContext, *runtime.
 		Config:   config,
 		ExecCtx:  runtime.NewExecutionContext("test-exec", "test-wf", nil, nil),
 		StepID:   "test-step",
-		Logger:   slog.Default(),
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Services: services,
 	}, kvStore
 }
@@ -214,7 +215,7 @@ func (s *KVActionTestSuite) TestDeleteError() {
 		Config:   map[string]any{"key": "mykey"},
 		ExecCtx:  runtime.NewExecutionContext("test-exec", "test-wf", nil, nil),
 		StepID:   "test-step",
-		Logger:   slog.Default(),
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Services: services,
 	}
 

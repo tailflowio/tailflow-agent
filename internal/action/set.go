@@ -2,7 +2,6 @@ package action
 
 import "errors"
 
-// SetAction sets variables in the execution context.
 type SetAction struct{}
 
 func NewSetAction() Action { return &SetAction{} }

@@ -105,14 +105,13 @@ var (
 	registerMaxBackoff     = 30 * time.Second
 )
 
-// tryRegister attempts one registration with the SaaS. On success it sets
-// agentID/registered and returns true. On failure it logs and returns false.
-func (e *Exporter) tryRegister(payload map[string]any, backoff time.Duration) bool {
+func (e *Exporter) tryRegister(ctx context.Context, payload map[string]any, backoff time.Duration) bool {
 	// Use background context so in-flight HTTP calls aren't aborted when the
 	// parent ctx is canceled — registration must finish for finalFlush to work.
+	//nolint:contextcheck // registration must finish for finalFlush
 	resp, err := e.post(context.Background(), "/api/v1/agent/register", payload)
 	if err != nil {
-		e.cfg.Logger.Warn("export register failed, retrying", "error", err, "backoff", backoff)
+		e.cfg.Logger.WarnContext(ctx, "export register failed, retrying", "error", err, "backoff", backoff)
 		return false
 	}
 
@@ -120,7 +119,7 @@ func (e *Exporter) tryRegister(payload map[string]any, backoff time.Duration) bo
 
 	jsonErr := json.Unmarshal(resp, &sc)
 	if jsonErr != nil || sc.AgentID == "" {
-		e.cfg.Logger.Warn("export register response missing agent_id, retrying")
+		e.cfg.Logger.WarnContext(ctx, "export register response missing agent_id, retrying")
 		return false
 	}
 
@@ -129,7 +128,7 @@ func (e *Exporter) tryRegister(payload map[string]any, backoff time.Duration) bo
 	e.registered = true
 	e.mu.Unlock()
 
-	e.cfg.Logger.Info("export registered", "agent_id", sc.AgentID)
+	e.cfg.Logger.InfoContext(ctx, "export registered", "agent_id", sc.AgentID)
 	e.applyServerConfig(resp)
 
 	return true
@@ -152,7 +151,7 @@ func (e *Exporter) register(ctx context.Context) {
 	maxBackoff := registerMaxBackoff
 
 	for {
-		if e.tryRegister(payload, backoff) { //nolint:contextcheck
+		if e.tryRegister(ctx, payload, backoff) {
 			return
 		}
 
@@ -178,8 +177,6 @@ const maxBatchSize = 10_000
 // request to stay well within typical body-size limits.
 const flushChunkSize = 2_000
 
-// flushBatch sends all buffered events to the SaaS in chunks.
-// It clears the batch on success or drops failed chunks.
 func (e *Exporter) flushBatch(flushCtx context.Context, batch *[]event.Event) {
 	if len(*batch) == 0 {
 		return
@@ -201,7 +198,8 @@ func (e *Exporter) flushBatch(flushCtx context.Context, batch *[]event.Event) {
 			"events":     chunk,
 		}
 
-		if _, err := e.post(flushCtx, "/api/v1/agent/ingest", payload); err != nil {
+		_, err := e.post(flushCtx, "/api/v1/agent/ingest", payload)
+		if err != nil {
 			e.cfg.Logger.Warn("export ingest failed", "error", err, "batch_size", len(*batch))
 			// Drop the failed chunk to prevent infinite accumulation.
 			*batch = (*batch)[end:]
@@ -213,8 +211,6 @@ func (e *Exporter) flushBatch(flushCtx context.Context, batch *[]event.Event) {
 	}
 }
 
-// finalFlush drains any remaining events from the channel, waits briefly for
-// registration if needed, then flushes the batch.
 func (e *Exporter) finalFlush(ch <-chan event.Event, batch *[]event.Event) {
 	// Drain any remaining events from the channel.
 	for {
@@ -243,9 +239,9 @@ func (e *Exporter) finalFlush(ch <-chan event.Event, batch *[]event.Event) {
 	e.awaitRegistrationThenFlush(batch)
 }
 
-// awaitRegistrationThenFlush waits up to 5s for registration then flushes.
 func (e *Exporter) awaitRegistrationThenFlush(batch *[]event.Event) {
-	if _, ok := e.isRegistered(); !ok {
+	_, ok := e.isRegistered()
+	if !ok {
 		deadline := time.After(5 * time.Second)
 		tick := time.NewTicker(50 * time.Millisecond)
 
@@ -257,7 +253,8 @@ func (e *Exporter) awaitRegistrationThenFlush(batch *[]event.Event) {
 				e.cfg.Logger.Warn("export: shutdown timeout waiting for registration, events lost", "count", len(*batch))
 				return
 			case <-tick.C:
-				if _, ok := e.isRegistered(); ok {
+				_, ok := e.isRegistered()
+				if ok {
 					goto ready
 				}
 			}
@@ -268,8 +265,6 @@ ready:
 	e.flushBatch(context.Background(), batch)
 }
 
-// Events are buffered even before registration; they are only sent once
-// the SaaS has assigned an agent_id.
 func (e *Exporter) batchLoop(ctx context.Context, ch <-chan event.Event) {
 	e.mu.Lock()
 	ticker := time.NewTicker(e.flushInterval)
@@ -447,7 +442,10 @@ func (e *Exporter) post(ctx context.Context, path string, payload any) ([]byte, 
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response body: %w", err)
+	}
 
 	if resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)

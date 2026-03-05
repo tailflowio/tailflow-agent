@@ -11,7 +11,6 @@ type ScheduleAction struct{}
 
 func NewScheduleAction() Action { return &ScheduleAction{} }
 
-// Validate checks the schedule action configuration.
 func (a *ScheduleAction) Validate(ctx *ActionContext) error {
 	delay, hasDelay := ctx.Config["delay"]
 	at, hasAt := ctx.Config["at"]
@@ -30,7 +29,8 @@ func (a *ScheduleAction) Validate(ctx *ActionContext) error {
 			return errors.New("schedule: 'delay' must be a string duration")
 		}
 
-		if _, err := time.ParseDuration(s); err != nil {
+		_, err := time.ParseDuration(s)
+		if err != nil {
 			return fmt.Errorf("schedule: invalid delay %q: %w", s, err)
 		}
 	}
@@ -41,7 +41,8 @@ func (a *ScheduleAction) Validate(ctx *ActionContext) error {
 			return errors.New("schedule: 'at' must be an RFC3339 string")
 		}
 
-		if _, err := time.Parse(time.RFC3339, s); err != nil {
+		_, err := time.Parse(time.RFC3339, s)
+		if err != nil {
 			return fmt.Errorf("schedule: invalid 'at' %q: %w", s, err)
 		}
 	}
@@ -49,7 +50,6 @@ func (a *ScheduleAction) Validate(ctx *ActionContext) error {
 	return nil
 }
 
-// Execute runs the schedule action.
 func (a *ScheduleAction) Execute(ctx *ActionContext) (any, error) {
 	if ctx.Services == nil || ctx.Services.ScheduleExecution == nil {
 		return nil, errors.New("schedule: requires server mode (use 'tailflow serve')")
@@ -74,12 +74,14 @@ func (a *ScheduleAction) Execute(ctx *ActionContext) (any, error) {
 }
 
 func computeDelay(config map[string]any) time.Duration {
-	if delayStr, ok := config["delay"].(string); ok {
+	delayStr, ok := config["delay"].(string)
+	if ok {
 		d, _ := time.ParseDuration(delayStr)
 		return d
 	}
 
-	if atStr, ok := config["at"].(string); ok {
+	atStr, ok := config["at"].(string)
+	if ok {
 		t, _ := time.Parse(time.RFC3339, atStr)
 
 		d := time.Until(t)

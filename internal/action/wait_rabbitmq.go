@@ -11,11 +11,13 @@ type WaitRabbitMQAction struct{}
 func NewWaitRabbitMQAction() Action { return &WaitRabbitMQAction{} }
 
 func (a *WaitRabbitMQAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["url"]; !ok {
+	_, ok := ctx.Config["url"]
+	if !ok {
 		return errors.New("wait.rabbitmq requires 'url' in config")
 	}
 
-	if _, ok := ctx.Config["queue"]; !ok {
+	_, ok = ctx.Config["queue"]
+	if !ok {
 		return errors.New("wait.rabbitmq requires 'queue' in config")
 	}
 
@@ -41,15 +43,18 @@ func parseWaitRabbitMQConfig(ctx *ActionContext) (waitRabbitMQConfig, error) {
 		timeout: 5 * time.Minute,
 	}
 
-	if v, ok := ctx.Config["match"]; ok {
+	v, ok := ctx.Config["match"]
+	if ok {
 		cfg.matchField = fmt.Sprintf("%v", v)
 	}
 
-	if v, ok := ctx.Config["match_value"]; ok {
+	v, ok = ctx.Config["match_value"]
+	if ok {
 		cfg.matchValue = fmt.Sprintf("%v", v)
 	}
 
-	if t, ok := ctx.Config["timeout"]; ok {
+	t, ok := ctx.Config["timeout"]
+	if ok {
 		dur, err := time.ParseDuration(fmt.Sprintf("%v", t))
 		if err != nil {
 			return cfg, fmt.Errorf("wait.rabbitmq: invalid timeout %q: %w", t, err)

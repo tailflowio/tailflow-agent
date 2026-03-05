@@ -42,10 +42,6 @@ func (r *SensitiveRegistry) MaskMap(m map[string]any) map[string]any {
 	return r.maskValue(m).(map[string]any)
 }
 
-// maskValue walks any value recursively:
-// - map[string]any: if key matches, replace value with "[SENSITIVE]"; recurse into non-matching values
-// - []any: recurse into each element
-// - other types: return as-is
 func (r *SensitiveRegistry) maskValue(v any) any {
 	switch val := v.(type) {
 	case map[string]any:

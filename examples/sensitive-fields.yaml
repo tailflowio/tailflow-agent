@@ -1,0 +1,56 @@
+version: "2.0"
+name: "sensitive-fields"
+description: "API workflow with OAuth token exchange, tokens masked in events"
+tags: ["sensitive", "oauth", "security"]
+
+sensitive:
+  - access_token
+  - refresh_token
+  - client_secret
+
+trigger:
+  http:
+    method: POST
+    path: /api/data
+
+steps:
+  - id: authenticate
+    action: js
+    title: "Exchange credentials for token"
+    config:
+      script: |
+        // Simulate OAuth client_credentials flow
+        return {
+          access_token: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.fake-token",
+          refresh_token: "rt_k8x2mNpQwR7vL3jF9sYd",
+          token_type: "Bearer",
+          expires_in: 3600,
+          client_secret: "cs_super_secret_value",
+        };
+
+  - id: fetch-data
+    action: js
+    title: "Call external API with token"
+    depends_on: [authenticate]
+    config:
+      script: |
+        let auth = steps.authenticate.output;
+        // Simulate API call using the bearer token
+        return {
+          items: [
+            { id: 1, name: "Widget A", price: 29.99 },
+            { id: 2, name: "Widget B", price: 49.99 },
+          ],
+          total: 2,
+          auth_method: auth.token_type,
+        };
+
+  - id: respond
+    action: response
+    title: "Return data"
+    depends_on: [fetch-data]
+    config:
+      status: 200
+      body:
+        items: "{{ steps.fetch-data.output.items }}"
+        total: "{{ steps.fetch-data.output.total }}"

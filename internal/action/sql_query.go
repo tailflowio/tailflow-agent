@@ -19,7 +19,8 @@ type SQLQueryAction struct{}
 func NewSQLQueryAction() Action { return &SQLQueryAction{} }
 
 func (a *SQLQueryAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["query"]; !ok {
+	_, ok := ctx.Config["query"]
+	if !ok {
 		return errors.New("sql.query action requires 'query' in config")
 	}
 
@@ -30,14 +31,12 @@ func (a *SQLQueryAction) Validate(ctx *ActionContext) error {
 		return errors.New("sql.query action requires 'dsn' or 'tx' in config")
 	}
 
-	if hasTx {
-		if ctx.Services == nil || ctx.Services.TxRegistry == nil {
-			return errors.New("sql.query with 'tx' requires 'tailflow serve' (server mode)")
-		}
-	} else {
-		if ctx.Services == nil || ctx.Services.DBPool == nil {
-			return errors.New("sql.query action requires 'tailflow serve' (server mode)")
-		}
+	if hasTx && (ctx.Services == nil || ctx.Services.TxRegistry == nil) {
+		return errors.New("sql.query with 'tx' requires 'tailflow serve' (server mode)")
+	}
+
+	if !hasTx && (ctx.Services == nil || ctx.Services.DBPool == nil) {
+		return errors.New("sql.query action requires 'tailflow serve' (server mode)")
 	}
 
 	return nil
@@ -56,7 +55,8 @@ func (a *SQLQueryAction) Execute(ctx *ActionContext) (any, error) {
 }
 
 func execSQLQuery(ctx *ActionContext, query string, params []any) (*sql.Rows, error) {
-	if txName, ok := ctx.Config["tx"]; ok {
+	txName, ok := ctx.Config["tx"]
+	if ok {
 		tx, err := ctx.Services.TxRegistry.Get(fmt.Sprintf("%v", txName))
 		if err != nil {
 			return nil, fmt.Errorf("sql.query: %w", err)
@@ -136,7 +136,9 @@ func scanRow(cols []string, rows sqlRows) (map[string]any, error) {
 
 	for i, col := range cols {
 		v := values[i]
-		if b, ok := v.([]byte); ok {
+
+		b, ok := v.([]byte)
+		if ok {
 			v = string(b)
 		}
 

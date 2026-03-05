@@ -24,13 +24,13 @@ func (s *RedisKVStoreTestSuite) SetupTest() {
 }
 
 func (s *RedisKVStoreTestSuite) TestNewRedisKVStore_InvalidURL() {
-	_, err := NewRedisKVStore("not-a-valid-url")
+	_, err := NewRedisKVStore(context.Background(), "not-a-valid-url")
 	s.Error(err)
 	s.Contains(err.Error(), "invalid URL")
 }
 
 func (s *RedisKVStoreTestSuite) TestNewRedisKVStore_ConnectionFailed() {
-	_, err := NewRedisKVStore("redis://localhost:59999")
+	_, err := NewRedisKVStore(context.Background(), "redis://localhost:59999")
 	s.Error(err)
 	s.Contains(err.Error(), "ping failed")
 }
@@ -41,7 +41,7 @@ func (s *RedisKVStoreTestSuite) TestGetSetDelete() {
 		s.T().Skip("REDIS_TEST_URL not set, skipping Redis tests")
 	}
 
-	store, err := NewRedisKVStore(url)
+	store, err := NewRedisKVStore(context.Background(), url)
 	s.Require().NoError(err)
 	defer store.Close()
 
@@ -75,7 +75,7 @@ func (s *RedisKVStoreTestSuite) TestTTL() {
 		s.T().Skip("REDIS_TEST_URL not set, skipping Redis tests")
 	}
 
-	store, err := NewRedisKVStore(url)
+	store, err := NewRedisKVStore(context.Background(), url)
 	s.Require().NoError(err)
 	defer store.Close()
 
@@ -99,7 +99,7 @@ func (s *RedisKVStoreTestSuite) TestJSONRoundtrip() {
 		s.T().Skip("REDIS_TEST_URL not set, skipping Redis tests")
 	}
 
-	store, err := NewRedisKVStore(url)
+	store, err := NewRedisKVStore(context.Background(), url)
 	s.Require().NoError(err)
 	defer store.Close()
 
@@ -354,7 +354,7 @@ func (s *RedisKVStoreTestSuite) TestNewRedisKVStore_Success() {
 		return mc
 	}
 
-	store, err := NewRedisKVStore("redis://localhost:6379")
+	store, err := NewRedisKVStore(context.Background(), "redis://localhost:6379")
 	s.NoError(err)
 	s.NotNil(store)
 }

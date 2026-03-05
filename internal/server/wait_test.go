@@ -101,8 +101,6 @@ func (s *WaitRegistryTestSuite) TestMultipleRegistrations() {
 	s.Equal("POST", receivedB.Method)
 }
 
-// --- Deliver channel full ---
-
 func (s *WaitRegistryTestSuite) TestDeliver_ChannelFull_ReturnsError() {
 	ch, _ := s.registry.Register("exec-1", "step-1", "/hook", context.Background())
 
@@ -118,8 +116,6 @@ func (s *WaitRegistryTestSuite) TestDeliver_ChannelFull_ReturnsError() {
 	// Drain the channel
 	<-ch
 }
-
-// --- Register with nil context ---
 
 func (s *WaitRegistryTestSuite) TestRegister_NilContext_NoAutoCleanup() {
 	ch, cleanup := s.registry.Register("exec-1", "step-1", "/hook", nil)

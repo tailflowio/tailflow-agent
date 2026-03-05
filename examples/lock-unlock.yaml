@@ -1,0 +1,69 @@
+version: "2.0"
+name: "lock-unlock"
+description: "Reserve stock with a distributed lock to prevent overselling"
+tags: ["lock", "kv", "concurrency"]
+
+trigger:
+  http:
+    method: POST
+    path: /stock/reserve
+
+steps:
+  - id: acquire
+    action: lock
+    title: "Acquire stock lock"
+    config:
+      key: "stock-{{ trigger.body.sku }}"
+      timeout: "10s"
+
+  - id: check-stock
+    action: kv.get
+    title: "Read current stock"
+    depends_on: [acquire]
+    config:
+      key: "stock:{{ trigger.body.sku }}"
+
+  - id: evaluate
+    action: condition
+    title: "Check availability"
+    depends_on: [check-stock]
+    config:
+      expression: "{{ steps.check-stock.output.value ?? 0 }} >= {{ trigger.body.quantity ?? 1 }}"
+
+  - id: decrement
+    action: js
+    title: "Compute new stock level"
+    depends_on: [evaluate]
+    when: "steps.evaluate.output.result == true"
+    config:
+      script: |
+        let current = steps["check-stock"].output.value || 0;
+        let qty = trigger.body.quantity || 1;
+        return { new_stock: current - qty };
+
+  - id: save-stock
+    action: kv.set
+    title: "Update stock"
+    depends_on: [decrement]
+    when: "steps.evaluate.output.result == true"
+    config:
+      key: "stock:{{ trigger.body.sku }}"
+      value: "{{ steps.decrement.output.new_stock }}"
+
+  - id: release
+    action: unlock
+    title: "Release stock lock"
+    depends_on: [evaluate, save-stock]
+    config:
+      key: "stock-{{ trigger.body.sku }}"
+
+  - id: respond
+    action: response
+    title: "Return result"
+    depends_on: [release]
+    config:
+      status: 200
+      body:
+        sku: "{{ trigger.body.sku }}"
+        reserved: "{{ steps.evaluate.output.result }}"
+        remaining: "{{ steps.decrement.output.new_stock ?? steps.check-stock.output.value ?? 0 }}"

@@ -9,6 +9,7 @@ import (
 	"os"
 	"regexp"
 	goruntime "runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -56,11 +57,7 @@ type ExecuteOptions struct {
 func (e *Executor) Execute(
 	ctx context.Context, wf *parser.Workflow, params map[string]any, opts ...ExecuteOptions,
 ) (*ExecuteResult, error) {
-	executionID := uuid.New().String()
-	if len(opts) > 0 && opts[0].ExecutionID != "" {
-		executionID = opts[0].ExecutionID
-	}
-
+	executionID := resolveExecutionID(opts)
 	startedAt := time.Now()
 
 	resolvedParams, err := e.resolveParams(wf, params)
@@ -73,14 +70,7 @@ func (e *Executor) Execute(
 		return nil, err
 	}
 
-	execCtx := runtime.NewExecutionContext(executionID, wf.Name, resolvedParams, resolvedEnv)
-	if len(opts) > 0 && opts[0].TriggerData != nil {
-		execCtx.TriggerData = opts[0].TriggerData
-	}
-
-	if len(opts) > 0 && opts[0].Services != nil {
-		execCtx.Services = opts[0].Services
-	}
+	execCtx := e.buildExecutionContext(executionID, wf.Name, resolvedParams, resolvedEnv, opts)
 
 	e.bus.Publish(event.NewEvent(event.WorkflowStarted, executionID, "", fmt.Sprintf("workflow %q started", wf.Name)))
 
@@ -91,40 +81,88 @@ func (e *Executor) Execute(
 
 	execErr := e.executeDAG(ctx, dag, execCtx)
 
-	if len(wf.OnError) > 0 && (execErr != nil || hasFailedSteps(execCtx)) {
+	if len(wf.OnError) > 0 && (execErr != nil || execCtx.HasFailedSteps()) {
 		e.executeOnError(ctx, parser.Step{OnError: wf.OnError}, execCtx)
 	}
 
+	return e.buildExecuteResult(ctx, wf.Name, execCtx, execErr, executionID, startedAt), nil
+}
+
+func resolveExecutionID(opts []ExecuteOptions) string {
+	if len(opts) > 0 && opts[0].ExecutionID != "" {
+		return opts[0].ExecutionID
+	}
+
+	return uuid.New().String()
+}
+
+func (e *Executor) buildExecutionContext(
+	executionID, wfName string, resolvedParams map[string]any,
+	resolvedEnv map[string]string, opts []ExecuteOptions,
+) *runtime.ExecutionContext {
+	execCtx := runtime.NewExecutionContext(executionID, wfName, resolvedParams, resolvedEnv)
+	if len(opts) > 0 && opts[0].TriggerData != nil {
+		execCtx.TriggerData = opts[0].TriggerData
+	}
+
+	if len(opts) > 0 && opts[0].Services != nil {
+		execCtx.Services = opts[0].Services
+	}
+
+	return execCtx
+}
+
+func (e *Executor) buildExecuteResult(
+	ctx context.Context, wfName string, execCtx *runtime.ExecutionContext,
+	execErr error, executionID string, startedAt time.Time,
+) *ExecuteResult {
 	status, hasErrors := e.determineStatus(ctx, execErr, execCtx)
 	finishedAt := time.Now()
-	e.bus.Publish(event.Event{
-		Type:        event.WorkflowCompleted,
-		Timestamp:   finishedAt,
-		ExecutionID: executionID,
-		Message:     fmt.Sprintf("workflow %q %s", wf.Name, status),
-		Data:        map[string]any{"status": status},
-	})
+	e.publishWorkflowCompleted(executionID, wfName, status, finishedAt)
 
 	return &ExecuteResult{
 		ExecutionID: executionID,
 		Status:      status,
 		HasErrors:   hasErrors,
-		Steps:       execCtx.Steps,
+		Steps:       copyStepResults(execCtx.Steps),
 		Error:       execErr,
 		StartedAt:   startedAt,
 		FinishedAt:  finishedAt,
-	}, nil
+	}
+}
+
+func (e *Executor) publishWorkflowCompleted(executionID, wfName, status string, ts time.Time) {
+	e.bus.Publish(event.Event{
+		Type:        event.WorkflowCompleted,
+		Timestamp:   ts,
+		ExecutionID: executionID,
+		Message:     fmt.Sprintf("workflow %q %s", wfName, status),
+		Data:        map[string]any{"status": status},
+	})
+}
+
+func copyStepResults(steps map[string]*runtime.StepResult) map[string]*runtime.StepResult {
+	stepsCopy := make(map[string]*runtime.StepResult, len(steps))
+	for k, v := range steps {
+		cp := *v
+		stepsCopy[k] = &cp
+	}
+
+	return stepsCopy
 }
 
 func (e *Executor) resolveParams(wf *parser.Workflow, params map[string]any) (map[string]any, error) {
 	resolved := make(map[string]any)
 
 	for _, p := range wf.Params {
-		if v, ok := params[p.Name]; ok {
+		v, ok := params[p.Name]
+
+		switch {
+		case ok:
 			resolved[p.Name] = v
-		} else if p.Default != nil {
+		case p.Default != nil:
 			resolved[p.Name] = p.Default
-		} else if p.Required {
+		case p.Required:
 			return nil, fmt.Errorf("required parameter %q not provided", p.Name)
 		}
 	}
@@ -191,10 +229,8 @@ func (e *Executor) determineStatus(ctx context.Context, execErr error, execCtx *
 		return runtime.StatusFailed, false
 	}
 
-	for _, sr := range execCtx.Steps {
-		if sr.Status == runtime.StatusFailed {
-			return runtime.StatusCompletedWithErrors, true
-		}
+	if execCtx.HasFailedSteps() {
+		return runtime.StatusCompletedWithErrors, true
 	}
 
 	return runtime.StatusSuccess, false
@@ -361,7 +397,8 @@ func (e *Executor) executeNode(ctx context.Context, node *DAGNode, execCtx *runt
 	step := node.Step
 	logger := e.logger.With("step", step.ID)
 
-	if skipped, err := e.evaluateWhenCondition(step, execCtx, logger); skipped || err != nil {
+	skipped, err := e.evaluateWhenCondition(step, execCtx, logger)
+	if skipped || err != nil {
 		return err
 	}
 
@@ -453,12 +490,14 @@ func (e *Executor) extractLoopConfig(
 
 	needsCopy := false
 
-	if ac, ok := step.Config["action_config"]; ok {
+	ac, ok := step.Config["action_config"]
+	if ok {
 		rawActionConfig, _ = ac.(map[string]any)
 		needsCopy = true
 	}
 
-	if aa, ok := step.Config["actions"]; ok {
+	aa, ok := step.Config["actions"]
+	if ok {
 		rawActionsArray, _ = aa.([]any)
 		needsCopy = true
 	}
@@ -511,7 +550,8 @@ func (e *Executor) prepareStepInput(step parser.Step, resolvedConfig map[string]
 	deps := make(map[string]any)
 
 	for _, dep := range step.DependsOn {
-		if r, ok := execCtx.GetStepResult(dep); ok && r.Output != nil {
+		r, ok := execCtx.GetStepResult(dep)
+		if ok && r.Output != nil {
 			deps[dep] = r.Output
 		}
 	}
@@ -698,7 +738,6 @@ func (e *Executor) handleStepError(
 		StepID:      step.ID,
 		Message:     execErr.Error(),
 	})
-	logger.Error("failed", "error", execErr)
 
 	if len(step.OnError) > 0 {
 		e.executeOnError(ctx, step, execCtx)
@@ -719,7 +758,8 @@ func (e *Executor) handleIgnoredError(
 ) error {
 	suppressedOutput := map[string]any{"_suppressed_error": execErr.Error()}
 
-	if outMap, ok := output.(map[string]any); ok {
+	outMap, ok := output.(map[string]any)
+	if ok {
 		maps.Copy(suppressedOutput, outMap)
 	}
 
@@ -780,20 +820,29 @@ func (e *Executor) recordStepSuccess(
 }
 
 func (e *Executor) emitLogActionOutput(step parser.Step, output any, execCtx *runtime.ExecutionContext) {
-	if step.Action != "log" {
+	outMap, ok := output.(map[string]any)
+	if !ok {
 		return
 	}
 
-	if outMap, ok := output.(map[string]any); ok {
-		logMsg, _ := outMap["message"].(string)
-		logLevel, _ := outMap["level"].(string)
+	var logMsg, logLevel string
 
+	switch step.Action {
+	case "log":
+		logMsg, _ = outMap["message"].(string)
+		logLevel, _ = outMap["level"].(string)
+	default:
+		// table action already emits step.log via EmitLog during execution
+		return
+	}
+
+	for _, line := range strings.Split(strings.TrimRight(logMsg, "\n"), "\n") {
 		e.bus.Publish(event.Event{
 			Type:        event.StepLog,
 			Timestamp:   time.Now(),
 			ExecutionID: execCtx.ExecutionID,
 			StepID:      step.ID,
-			Message:     logMsg,
+			Message:     line,
 			Data:        map[string]any{"level": logLevel},
 		})
 	}
@@ -829,9 +878,11 @@ func (e *Executor) executeOnError(ctx context.Context, step parser.Step, execCtx
 		if err != nil {
 			logger.Error("on_error step failed", "error", err)
 			execCtx.SetStepResult(errStep.ID, &runtime.StepResult{Status: runtime.StatusFailed, Error: stepError(errStep.ID, err)})
-		} else {
-			execCtx.SetStepResult(errStep.ID, &runtime.StepResult{Status: runtime.StatusSuccess, Output: output})
+
+			continue
 		}
+
+		execCtx.SetStepResult(errStep.ID, &runtime.StepResult{Status: runtime.StatusSuccess, Output: output})
 	}
 }
 
@@ -844,14 +895,4 @@ func stepError(stepID string, err error) *runtime.StepError {
 	}
 
 	return &runtime.StepError{Message: err.Error(), Code: code, StepID: stepID}
-}
-
-func hasFailedSteps(execCtx *runtime.ExecutionContext) bool {
-	for _, sr := range execCtx.Steps {
-		if sr.Status == runtime.StatusFailed {
-			return true
-		}
-	}
-
-	return false
 }

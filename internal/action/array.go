@@ -3,11 +3,31 @@ package action
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 
 	"github.com/tailflow/tailflow/internal/runtime"
 )
+
+func toAnySlice(v any) ([]any, bool) {
+	arr, ok := v.([]any)
+	if ok {
+		return arr, true
+	}
+
+	rv := reflect.ValueOf(v)
+	if rv.Kind() != reflect.Slice {
+		return nil, false
+	}
+
+	result := make([]any, rv.Len())
+	for i := range rv.Len() {
+		result[i] = rv.Index(i).Interface()
+	}
+
+	return result, true
+}
 
 func arrayInput(config map[string]any) ([]any, error) {
 	raw, ok := config["input"]
@@ -15,7 +35,7 @@ func arrayInput(config map[string]any) ([]any, error) {
 		return nil, errors.New("missing 'input' in config")
 	}
 
-	arr, ok := raw.([]any)
+	arr, ok := toAnySlice(raw)
 	if !ok {
 		return nil, fmt.Errorf("'input' must be an array, got %T", raw)
 	}
@@ -53,17 +73,18 @@ func compareValues(a, b any) int {
 	return strings.Compare(as, bs)
 }
 
-// ArraySortAction sorts an array by a field.
 type ArraySortAction struct{}
 
 func NewArraySortAction() Action { return &ArraySortAction{} }
 
 func (a *ArraySortAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["input"]; !ok {
+	_, ok := ctx.Config["input"]
+	if !ok {
 		return errors.New("array.sort requires 'input' in config")
 	}
 
-	if _, ok := ctx.Config["field"]; !ok {
+	_, ok = ctx.Config["field"]
+	if !ok {
 		return errors.New("array.sort requires 'field' in config")
 	}
 
@@ -79,7 +100,9 @@ func (a *ArraySortAction) Execute(ctx *ActionContext) (any, error) {
 	field := fmt.Sprintf("%v", ctx.Config["field"])
 
 	direction := "asc"
-	if d, ok := ctx.Config["direction"]; ok {
+
+	d, ok := ctx.Config["direction"]
+	if ok {
 		direction = fmt.Sprintf("%v", d)
 	}
 
@@ -102,17 +125,18 @@ func (a *ArraySortAction) Execute(ctx *ActionContext) (any, error) {
 	return sorted, nil
 }
 
-// ArrayFilterAction filters an array using an expression.
 type ArrayFilterAction struct{}
 
 func NewArrayFilterAction() Action { return &ArrayFilterAction{} }
 
 func (a *ArrayFilterAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["input"]; !ok {
+	_, ok := ctx.Config["input"]
+	if !ok {
 		return errors.New("array.filter requires 'input' in config")
 	}
 
-	if _, ok := ctx.Config["condition"]; !ok {
+	_, ok = ctx.Config["condition"]
+	if !ok {
 		return errors.New("array.filter requires 'condition' in config")
 	}
 
@@ -128,7 +152,7 @@ func (a *ArrayFilterAction) Execute(ctx *ActionContext) (any, error) {
 	condition := fmt.Sprintf("%v", ctx.Config["condition"])
 	eval := runtime.NewExprEvaluator()
 
-	var result []any
+	result := make([]any, 0, len(items))
 
 	for _, item := range items {
 		exprCtx := map[string]any{"item": item}
@@ -143,24 +167,21 @@ func (a *ArrayFilterAction) Execute(ctx *ActionContext) (any, error) {
 		}
 	}
 
-	if result == nil {
-		result = []any{}
-	}
-
 	return result, nil
 }
 
-// ArrayMapAction transforms each element using an expression.
 type ArrayMapAction struct{}
 
 func NewArrayMapAction() Action { return &ArrayMapAction{} }
 
 func (a *ArrayMapAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["input"]; !ok {
+	_, ok := ctx.Config["input"]
+	if !ok {
 		return errors.New("array.map requires 'input' in config")
 	}
 
-	if _, ok := ctx.Config["expression"]; !ok {
+	_, ok = ctx.Config["expression"]
+	if !ok {
 		return errors.New("array.map requires 'expression' in config")
 	}
 
@@ -192,17 +213,18 @@ func (a *ArrayMapAction) Execute(ctx *ActionContext) (any, error) {
 	return result, nil
 }
 
-// ArrayUniqAction deduplicates an array by a field value.
 type ArrayUniqAction struct{}
 
 func NewArrayUniqAction() Action { return &ArrayUniqAction{} }
 
 func (a *ArrayUniqAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["input"]; !ok {
+	_, ok := ctx.Config["input"]
+	if !ok {
 		return errors.New("array.uniq requires 'input' in config")
 	}
 
-	if _, ok := ctx.Config["field"]; !ok {
+	_, ok = ctx.Config["field"]
+	if !ok {
 		return errors.New("array.uniq requires 'field' in config")
 	}
 
@@ -237,17 +259,18 @@ func (a *ArrayUniqAction) Execute(ctx *ActionContext) (any, error) {
 	return result, nil
 }
 
-// ArrayPickAction selects specific fields from each object in an array.
 type ArrayPickAction struct{}
 
 func NewArrayPickAction() Action { return &ArrayPickAction{} }
 
 func (a *ArrayPickAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["input"]; !ok {
+	_, ok := ctx.Config["input"]
+	if !ok {
 		return errors.New("array.pick requires 'input' in config")
 	}
 
-	if _, ok := ctx.Config["fields"]; !ok {
+	_, ok = ctx.Config["fields"]
+	if !ok {
 		return errors.New("array.pick requires 'fields' in config")
 	}
 
@@ -282,7 +305,8 @@ func (a *ArrayPickAction) Execute(ctx *ActionContext) (any, error) {
 		picked := make(map[string]any, len(fields))
 
 		for _, f := range fields {
-			if v, exists := m[f]; exists {
+			v, exists := m[f]
+			if exists {
 				picked[f] = v
 			}
 		}
@@ -293,13 +317,13 @@ func (a *ArrayPickAction) Execute(ctx *ActionContext) (any, error) {
 	return result, nil
 }
 
-// ArrayConcatAction concatenates multiple arrays into one.
 type ArrayConcatAction struct{}
 
 func NewArrayConcatAction() Action { return &ArrayConcatAction{} }
 
 func (a *ArrayConcatAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["arrays"]; !ok {
+	_, ok := ctx.Config["arrays"]
+	if !ok {
 		return errors.New("array.concat requires 'arrays' in config")
 	}
 
@@ -312,7 +336,7 @@ func (a *ArrayConcatAction) Execute(ctx *ActionContext) (any, error) {
 		return nil, errors.New("array.concat: 'arrays' must be an array of arrays")
 	}
 
-	var result []any
+	result := make([]any, 0, len(raw))
 
 	for i, item := range raw {
 		arr, ok := item.([]any)
@@ -321,10 +345,6 @@ func (a *ArrayConcatAction) Execute(ctx *ActionContext) (any, error) {
 		}
 
 		result = append(result, arr...)
-	}
-
-	if result == nil {
-		result = []any{}
 	}
 
 	return result, nil

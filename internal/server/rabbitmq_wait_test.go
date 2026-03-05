@@ -114,8 +114,6 @@ func (s *RabbitMQWaitTestSuite) TestRabbitMQWaitManager_RemoveWaiter_UnknownURL(
 	s.Len(mgr.connections, 0)
 }
 
-// --- Register tests ---
-
 func (s *RabbitMQWaitTestSuite) TestRegister_DialError_ClosesChannel() {
 	mgr := NewRabbitMQWaitManager(s.logger)
 	mgr.dial = func(url string) (amqpConn, error) {
@@ -248,8 +246,6 @@ func (s *RabbitMQWaitTestSuite) TestRegister_NilContext() {
 	})
 }
 
-// --- getOrCreateConnection tests ---
-
 func (s *RabbitMQWaitTestSuite) TestGetOrCreateConnection_ReusesExistingConnection() {
 	mgr := NewRabbitMQWaitManager(s.logger)
 	mockConn := &mockAMQPConn{}
@@ -265,8 +261,6 @@ func (s *RabbitMQWaitTestSuite) TestGetOrCreateConnection_ReusesExistingConnecti
 	s.Require().NoError(err)
 	s.Equal(mockConn, mc.conn)
 }
-
-// --- getOrCreateConsumer tests ---
 
 func (s *RabbitMQWaitTestSuite) TestGetOrCreateConsumer_QosError() {
 	synctest.Test(s.T(), func(t *testing.T) {
@@ -330,8 +324,6 @@ func (s *RabbitMQWaitTestSuite) TestGetOrCreateConsumer_ReusesExisting() {
 	s.Require().NoError(err)
 	s.Equal(existingQC, qc)
 }
-
-// --- routeMessage tests ---
 
 func (s *RabbitMQWaitTestSuite) TestRouteMessage_InvalidJSON() {
 	synctest.Test(s.T(), func(t *testing.T) {
@@ -439,8 +431,6 @@ func (s *RabbitMQWaitTestSuite) TestRouteMessage_SkipsCancelledWaiter() {
 	s.False(matched, "cancelled waiter should be skipped")
 }
 
-// --- deliverToWaiter tests ---
-
 func (s *RabbitMQWaitTestSuite) TestDeliverToWaiter_ChannelFull() {
 	mgr := NewRabbitMQWaitManager(s.logger)
 
@@ -486,8 +476,6 @@ func (s *RabbitMQWaitTestSuite) TestDeliverToWaiter_AckError() {
 	s.True(ack.ackCalled)
 	s.Len(qc.waiters, 0)
 }
-
-// --- consumeLoop tests ---
 
 func (s *RabbitMQWaitTestSuite) TestConsumeLoop_NackUnmatchedMessage() {
 	synctest.Test(s.T(), func(t *testing.T) {
@@ -575,8 +563,6 @@ func (s *RabbitMQWaitTestSuite) TestConsumeLoop_ContextCancelDuringThrottle() {
 	})
 }
 
-// --- removeWaiter tests ---
-
 func (s *RabbitMQWaitTestSuite) TestRemoveWaiter_UnknownQueue() {
 	mgr := NewRabbitMQWaitManager(s.logger)
 	mgr.connections["amqp://host:5672"] = &managedConnection{
@@ -654,8 +640,6 @@ func (s *RabbitMQWaitTestSuite) TestRemoveWaiter_NotLastWaiter_KeepsConsumer() {
 	})
 }
 
-// --- Close tests ---
-
 func (s *RabbitMQWaitTestSuite) TestClose_WithActiveConnections() {
 	synctest.Test(s.T(), func(t *testing.T) {
 		mgr := NewRabbitMQWaitManager(s.logger)
@@ -691,8 +675,6 @@ func (s *RabbitMQWaitTestSuite) TestClose_EmptyManager() {
 	})
 }
 
-// --- amqpTableToMap tests ---
-
 func (s *RabbitMQWaitTestSuite) TestAmqpTableToMap_NilTable() {
 	result := amqpTableToMap(nil)
 	s.Nil(result)
@@ -707,8 +689,6 @@ func (s *RabbitMQWaitTestSuite) TestAmqpTableToMap_NonNilTable() {
 	s.Equal("value1", result["key1"])
 	s.Equal(42, result["key2"])
 }
-
-// --- consumeLoop with matched message ---
 
 func (s *RabbitMQWaitTestSuite) TestConsumeLoop_MatchedMessageContinues() {
 	synctest.Test(s.T(), func(t *testing.T) {
@@ -747,8 +727,6 @@ func (s *RabbitMQWaitTestSuite) TestConsumeLoop_MatchedMessageContinues() {
 		synctest.Wait()
 	})
 }
-
-// --- getOrCreateConnection: nil dial falls back to realAMQPDial ---
 
 func (s *RabbitMQWaitTestSuite) TestGetOrCreateConnection_NilDial_UsesRealAMQPDial() {
 	original := amqpRawDial

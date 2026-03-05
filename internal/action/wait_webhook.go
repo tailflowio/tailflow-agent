@@ -12,7 +12,8 @@ type WaitWebhookAction struct{}
 func NewWaitWebhookAction() Action { return &WaitWebhookAction{} }
 
 func (a *WaitWebhookAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["path"]; !ok {
+	_, ok := ctx.Config["path"]
+	if !ok {
 		return errors.New("wait.webhook requires 'path' in config")
 	}
 
@@ -29,7 +30,8 @@ func (a *WaitWebhookAction) Execute(ctx *ActionContext) (any, error) {
 	// Parse optional timeout (default: 5m)
 	timeout := 5 * time.Minute
 
-	if t, ok := ctx.Config["timeout"]; ok {
+	t, ok := ctx.Config["timeout"]
+	if ok {
 		dur, err := time.ParseDuration(fmt.Sprintf("%v", t))
 		if err != nil {
 			return nil, fmt.Errorf("wait.webhook: invalid timeout %q: %w", t, err)

@@ -12,16 +12,20 @@ type StringMatchAllAction struct{}
 func NewStringMatchAllAction() Action { return &StringMatchAllAction{} }
 
 func (a *StringMatchAllAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["input"]; !ok {
+	_, ok := ctx.Config["input"]
+	if !ok {
 		return errors.New("string.match_all action requires 'input' in config")
 	}
 
-	if _, ok := ctx.Config["pattern"]; !ok {
+	_, ok = ctx.Config["pattern"]
+	if !ok {
 		return errors.New("string.match_all action requires 'pattern' in config")
 	}
 
 	pattern := fmt.Sprintf("%v", ctx.Config["pattern"])
-	if _, err := regexp.Compile(pattern); err != nil {
+
+	_, err := regexp.Compile(pattern)
+	if err != nil {
 		return fmt.Errorf("string.match_all: invalid pattern %q: %w", pattern, err)
 	}
 
@@ -35,11 +39,12 @@ func (a *StringMatchAllAction) Execute(ctx *ActionContext) (any, error) {
 	re := regexp.MustCompile(pattern)
 
 	seen := make(map[string]bool)
-	var results []any
 
 	if re.NumSubexp() > 0 {
-		// If pattern has capture groups, return first capture group
-		for _, m := range re.FindAllStringSubmatch(input, -1) {
+		matches := re.FindAllStringSubmatch(input, -1)
+		results := make([]any, 0, len(matches))
+
+		for _, m := range matches {
 			val := m[1]
 
 			if seen[val] {
@@ -50,20 +55,23 @@ func (a *StringMatchAllAction) Execute(ctx *ActionContext) (any, error) {
 
 			results = append(results, val)
 		}
-	} else {
-		for _, m := range re.FindAllString(input, -1) {
-			if seen[m] {
-				continue
-			}
 
-			seen[m] = true
-
-			results = append(results, m)
-		}
+		return map[string]any{
+			"matches": results,
+		}, nil
 	}
 
-	if results == nil {
-		results = []any{}
+	matches := re.FindAllString(input, -1)
+	results := make([]any, 0, len(matches))
+
+	for _, m := range matches {
+		if seen[m] {
+			continue
+		}
+
+		seen[m] = true
+
+		results = append(results, m)
 	}
 
 	return map[string]any{

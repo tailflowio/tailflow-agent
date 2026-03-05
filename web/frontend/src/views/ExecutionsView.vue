@@ -124,10 +124,25 @@ function stepDot(s: string) {
 function badge(s: string) {
   if (s === 'success') return 'bg-emerald-400/15 text-emerald-400'
   if (s === 'failed') return 'bg-red-400/15 text-red-400'
-  if (s === 'cancelled') return 'bg-g-5 text-g-9'
+  if (s === 'cancelled') return 'bg-g-7/20 text-g-9'
   if (s === 'running') return 'bg-amber-400/15 text-amber-400'
   if (s === 'waiting') return 'bg-amber-400/15 text-amber-400'
-  return 'bg-g-5 text-g-9'
+  return 'bg-g-7/20 text-g-9'
+}
+function isAnimated(s: string) {
+  return s === 'running' || s === 'waiting'
+}
+function hashCode(str: string): number {
+  let hash = 0
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0
+  }
+  return Math.abs(hash)
+}
+function execGradient(id: string): string {
+  const h1 = hashCode(id) % 360
+  const h2 = (h1 + 40 + (hashCode(id + 'x') % 80)) % 360
+  return `linear-gradient(135deg, hsl(${h1}, 70%, 60%), hsl(${h2}, 70%, 50%))`
 }
 
 function formatDate(d: string) {
@@ -177,8 +192,10 @@ function orderedSteps(exec: Execution): [string, { status: string; started_at?: 
 
 <template>
   <div>
-    <h1 class="text-lg font-semibold text-g-14 mb-1 tracking-tight">{{ t('executions.title') }}</h1>
-    <p class="text-sm text-g-10 mb-4">{{ t('executions.description') }}</p>
+    <div class="mb-5">
+      <h2 class="text-lg font-semibold text-g-14">{{ t('executions.title') }}</h2>
+      <p class="text-sm text-g-8 mt-0.5">{{ t('executions.description') }}</p>
+    </div>
 
     <!-- Toolbar: filters + sort -->
     <div class="flex flex-wrap items-center gap-2 mb-4">
@@ -233,13 +250,12 @@ function orderedSteps(exec: Execution): [string, { status: string; started_at?: 
     <!-- Table -->
     <div v-else class="bg-g-2 border border-g-5 rounded-lg overflow-hidden lm-card">
       <!-- Header -->
-      <div class="grid grid-cols-[auto_80px_1fr_70px_140px_80px] gap-4 px-5 py-2.5 border-b border-g-5 text-[12px] font-medium text-g-9 uppercase tracking-wider">
-        <span class="w-[6px]"></span>
+      <div class="grid grid-cols-[7rem_10rem_1fr_5rem_10rem] gap-3 px-5 py-2.5 border-b border-g-5 text-[12px] font-medium text-g-9 uppercase tracking-wider">
         <span>{{ t('executions.status') }}</span>
-        <span>{{ t('executions.steps') }}</span>
-        <span>{{ t('executions.duration') }}</span>
-        <span>{{ t('executions.date') }}</span>
         <span>ID</span>
+        <span>{{ t('executions.steps') }}</span>
+        <span class="text-right">{{ t('executions.duration') }}</span>
+        <span class="text-right">{{ t('executions.date') }}</span>
       </div>
       <!-- Rows -->
       <div>
@@ -247,10 +263,16 @@ function orderedSteps(exec: Execution): [string, { status: string; started_at?: 
           v-for="exec in executions"
           :key="exec.id"
           @click="router.push({ name: 'execution', params: { id: exec.id } })"
-          class="grid grid-cols-[auto_80px_1fr_70px_140px_80px] gap-4 items-center px-5 py-3 cursor-pointer hover:bg-g-3 transition-colors border-b border-g-5 last:border-b-0"
+          class="grid grid-cols-[7rem_10rem_1fr_5rem_10rem] gap-3 items-center px-5 py-3 cursor-pointer hover:bg-g-3 transition-colors border-b border-g-5 last:border-b-0"
         >
-          <span :class="['w-[6px] h-[6px] rounded-full flex-shrink-0', dot(exec.status)]" />
-          <span :class="['text-[12px] font-mono font-medium px-2 py-0.5 rounded w-fit', badge(exec.status)]">{{ exec.status }}</span>
+          <span :class="['inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium w-fit', badge(exec.status)]">
+            <span :class="['w-1.5 h-1.5 rounded-full bg-current', isAnimated(exec.status) ? 'pulse-dot' : 'opacity-50']" />
+            {{ exec.status }}
+          </span>
+          <span class="inline-flex items-center gap-1.5">
+            <span class="w-3 h-3 rounded-sm shrink-0" :style="{ background: execGradient(exec.id) }" />
+            <span class="text-[11px] text-g-10 font-mono">{{ exec.id.slice(0, 8) }}</span>
+          </span>
           <div class="flex items-center gap-2">
             <template v-if="stepProgress(exec)">
               <div class="flex gap-[3px]">
@@ -267,9 +289,8 @@ function orderedSteps(exec: Execution): [string, { status: string; started_at?: 
             </template>
             <span v-else class="text-[11px] text-g-7 font-mono">-</span>
           </div>
-          <span class="text-[12px] text-g-10 font-mono tabular-nums">{{ duration(exec) }}</span>
-          <span class="text-[12px] text-g-9">{{ formatDate(exec.started_at) }}</span>
-          <span class="text-[12px] text-g-8 font-mono">{{ exec.id.slice(0, 8) }}</span>
+          <span class="text-[12px] text-g-10 font-mono tabular-nums text-right">{{ duration(exec) }}</span>
+          <span class="text-[12px] text-g-9 whitespace-nowrap text-right">{{ formatDate(exec.started_at) }}</span>
         </div>
       </div>
 

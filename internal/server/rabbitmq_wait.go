@@ -127,13 +127,13 @@ func (m *RabbitMQWaitManager) getOrCreateConsumer(mc *managedConnection, queue s
 
 	err = ch.Qos(1, 0, false)
 	if err != nil {
-		ch.Close()
+		_ = ch.Close()
 		return nil, fmt.Errorf("qos: %w", err)
 	}
 
 	deliveries, err := ch.Consume(queue, "", false, false, false, false, nil)
 	if err != nil {
-		ch.Close()
+		_ = ch.Close()
 		return nil, fmt.Errorf("consume: %w", err)
 	}
 
@@ -179,11 +179,14 @@ func (m *RabbitMQWaitManager) removeWaiter(url, queue string, w *rmqWaiter) {
 	}
 
 	qc.cancel()
-	qc.amqpChan.Close()
+
+	_ = qc.amqpChan.Close()
+
 	delete(mc.consumers, queue)
 
 	if len(mc.consumers) == 0 {
-		mc.conn.Close()
+		_ = mc.conn.Close()
+
 		delete(m.connections, url)
 	}
 }
@@ -277,11 +280,14 @@ func (m *RabbitMQWaitManager) Close() {
 	for url, mc := range m.connections {
 		for queue, qc := range mc.consumers {
 			qc.cancel()
-			qc.amqpChan.Close()
+
+			_ = qc.amqpChan.Close()
+
 			delete(mc.consumers, queue)
 		}
 
-		mc.conn.Close()
+		_ = mc.conn.Close()
+
 		delete(m.connections, url)
 	}
 }

@@ -1,7 +1,10 @@
+import { sharedFr } from '@tailflow/shared'
+
 export default {
+  ...sharedFr,
   nav: {
     overview: "Vue d'ensemble",
-    steps: 'Steps',
+    workflow: 'Workflow',
     executions: 'Executions',
     run: 'Executer',
     lightMode: 'Mode clair',
@@ -36,6 +39,10 @@ export default {
     workflowMetrics: 'Workflow',
     metricsUnavailable: 'Necessite Linux',
   },
+  workflow: {
+    graph: 'Graphe',
+    list: 'Liste',
+  },
   steps: {
     title: 'Steps',
     count: '{count} steps dans {name}',
@@ -66,12 +73,16 @@ export default {
     live: 'live',
     results: 'Resultats',
     collapseAll: 'Reduire tout',
+    expand: 'Afficher',
+    collapse: 'Masquer',
     waiting: 'En attente : {type}',
     input: 'Input',
     output: 'Output',
     pipeline: 'Pipeline',
     error: 'Erreur',
+    loading: 'Chargement...',
     events: 'Events',
+    graph: 'Graphe',
   },
   executions: {
     title: 'Executions',
@@ -90,6 +101,9 @@ export default {
     sortDate: 'Date',
     sortDuration: 'Duree',
     loading: 'Chargement...',
+    connectionLost: "Impossible de joindre l'agent",
+    connectionLostDesc: "L'agent ne repond pas. Verifiez qu'il est en cours d'execution et reessayez.",
+    retry: 'Reessayer',
     showing: '{count} sur {total}',
   },
   search: {

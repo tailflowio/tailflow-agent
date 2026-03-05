@@ -55,7 +55,6 @@ type RetryConfig struct {
 	Delay       string `json:"delay,omitempty" yaml:"delay,omitempty"`
 }
 
-// ParsedDelay returns the parsed delay duration.
 func (r *RetryConfig) ParsedDelay() (time.Duration, error) {
 	if r.Delay == "" {
 		return time.Second, nil

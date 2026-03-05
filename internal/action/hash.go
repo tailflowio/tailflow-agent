@@ -13,7 +13,8 @@ type HashAction struct{}
 func NewHashAction() Action { return &HashAction{} }
 
 func (a *HashAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["input"]; !ok {
+	_, ok := ctx.Config["input"]
+	if !ok {
 		return errors.New("hash action requires 'input' in config")
 	}
 

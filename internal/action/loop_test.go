@@ -2,11 +2,14 @@ package action
 
 import (
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/suite"
 )
+
+func contains(s, substr string) bool { return strings.Contains(s, substr) }
 
 type LoopActionTestSuite struct {
 	suite.Suite
@@ -312,11 +315,12 @@ func (s *LoopActionTestSuite) TestErrorPolicyContinue() {
 	s.Equal(1, m["failed"])
 	s.Equal(2, m["succeeded"])
 
-	loopErrors, ok := m["errors"].([]map[string]any)
+	loopErrors, ok := m["errors"].([]any)
 	s.Require().True(ok)
 	s.Len(loopErrors, 1)
-	s.Equal(1, loopErrors[0]["index"])
-	s.Contains(loopErrors[0]["message"], "fail on index 1")
+	errEntry := loopErrors[0].(map[string]any)
+	s.Equal(1, errEntry["index"])
+	s.Contains(errEntry["message"], "fail on index 1")
 }
 
 func (s *LoopActionTestSuite) TestErrorPolicyDefaultFailFast() {
@@ -533,6 +537,553 @@ func (s *LoopActionTestSuite) TestFirstErrIdxAllNil() {
 	// This tests the firstErrIdx function when all errors are nil
 	idx := firstErrIdx([]error{nil, nil, nil})
 	s.Equal(0, idx)
+}
+
+func (s *LoopActionTestSuite) TestLoopItemLabel_StringValue() {
+	label := loopItemLabel(map[string]any{"item": "hello", "index": 0})
+	s.Equal("hello", label)
+}
+
+func (s *LoopActionTestSuite) TestLoopItemLabel_MapWithPath() {
+	label := loopItemLabel(map[string]any{
+		"item": map[string]any{"path": "/tmp/file.txt", "extra": 42},
+	})
+	s.Equal("/tmp/file.txt", label)
+}
+
+func (s *LoopActionTestSuite) TestLoopItemLabel_MapWithName() {
+	label := loopItemLabel(map[string]any{
+		"item": map[string]any{"name": "my-resource"},
+	})
+	s.Equal("my-resource", label)
+}
+
+func (s *LoopActionTestSuite) TestLoopItemLabel_MapWithId() {
+	label := loopItemLabel(map[string]any{
+		"item": map[string]any{"id": "abc-123"},
+	})
+	s.Equal("abc-123", label)
+}
+
+func (s *LoopActionTestSuite) TestLoopItemLabel_MapWithTitle() {
+	label := loopItemLabel(map[string]any{
+		"item": map[string]any{"title": "My Title"},
+	})
+	s.Equal("My Title", label)
+}
+
+func (s *LoopActionTestSuite) TestLoopItemLabel_MapNoRecognizedField() {
+	// Map value without any of path/name/id/title – falls through, returns ""
+	label := loopItemLabel(map[string]any{
+		"item": map[string]any{"foo": "bar"},
+	})
+	s.Equal("", label)
+}
+
+func (s *LoopActionTestSuite) TestLoopItemLabel_SkipsIndexAndPrev() {
+	// Only keys are "index" and "prev", both should be skipped → ""
+	label := loopItemLabel(map[string]any{
+		"index": 0,
+		"prev":  "something",
+	})
+	s.Equal("", label)
+}
+
+func (s *LoopActionTestSuite) TestLoopItemLabel_EmptyMap() {
+	label := loopItemLabel(map[string]any{})
+	s.Equal("", label)
+}
+
+func (s *LoopActionTestSuite) TestLoopItemLabel_NonStringNonMapValue() {
+	// Numeric value – not a string, not a map → returns ""
+	label := loopItemLabel(map[string]any{
+		"item": 42,
+	})
+	s.Equal("", label)
+}
+
+func (s *LoopActionTestSuite) TestLoopItemLabel_MapFieldEmpty() {
+	// Map value where path/name/id/title exist but are empty strings – should not match
+	label := loopItemLabel(map[string]any{
+		"item": map[string]any{"path": "", "name": "", "id": "", "title": ""},
+	})
+	s.Equal("", label)
+}
+
+func (s *LoopActionTestSuite) TestLastStdoutLine_NonMapOutput() {
+	result := lastStdoutLine("not a map")
+	s.Equal("", result)
+}
+
+func (s *LoopActionTestSuite) TestLastStdoutLine_NilOutput() {
+	result := lastStdoutLine(nil)
+	s.Equal("", result)
+}
+
+func (s *LoopActionTestSuite) TestLastStdoutLine_EmptyStdout() {
+	result := lastStdoutLine(map[string]any{"stdout": ""})
+	s.Equal("", result)
+}
+
+func (s *LoopActionTestSuite) TestLastStdoutLine_WhitespaceOnlyStdout() {
+	result := lastStdoutLine(map[string]any{"stdout": "   \n\n   "})
+	s.Equal("", result)
+}
+
+func (s *LoopActionTestSuite) TestLastStdoutLine_SingleLine() {
+	result := lastStdoutLine(map[string]any{"stdout": "only line"})
+	s.Equal("only line", result)
+}
+
+func (s *LoopActionTestSuite) TestLastStdoutLine_MultipleLines() {
+	result := lastStdoutLine(map[string]any{"stdout": "first\nsecond\nthird"})
+	s.Equal("third", result)
+}
+
+func (s *LoopActionTestSuite) TestLastStdoutLine_TrailingNewlines() {
+	result := lastStdoutLine(map[string]any{"stdout": "first\nsecond\n\n"})
+	s.Equal("second", result)
+}
+
+func (s *LoopActionTestSuite) TestLastStdoutLine_NoStdoutKey() {
+	result := lastStdoutLine(map[string]any{"stderr": "some error"})
+	s.Equal("", result)
+}
+
+func (s *LoopActionTestSuite) TestExtractResultDetail_NonIterationResult() {
+	// When T is any (not iterationResult), returns ""
+	result := extractResultDetail[any]("just a string")
+	s.Equal("", result)
+}
+
+func (s *LoopActionTestSuite) TestExtractResultDetail_WithStdout() {
+	ir := iterationResult{
+		Actions: []actionResult{
+			{
+				Action: "step1",
+				Output: map[string]any{"stdout": "line1\nline2"},
+			},
+		},
+	}
+	result := extractResultDetail(ir)
+	s.Equal("line2", result)
+}
+
+func (s *LoopActionTestSuite) TestExtractResultDetail_EmptyStdout() {
+	ir := iterationResult{
+		Actions: []actionResult{
+			{
+				Action: "step1",
+				Output: map[string]any{"stdout": ""},
+			},
+		},
+	}
+	result := extractResultDetail(ir)
+	s.Equal("", result)
+}
+
+func (s *LoopActionTestSuite) TestExtractResultDetail_NonMapOutput() {
+	ir := iterationResult{
+		Actions: []actionResult{
+			{
+				Action: "step1",
+				Output: "not a map",
+			},
+		},
+	}
+	result := extractResultDetail(ir)
+	s.Equal("", result)
+}
+
+func (s *LoopActionTestSuite) TestExtractResultDetail_MultipleActions_LastHasStdout() {
+	ir := iterationResult{
+		Actions: []actionResult{
+			{Action: "step1", Output: map[string]any{"stdout": ""}},
+			{Action: "step2", Output: map[string]any{"stdout": "final output"}},
+		},
+	}
+	result := extractResultDetail(ir)
+	s.Equal("final output", result)
+}
+
+func (s *LoopActionTestSuite) TestExtractResultDetail_MultipleActions_FirstHasStdoutLastEmpty() {
+	// Reverse iteration: last action has empty stdout, first has output
+	ir := iterationResult{
+		Actions: []actionResult{
+			{Action: "step1", Output: map[string]any{"stdout": "good output"}},
+			{Action: "step2", Output: map[string]any{"stdout": ""}},
+		},
+	}
+	result := extractResultDetail(ir)
+	s.Equal("good output", result)
+}
+
+func (s *LoopActionTestSuite) TestExtractResultDetail_EmptyActions() {
+	ir := iterationResult{
+		Actions: []actionResult{},
+	}
+	result := extractResultDetail(ir)
+	s.Equal("", result)
+}
+
+func (s *LoopActionTestSuite) TestEmitStepStart_NilEmitLog() {
+	ctx := newTestContext(map[string]any{})
+	// EmitLog is nil by default; should not panic
+	emitStepStart(ctx, 0, 1, 0, 1, "step1", "label")
+}
+
+func (s *LoopActionTestSuite) TestEmitStepSuccess_NilEmitLog() {
+	ctx := newTestContext(map[string]any{})
+	// EmitLog is nil by default; should not panic
+	emitStepSuccess(ctx, 0, 1, 0, 1, "step1", "label", 100)
+}
+
+func (s *LoopActionTestSuite) TestEmitStepStart_WithLabel() {
+	var logs []string
+	ctx := newTestContext(map[string]any{})
+	ctx.EmitLog = func(msg string) { logs = append(logs, msg) }
+
+	emitStepStart(ctx, 0, 3, 0, 2, "step1", "my-file.txt")
+
+	s.Require().Len(logs, 1)
+	s.Equal("[1/3] my-file.txt", logs[0])
+}
+
+func (s *LoopActionTestSuite) TestEmitStepStart_WithoutLabel() {
+	var logs []string
+	ctx := newTestContext(map[string]any{})
+	ctx.EmitLog = func(msg string) { logs = append(logs, msg) }
+
+	emitStepStart(ctx, 1, 3, 0, 2, "fetch", "")
+
+	s.Require().Len(logs, 1)
+	s.Equal("[2/3] step 1/2 fetch", logs[0])
+}
+
+func (s *LoopActionTestSuite) TestEmitStepSuccess_WithLabel() {
+	var logs []string
+	ctx := newTestContext(map[string]any{})
+	ctx.EmitLog = func(msg string) { logs = append(logs, msg) }
+
+	emitStepSuccess(ctx, 0, 3, 0, 2, "step1", "my-file.txt", 150)
+
+	s.Require().Len(logs, 1)
+	s.Equal("[1/3] my-file.txt OK (150ms)", logs[0])
+}
+
+func (s *LoopActionTestSuite) TestEmitStepSuccess_WithoutLabel() {
+	var logs []string
+	ctx := newTestContext(map[string]any{})
+	ctx.EmitLog = func(msg string) { logs = append(logs, msg) }
+
+	emitStepSuccess(ctx, 2, 5, 1, 3, "transform", "", 250)
+
+	s.Require().Len(logs, 1)
+	s.Equal("[3/5] step 2/3 transform OK (250ms)", logs[0])
+}
+
+func (s *LoopActionTestSuite) TestAppendFailedStep_LabelAndHint() {
+	var logs []string
+	ctx := newTestContext(map[string]any{})
+	ctx.EmitLog = func(msg string) { logs = append(logs, msg) }
+
+	ps := pipelineStep{Action: "exec", Config: map[string]any{}}
+	output := map[string]any{"stdout": "line1\nsome error hint"}
+
+	results, err := appendFailedStep(ctx, nil, ps, output, 100,
+		fmt.Errorf("exec failed"), 0, 3, 0, 2, "my-file.txt")
+
+	s.Error(err)
+	s.Contains(err.Error(), "exec")
+	s.Len(results, 1)
+	s.Equal("exec failed", results[0].Error)
+
+	s.Require().Len(logs, 1)
+	s.Equal("[1/3] my-file.txt FAILED: some error hint", logs[0])
+}
+
+func (s *LoopActionTestSuite) TestAppendFailedStep_LabelNoHint() {
+	var logs []string
+	ctx := newTestContext(map[string]any{})
+	ctx.EmitLog = func(msg string) { logs = append(logs, msg) }
+
+	ps := pipelineStep{Action: "exec", Config: map[string]any{}}
+	// nil output → lastStdoutLine returns ""
+	results, err := appendFailedStep(ctx, nil, ps, nil, 200,
+		fmt.Errorf("exec failed"), 1, 5, 0, 2, "my-resource")
+
+	s.Error(err)
+	s.Len(results, 1)
+	s.Require().Len(logs, 1)
+	s.Equal("[2/5] my-resource FAILED (200ms)", logs[0])
+}
+
+func (s *LoopActionTestSuite) TestAppendFailedStep_NoLabelNoHint() {
+	var logs []string
+	ctx := newTestContext(map[string]any{})
+	ctx.EmitLog = func(msg string) { logs = append(logs, msg) }
+
+	ps := pipelineStep{Action: "exec", Config: map[string]any{}}
+
+	results, err := appendFailedStep(ctx, nil, ps, nil, 300,
+		fmt.Errorf("boom"), 2, 4, 1, 3, "")
+
+	s.Error(err)
+	s.Len(results, 1)
+	s.Require().Len(logs, 1)
+	s.Equal("[3/4] step 2/3 exec FAILED (300ms): boom", logs[0])
+}
+
+func (s *LoopActionTestSuite) TestAppendFailedStep_NilEmitLog() {
+	ctx := newTestContext(map[string]any{})
+	// EmitLog is nil by default
+
+	ps := pipelineStep{Action: "exec", Config: map[string]any{}}
+	results, err := appendFailedStep(ctx, nil, ps, nil, 100,
+		fmt.Errorf("boom"), 0, 1, 0, 1, "label")
+
+	s.Error(err)
+	s.Len(results, 1)
+	s.Equal("boom", results[0].Error)
+}
+
+func (s *LoopActionTestSuite) TestAppendFailedStep_AppendsToExistingResults() {
+	ctx := newTestContext(map[string]any{})
+
+	existing := []actionResult{
+		{Action: "step1", Output: "ok", DurationMs: 50},
+	}
+
+	ps := pipelineStep{Action: "step2", Config: map[string]any{}}
+	results, err := appendFailedStep(ctx, existing, ps, nil, 100,
+		fmt.Errorf("step2 failed"), 0, 1, 1, 2, "")
+
+	s.Error(err)
+	s.Len(results, 2)
+	s.Equal("step1", results[0].Action)
+	s.Equal("step2", results[1].Action)
+}
+
+func (s *LoopActionTestSuite) TestBuildLoopOutput_WithDetail() {
+	ctx := newTestContext(map[string]any{
+		"error_policy": "continue",
+	})
+
+	items := []any{"a"}
+	results := []iterationResult{
+		{
+			Actions: []actionResult{
+				{
+					Action: "exec",
+					Output: map[string]any{"stdout": "some detail line"},
+					Error:  "fail",
+				},
+			},
+		},
+	}
+	errs := []error{fmt.Errorf("iteration failed")}
+
+	out, err := buildLoopOutput(ctx, items, results, errs)
+	s.NoError(err) // error_policy=continue
+
+	m := out.(map[string]any)
+	loopErrors := m["errors"].([]any)
+	s.Require().Len(loopErrors, 1)
+
+	entry := loopErrors[0].(map[string]any)
+	s.Equal("some detail line", entry["detail"])
+}
+
+func (s *LoopActionTestSuite) TestBuildLoopOutput_NoErrors() {
+	ctx := newTestContext(map[string]any{})
+
+	items := []any{"a", "b"}
+	results := []any{"r1", "r2"}
+	errs := []error{nil, nil}
+
+	out, err := buildLoopOutput(ctx, items, results, errs)
+	s.NoError(err)
+
+	m := out.(map[string]any)
+	s.Equal(2, m["iterations"])
+	s.Nil(m["errors"])
+	s.Nil(m["failed"])
+}
+
+func (s *LoopActionTestSuite) TestPipelineEmitLog_LabelFromMapItem() {
+	a := NewLoopAction()
+	var logs []string
+
+	ctx := newTestContext(map[string]any{
+		"items": []any{
+			map[string]any{"name": "resource-1"},
+		},
+		"actions": []any{
+			map[string]any{"action": "step1", "config": map[string]any{}},
+		},
+	})
+	ctx.EmitLog = func(msg string) { logs = append(logs, msg) }
+	ctx.RunAction = func(actionName string, rawConfig map[string]any, loopVars map[string]any) (any, error) {
+		return map[string]any{"ok": true}, nil
+	}
+
+	_, err := a.Execute(ctx)
+	s.NoError(err)
+
+	// Should have emitted label-based log messages
+	s.Require().GreaterOrEqual(len(logs), 2)
+	s.Contains(logs[0], "resource-1")
+	s.Contains(logs[1], "resource-1")
+	s.Contains(logs[1], "OK")
+}
+
+func (s *LoopActionTestSuite) TestPipelineEmitLog_FailWithLabelAndStdout() {
+	a := NewLoopAction()
+	var logs []string
+
+	ctx := newTestContext(map[string]any{
+		"items": []any{
+			map[string]any{"path": "/etc/config.yaml"},
+		},
+		"error_policy": "continue",
+		"actions": []any{
+			map[string]any{"action": "exec", "config": map[string]any{}},
+		},
+	})
+	ctx.EmitLog = func(msg string) { logs = append(logs, msg) }
+	ctx.RunAction = func(actionName string, rawConfig map[string]any, loopVars map[string]any) (any, error) {
+		return map[string]any{"stdout": "permission denied"}, fmt.Errorf("exec failed")
+	}
+
+	out, err := a.Execute(ctx)
+	s.NoError(err) // error_policy=continue
+
+	// Verify label+hint FAILED log was emitted
+	foundFailed := false
+	for _, l := range logs {
+		if foundFailed {
+			break
+		}
+		if contains(l, "FAILED") && contains(l, "/etc/config.yaml") && contains(l, "permission denied") {
+			foundFailed = true
+		}
+	}
+	s.True(foundFailed, "expected FAILED log with label and hint, got: %v", logs)
+
+	// Verify detail is captured in errors output
+	m := out.(map[string]any)
+	loopErrors := m["errors"].([]any)
+	s.Require().Len(loopErrors, 1)
+	entry := loopErrors[0].(map[string]any)
+	s.Equal("permission denied", entry["detail"])
+}
+
+func (s *LoopActionTestSuite) TestPipelineEmitLog_FailWithLabelNoStdout() {
+	a := NewLoopAction()
+	var logs []string
+
+	ctx := newTestContext(map[string]any{
+		"items": []any{
+			map[string]any{"id": "abc-123"},
+		},
+		"error_policy": "continue",
+		"actions": []any{
+			map[string]any{"action": "exec", "config": map[string]any{}},
+		},
+	})
+	ctx.EmitLog = func(msg string) { logs = append(logs, msg) }
+	ctx.RunAction = func(actionName string, rawConfig map[string]any, loopVars map[string]any) (any, error) {
+		// No stdout in output → hint is empty
+		return map[string]any{"stderr": "some error"}, fmt.Errorf("exec failed")
+	}
+
+	_, err := a.Execute(ctx)
+	s.NoError(err)
+
+	// Verify label FAILED log without hint (duration-based message)
+	foundFailed := false
+	for _, l := range logs {
+		if foundFailed {
+			break
+		}
+		if contains(l, "FAILED") && contains(l, "abc-123") && contains(l, "ms)") {
+			foundFailed = true
+		}
+	}
+	s.True(foundFailed, "expected FAILED log with label and duration, got: %v", logs)
+}
+
+func (s *LoopActionTestSuite) TestPipelineEmitLog_FailNoLabelNoStdout() {
+	a := NewLoopAction()
+	var logs []string
+
+	ctx := newTestContext(map[string]any{
+		"items": []any{42}, // numeric item → no label
+		"error_policy": "continue",
+		"actions": []any{
+			map[string]any{"action": "exec", "config": map[string]any{}},
+		},
+	})
+	ctx.EmitLog = func(msg string) { logs = append(logs, msg) }
+	ctx.RunAction = func(actionName string, rawConfig map[string]any, loopVars map[string]any) (any, error) {
+		return nil, fmt.Errorf("exec failed")
+	}
+
+	_, err := a.Execute(ctx)
+	s.NoError(err)
+
+	// Verify default FAILED log with step info
+	foundFailed := false
+	for _, l := range logs {
+		if foundFailed {
+			break
+		}
+		if contains(l, "FAILED") && contains(l, "step") && contains(l, "exec") {
+			foundFailed = true
+		}
+	}
+	s.True(foundFailed, "expected FAILED log with step info, got: %v", logs)
+}
+
+func (s *LoopActionTestSuite) TestPipelineNilEmitLog_Success() {
+	a := NewLoopAction()
+	ctx := newTestContext(map[string]any{
+		"items": []any{"x"},
+		"actions": []any{
+			map[string]any{"action": "step1", "config": map[string]any{}},
+		},
+	})
+	// EmitLog is nil
+	ctx.RunAction = func(actionName string, rawConfig map[string]any, loopVars map[string]any) (any, error) {
+		return map[string]any{"ok": true}, nil
+	}
+
+	out, err := a.Execute(ctx)
+	s.NoError(err)
+
+	m := out.(map[string]any)
+	s.Equal(1, m["iterations"])
+}
+
+func (s *LoopActionTestSuite) TestPipelineNilEmitLog_Error() {
+	a := NewLoopAction()
+	ctx := newTestContext(map[string]any{
+		"items":        []any{"x"},
+		"error_policy": "continue",
+		"actions": []any{
+			map[string]any{"action": "step1", "config": map[string]any{}},
+		},
+	})
+	// EmitLog is nil
+	ctx.RunAction = func(actionName string, rawConfig map[string]any, loopVars map[string]any) (any, error) {
+		return nil, fmt.Errorf("boom")
+	}
+
+	out, err := a.Execute(ctx)
+	s.NoError(err) // error_policy=continue
+
+	m := out.(map[string]any)
+	s.Equal(1, m["failed"])
 }
 
 func (s *LoopActionTestSuite) TestConcurrencyFloat64() {

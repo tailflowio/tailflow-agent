@@ -5,6 +5,7 @@ package action
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"testing"
 
@@ -16,8 +17,6 @@ import (
 	fakeruntime "github.com/tailflow/tailflow/internal/fake/fakeruntime"
 	"github.com/tailflow/tailflow/internal/runtime"
 )
-
-// ---- exec.go coverage: parseCommandArgs default branch (not string, not []any) ----
 
 type ExecCoverageTestSuite struct {
 	suite.Suite
@@ -42,8 +41,6 @@ func (s *ExecCoverageTestSuite) TestParseCommandArgs_DefaultBranch() {
 	s.Error(err)
 	s.Contains(err.Error(), "empty command")
 }
-
-// ---- http.go coverage: checkExpectedStatus with int match ----
 
 type HTTPCoverageTestSuite struct {
 	suite.Suite
@@ -97,8 +94,6 @@ func (s *HTTPCoverageTestSuite) TestCheckExpectedStatus_UnsupportedType() {
 	err := checkExpectedStatus(ctx, nil, 200)
 	s.NoError(err)
 }
-
-// ---- loop.go coverage: setLastIterationVars with empty items ----
 
 type LoopCoverageTestSuite struct {
 	suite.Suite
@@ -178,8 +173,6 @@ func (s *LoopCoverageTestSuite) TestEmptyItems_Pipeline() {
 	s.Equal(0, m["iterations"])
 }
 
-// ---- rabbitmq_shovel.go coverage: nackMessage error path ----
-
 type ShovelCoverageTestSuite struct {
 	suite.Suite
 }
@@ -223,8 +216,6 @@ func (s *ShovelCoverageTestSuite) TestNackMessage_Success() {
 	s.True(acker.nackCalled)
 	s.Len(errs, 0)
 }
-
-// ---- sql_exec.go coverage: RowsAffected and LastInsertId errors ----
 
 type SQLExecCoverageTestSuite struct {
 	suite.Suite
@@ -335,8 +326,6 @@ func (s *SQLExecCoverageTestSuite) TestExecExecuteWithTx_ExecError() {
 	s.Contains(err.Error(), "exec in tx failed")
 }
 
-// ---- sql_query.go coverage: tx QueryContext error ----
-
 type SQLQueryCoverageTestSuite struct {
 	suite.Suite
 }
@@ -370,7 +359,7 @@ func (s *SQLQueryCoverageTestSuite) TestExecSQLQuery_TxQueryContextError() {
 		},
 		ExecCtx: runtime.NewExecutionContext("test-exec", "test-wf", nil, nil),
 		StepID:  "test-step",
-		Logger:  slog.Default(),
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Services: &runtime.ActionServices{
 			TxRegistry: txReg,
 		},

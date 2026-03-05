@@ -15,7 +15,8 @@ type FileReadAction struct{}
 func NewFileReadAction() Action { return &FileReadAction{} }
 
 func (a *FileReadAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["path"]; !ok {
+	_, ok := ctx.Config["path"]
+	if !ok {
 		return errors.New("file.read action requires 'path' in config")
 	}
 
@@ -44,11 +45,13 @@ type FileWriteAction struct{}
 func NewFileWriteAction() Action { return &FileWriteAction{} }
 
 func (a *FileWriteAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["path"]; !ok {
+	_, ok := ctx.Config["path"]
+	if !ok {
 		return errors.New("file.write action requires 'path' in config")
 	}
 
-	if _, ok := ctx.Config["content"]; !ok {
+	_, ok = ctx.Config["content"]
+	if !ok {
 		return errors.New("file.write action requires 'content' in config")
 	}
 
@@ -62,8 +65,10 @@ func (a *FileWriteAction) Execute(ctx *ActionContext) (any, error) {
 
 	perm := os.FileMode(0o644)
 
-	if p, ok := ctx.Config["perm"]; ok {
-		if pi, ok := p.(int); ok {
+	p, ok := ctx.Config["perm"]
+	if ok {
+		pi, ok := p.(int)
+		if ok {
 			perm = os.FileMode(pi)
 		}
 	}

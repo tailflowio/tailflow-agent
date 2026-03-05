@@ -11,7 +11,8 @@ type JSONDecodeAction struct{}
 func NewJSONDecodeAction() Action { return &JSONDecodeAction{} }
 
 func (a *JSONDecodeAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["input"]; !ok {
+	_, ok := ctx.Config["input"]
+	if !ok {
 		return errors.New("json.decode action requires 'input' in config")
 	}
 
@@ -158,7 +159,8 @@ type JSONEncodeAction struct{}
 func NewJSONEncodeAction() Action { return &JSONEncodeAction{} }
 
 func (a *JSONEncodeAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["input"]; !ok {
+	_, ok := ctx.Config["input"]
+	if !ok {
 		return errors.New("json.encode action requires 'input' in config")
 	}
 
@@ -167,23 +169,19 @@ func (a *JSONEncodeAction) Validate(ctx *ActionContext) error {
 
 func (a *JSONEncodeAction) Execute(ctx *ActionContext) (any, error) {
 	input := ctx.Config["input"]
-	pretty := false
 
-	if p, ok := ctx.Config["pretty"]; ok {
-		if pb, ok := p.(bool); ok {
-			pretty = pb
-		}
-	}
+	pretty, _ := ctx.Config["pretty"].(bool)
 
-	var data []byte
-
-	var err error
 	if pretty {
-		data, err = json.MarshalIndent(input, "", "  ")
-	} else {
-		data, err = json.Marshal(input)
+		data, err := json.MarshalIndent(input, "", "  ")
+		if err != nil {
+			return nil, fmt.Errorf("json.encode: %w", err)
+		}
+
+		return string(data), nil
 	}
 
+	data, err := json.Marshal(input)
 	if err != nil {
 		return nil, fmt.Errorf("json.encode: %w", err)
 	}

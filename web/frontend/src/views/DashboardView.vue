@@ -5,7 +5,6 @@ import { useI18n } from 'vue-i18n'
 import { useWorkflowApi, type Graph, type Execution } from '@/composables/useWorkflowApi'
 import { useGlobalEvents } from '@/composables/useGlobalEvents'
 import { useRunTrigger } from '@/composables/useRunTrigger'
-import WorkflowGraph from '@/components/WorkflowGraph.vue'
 
 const { t } = useI18n()
 
@@ -36,17 +35,45 @@ async function load() {
 onMounted(load)
 
 // Global SSE with step tracking (hydrates from /api/workflow/activity on mount)
-const { stepCounts, recentStatuses, stepExecCounts, sysMetrics } = useGlobalEvents(() => {
+const { stepCounts, sysMetrics } = useGlobalEvents(() => {
   api.listExecutions().then(r => { executions.value = r.items }).catch(() => {})
 })
 
-// Total active executions
 const totalActive = computed(() => {
   let count = 0
   for (const sc of Object.values(stepCounts.value)) {
     count += sc.running.length + sc.waiting.length
   }
   return count
+})
+
+const tick = ref(0)
+let tickTimer: ReturnType<typeof setInterval> | null = null
+onMounted(() => { tickTimer = setInterval(() => { tick.value++ }, 1000) })
+onUnmounted(() => { if (tickTimer) clearInterval(tickTimer) })
+
+const nextRunLabel = computed(() => {
+  tick.value
+  const nr = (workflow.value as any)?.next_run
+  if (!nr) return ''
+  const s = Math.floor((new Date(nr).getTime() - Date.now()) / 1000)
+  if (s <= 0) return t('dashboard.nextNow')
+  if (s < 60) return t('dashboard.nextIn', { time: `${s}s` })
+  if (s < 3600) return t('dashboard.nextIn', { time: `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s` })
+  if (s < 86400) return t('dashboard.nextIn', { time: `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m` })
+  return t('dashboard.nextIn', { time: `${Math.floor(s / 86400)}d` })
+})
+
+let nextRunRefreshTimer: ReturnType<typeof setTimeout> | null = null
+watch(nextRunLabel, (v) => {
+  if (v === t('dashboard.nextNow')) {
+    if (nextRunRefreshTimer) clearTimeout(nextRunRefreshTimer)
+    nextRunRefreshTimer = setTimeout(() => {
+      api.getWorkflow().then(wf => {
+        if (wf) workflow.value = wf
+      }).catch(() => {})
+    }, 3000)
+  }
 })
 
 // Global metrics computed from executions
@@ -75,11 +102,6 @@ function fmtMs(ms: number) {
   return (ms / 1000).toFixed(1) + 's'
 }
 
-const tick = ref(0)
-let tickTimer: ReturnType<typeof setInterval> | null = null
-onMounted(() => { tickTimer = setInterval(() => { tick.value++ }, 1000) })
-onUnmounted(() => { if (tickTimer) clearInterval(tickTimer) })
-
 // System metrics via SSE (pushed by backend every 1s)
 const MAX_HISTORY = 30
 const cpuHistory = ref<number[]>([])
@@ -96,7 +118,7 @@ function pushHistory(arr: number[], val: number) {
 watch(sysMetrics, (m) => {
   if (!m) return
   pushHistory(cpuHistory.value, m.cpu_percent)
-  pushHistory(memHistory.value, m.rss_kb > 0 ? m.rss_kb / 1024 : m.heap_mb)
+  pushHistory(memHistory.value, m.memory_bytes / (1024 * 1024))
   pushHistory(goroutineHistory.value, m.goroutines)
   const rxDelta = prevNetRx > 0 ? Math.max(0, m.net_rx_bytes - prevNetRx) : 0
   prevNetRx = m.net_rx_bytes
@@ -136,40 +158,6 @@ function cpuColor(pct: number): string {
   if (pct >= 80) return 'text-red-400'
   if (pct >= 50) return 'text-amber-400'
   return 'text-emerald-400'
-}
-
-const nextRunLabel = computed(() => {
-  tick.value // reactive dependency
-  const nr = (workflow.value as any)?.next_run
-  if (!nr) return ''
-  const s = Math.floor((new Date(nr).getTime() - Date.now()) / 1000)
-  if (s <= 0) return t('dashboard.nextNow')
-  if (s < 60) return t('dashboard.nextIn', { time: `${s}s` })
-  if (s < 3600) return t('dashboard.nextIn', { time: `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s` })
-  if (s < 86400) return t('dashboard.nextIn', { time: `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m` })
-  return t('dashboard.nextIn', { time: `${Math.floor(s / 86400)}d` })
-})
-
-// Re-fetch next_run when countdown hits "now" (cron has fired)
-let nextRunRefreshTimer: ReturnType<typeof setTimeout> | null = null
-watch(nextRunLabel, (v) => {
-  if (v === t('dashboard.nextNow')) {
-    if (nextRunRefreshTimer) clearTimeout(nextRunRefreshTimer)
-    nextRunRefreshTimer = setTimeout(() => {
-      api.getWorkflow().then(wf => {
-        if (wf) workflow.value = wf
-      }).catch(() => {})
-    }, 3000)
-  }
-})
-
-const dagHeight = computed(() => {
-  const nodes = graph.value?.nodes?.length ?? 0
-  return Math.min(700, Math.max(300, 200 + nodes * 70))
-})
-
-function onStepClick(stepId: string) {
-  router.push({ name: 'step-detail', params: { id: stepId } })
 }
 
 function dot(s: string) {
@@ -215,7 +203,6 @@ function ago(d: string) {
         <h1 class="text-lg font-semibold text-g-14 mb-1 tracking-tight">{{ workflow.name }}</h1>
         <p v-if="workflow.description" class="text-sm text-g-10 leading-relaxed">{{ workflow.description }}</p>
       </div>
-      <div class="flex gap-2" />
     </div>
 
     <!-- Tags + Trigger + Active count -->
@@ -227,7 +214,6 @@ function ago(d: string) {
       >
         {{ tag }}
       </span>
-      <!-- Trigger detail -->
       <span
         v-if="(workflow as any).trigger?.http"
         class="text-[12px] font-mono font-medium text-g-11 bg-g-5 px-2.5 py-1 rounded-md flex items-center gap-1.5"
@@ -276,37 +262,37 @@ function ago(d: string) {
     <!-- System metrics -->
     <div v-if="sysMetrics" class="mb-6">
       <h2 class="text-sm font-medium text-g-12 mb-3">{{ t('dashboard.systemMetrics') }}</h2>
-      <div v-if="sysMetrics.available" class="grid grid-cols-5 gap-3">
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden anim-enter">
-          <svg v-if="cpuHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" preserveAspectRatio="none">
-            <path :d="sparklinePath(cpuHistory, 200, 80)" fill="currentColor" class="text-g-12/5" />
+      <div class="grid grid-cols-5 gap-3">
+        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden">
+          <svg v-if="cpuHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" viewBox="0 0 200 80" preserveAspectRatio="none">
+            <path :d="sparklinePath(cpuHistory, 200, 80)" class="sparkline-fill" />
           </svg>
           <div class="relative">
             <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.cpu') }}</p>
             <p :class="['text-2xl font-semibold font-mono tabular-nums', cpuColor(sysMetrics.cpu_percent)]">{{ sysMetrics.cpu_percent.toFixed(1) }}%</p>
           </div>
         </div>
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden anim-enter delay-1">
-          <svg v-if="memHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" preserveAspectRatio="none">
-            <path :d="sparklinePath(memHistory, 200, 80)" fill="currentColor" class="text-g-12/5" />
+        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden">
+          <svg v-if="memHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" viewBox="0 0 200 80" preserveAspectRatio="none">
+            <path :d="sparklinePath(memHistory, 200, 80)" class="sparkline-fill" />
           </svg>
           <div class="relative">
             <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.memory') }}</p>
-            <p class="text-2xl font-semibold text-g-14 font-mono tabular-nums">{{ Math.round(sysMetrics.rss_kb / 1024) }} MB</p>
+            <p class="text-2xl font-semibold text-g-14 font-mono tabular-nums">{{ fmtBytes(sysMetrics.memory_bytes) }}</p>
           </div>
         </div>
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden anim-enter delay-2">
-          <svg v-if="goroutineHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" preserveAspectRatio="none">
-            <path :d="sparklinePath(goroutineHistory, 200, 80)" fill="currentColor" class="text-g-12/5" />
+        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden">
+          <svg v-if="goroutineHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" viewBox="0 0 200 80" preserveAspectRatio="none">
+            <path :d="sparklinePath(goroutineHistory, 200, 80)" class="sparkline-fill" />
           </svg>
           <div class="relative">
             <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.goroutines') }}</p>
             <p class="text-2xl font-semibold text-g-14 font-mono tabular-nums">{{ sysMetrics.goroutines }}</p>
           </div>
         </div>
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden anim-enter delay-3">
-          <svg v-if="netRxHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" preserveAspectRatio="none">
-            <path :d="sparklinePath(netRxHistory, 200, 80)" fill="currentColor" class="text-g-12/5" />
+        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden">
+          <svg v-if="netRxHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" viewBox="0 0 200 80" preserveAspectRatio="none">
+            <path :d="sparklinePath(netRxHistory, 200, 80)" class="sparkline-fill" />
           </svg>
           <div class="relative">
             <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.network') }}</p>
@@ -317,36 +303,9 @@ function ago(d: string) {
             </p>
           </div>
         </div>
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card anim-enter delay-4">
+        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card">
           <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.uptime') }}</p>
           <p class="text-2xl font-semibold text-g-14 font-mono tabular-nums">{{ fmtUptime(sysMetrics.uptime_s) }}</p>
-        </div>
-      </div>
-      <div v-else class="grid grid-cols-5 gap-3">
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden anim-enter">
-          <svg v-if="goroutineHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" preserveAspectRatio="none">
-            <path :d="sparklinePath(goroutineHistory, 200, 80)" fill="currentColor" class="text-g-12/5" />
-          </svg>
-          <div class="relative">
-            <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.goroutines') }}</p>
-            <p class="text-2xl font-semibold text-g-14 font-mono tabular-nums">{{ sysMetrics.goroutines }}</p>
-          </div>
-        </div>
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden anim-enter delay-1">
-          <svg v-if="memHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" preserveAspectRatio="none">
-            <path :d="sparklinePath(memHistory, 200, 80)" fill="currentColor" class="text-g-12/5" />
-          </svg>
-          <div class="relative">
-            <p class="text-xs text-g-9 mb-1.5">Heap</p>
-            <p class="text-2xl font-semibold text-g-14 font-mono tabular-nums">{{ sysMetrics.heap_mb.toFixed(1) }} MB</p>
-          </div>
-        </div>
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card anim-enter delay-2">
-          <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.uptime') }}</p>
-          <p class="text-2xl font-semibold text-g-14 font-mono tabular-nums">{{ fmtUptime(sysMetrics.uptime_s) }}</p>
-        </div>
-        <div class="col-span-2 bg-g-2 border border-g-5 rounded-lg p-4 flex items-center lm-card anim-enter delay-3">
-          <span class="text-sm text-g-8">{{ t('dashboard.metricsUnavailable') }}</span>
         </div>
       </div>
     </div>
@@ -355,42 +314,30 @@ function ago(d: string) {
     <div class="mb-6">
       <h2 class="text-sm font-medium text-g-12 mb-3">{{ t('dashboard.workflowMetrics') }}</h2>
       <div class="grid grid-cols-5 gap-3">
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card anim-enter">
+        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card">
           <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.total') }}</p>
           <p class="text-2xl font-semibold text-g-14 font-mono tabular-nums">{{ metrics.total }}</p>
         </div>
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card anim-enter delay-1">
+        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card">
           <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.success') }}</p>
           <p class="text-2xl font-semibold text-emerald-400 font-mono tabular-nums">{{ metrics.success }}</p>
         </div>
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card anim-enter delay-2">
+        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card">
           <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.failed') }}</p>
           <p class="text-2xl font-semibold text-red-400 font-mono tabular-nums">{{ metrics.failed }}</p>
         </div>
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card anim-enter delay-3">
+        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card">
           <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.running') }}</p>
           <div class="flex items-baseline gap-1.5">
             <p class="text-2xl font-semibold text-g-14 font-mono tabular-nums">{{ metrics.running }}</p>
             <span v-if="metrics.running > 0" class="w-1.5 h-1.5 bg-g-12 rounded-full animate-pulse" />
           </div>
         </div>
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card anim-enter delay-4">
+        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card">
           <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.avgDuration') }}</p>
           <p class="text-2xl font-semibold text-g-14 font-mono tabular-nums">{{ metrics.avgMs ? fmtMs(metrics.avgMs) : '-' }}</p>
         </div>
       </div>
-    </div>
-
-    <!-- DAG -->
-    <div class="bg-g-2 border border-g-5 rounded-lg mb-6 overflow-hidden lm-card" :style="{ height: dagHeight + 'px' }">
-      <WorkflowGraph
-        v-if="graph"
-        :graph="graph"
-        :step-counts="stepCounts"
-        :recent-statuses="recentStatuses"
-        :step-exec-counts="stepExecCounts"
-        @node-click="onStepClick"
-      />
     </div>
 
     <!-- Recent executions -->
@@ -431,8 +378,19 @@ function ago(d: string) {
 
   </div>
 
-  <div v-else-if="api.loading.value" class="flex items-center justify-center py-20">
-    <div class="w-5 h-5 border-2 border-g-7 border-t-g-12 rounded-full animate-spin" />
+  <div v-else-if="api.loading.value" class="flex items-center justify-center py-32">
+    <div class="flex flex-col items-center">
+      <div class="w-6 h-6 border-2 border-g-5 border-t-g-9 rounded-full animate-spin" />
+      <span class="mt-3 text-sm text-g-7">{{ t('executions.loading') }}</span>
+    </div>
   </div>
-  <div v-else-if="api.error.value" class="text-red-400 text-sm">{{ api.error.value }}</div>
+  <div v-else-if="api.error.value" class="flex flex-col items-center justify-center py-32">
+    <div class="w-12 h-12 rounded-full bg-red-400/10 flex items-center justify-center mb-4">
+      <svg class="w-6 h-6 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+      </svg>
+    </div>
+    <p class="text-sm font-medium text-g-12 mb-1">{{ t('executions.connectionLost') }}</p>
+    <p class="text-[13px] text-g-7 text-center max-w-sm">{{ t('executions.connectionLostDesc') }}</p>
+  </div>
 </template>

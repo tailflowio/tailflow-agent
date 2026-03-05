@@ -47,6 +47,7 @@ func RegisterBuiltins(reg *Registry) {
 	reg.Register("hash", NewHashAction)
 	reg.Register("string.replace", NewStringReplaceAction)
 	reg.Register("string.match_all", NewStringMatchAllAction)
+	reg.Register("table", NewTableAction)
 	reg.Register("kv.get", NewKVGetAction)
 	reg.Register("kv.set", NewKVSetAction)
 	reg.Register("kv.delete", NewKVDeleteAction)

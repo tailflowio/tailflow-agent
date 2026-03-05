@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { RouterView, RouterLink, useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useTheme } from '@/composables/useTheme'
@@ -22,6 +22,14 @@ function toggleLocale() {
 }
 const api = useWorkflowApi()
 const running = ref(false)
+const appVersion = ref('')
+
+onMounted(async () => {
+  try {
+    const data = await fetch('/api/version').then(r => r.json())
+    appVersion.value = data.version || ''
+  } catch { /* ignore */ }
+})
 
 async function run(params: Record<string, unknown>) {
   running.value = true
@@ -43,9 +51,21 @@ function isActive(path: string) {
 
 const navItems = [
   { path: '/', key: 'nav.overview', icon: 'overview' },
-  { path: '/steps', key: 'nav.steps', icon: 'steps' },
+  { path: '/workflow', key: 'nav.workflow', icon: 'workflow' },
   { path: '/executions', key: 'nav.executions', icon: 'executions' },
 ]
+
+function handleKeydown(e: KeyboardEvent) {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'e') {
+    e.preventDefault()
+    if (workflowReady.value) {
+      showRunDialog.value = true
+    }
+  }
+}
+
+onMounted(() => window.addEventListener('keydown', handleKeydown))
+onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
 </script>
 
 <template>
@@ -55,8 +75,8 @@ const navItems = [
       <!-- Logo -->
       <div class="p-5 border-b border-g-5">
         <div class="flex items-center gap-2">
-          <RouterLink to="/" class="text-base font-semibold text-g-14 tracking-tight">.TailFlow</RouterLink>
-          <span class="text-[10px] font-mono px-1.5 py-0.5 bg-g-4 text-g-9 rounded">v2.0</span>
+          <RouterLink to="/" class="text-base font-semibold text-g-14 tracking-tight">Tailflow</RouterLink>
+          <span v-if="appVersion" class="text-[10px] font-mono px-1.5 py-0.5 bg-g-4 text-g-9 rounded">{{ appVersion }}</span>
         </div>
         <p v-if="workflowName" class="text-xs text-g-9 mt-0.5 truncate">{{ workflowName }}</p>
       </div>
@@ -78,9 +98,14 @@ const navItems = [
           <svg v-if="item.icon === 'overview'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
           </svg>
-          <!-- Steps icon -->
-          <svg v-else-if="item.icon === 'steps'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+          <!-- Workflow icon (connected nodes) -->
+          <svg v-else-if="item.icon === 'workflow'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="4" r="2" />
+            <circle cx="6" cy="14" r="2" />
+            <circle cx="18" cy="14" r="2" />
+            <path d="M12 6v4m-4.5 2L12 10m4.5 2L12 10" />
+            <circle cx="12" cy="20" r="2" />
+            <path d="M6 16l6 2m6-2l-6 2" />
           </svg>
           <!-- Executions icon -->
           <svg v-else-if="item.icon === 'executions'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -130,12 +155,13 @@ const navItems = [
         <button
           v-if="workflowReady"
           @click="showRunDialog = true"
-          class="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-md text-sm font-medium bg-g-14 text-g-1 hover:bg-g-12 transition-colors"
+          class="w-full flex items-center gap-2 px-3.5 py-2.5 rounded-lg text-[13px] font-semibold bg-g-14 text-g-1 hover:bg-g-12 active:scale-[0.98] transition-all duration-150"
         >
-          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+          <svg class="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
             <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
           </svg>
           {{ t('nav.run') }}
+          <span class="ml-auto text-[12px] font-mono font-normal tracking-wide opacity-80">&#8984;E</span>
         </button>
       </div>
     </aside>

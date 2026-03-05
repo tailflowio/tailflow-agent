@@ -109,14 +109,40 @@ func (s *MemoryExecutionStore) Get(id string) (*Execution, error) {
 		return nil, fmt.Errorf("execution %q not found", id)
 	}
 
-	return exec, nil
+	return exec.snapshot(), nil
+}
+
+func (e *Execution) snapshot() *Execution {
+	cp := *e
+	if e.Steps != nil {
+		cp.Steps = make(map[string]*runtime.StepResult, len(e.Steps))
+		for k, v := range e.Steps {
+			sr := *v
+			cp.Steps[k] = &sr
+		}
+	}
+
+	if e.Params != nil {
+		cp.Params = make(map[string]any, len(e.Params))
+		for k, v := range e.Params {
+			cp.Params[k] = v
+		}
+	}
+
+	if e.FinishedAt != nil {
+		t := *e.FinishedAt
+		cp.FinishedAt = &t
+	}
+
+	return &cp
 }
 
 func (s *MemoryExecutionStore) Update(exec *Execution) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if existing, ok := s.byID[exec.ID]; ok {
+	existing, ok := s.byID[exec.ID]
+	if ok {
 		*existing = *exec
 	}
 }
@@ -128,12 +154,12 @@ func (s *MemoryExecutionStore) UpdateExecution(id string, fn func(exec *Executio
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if exec, ok := s.byID[id]; ok {
+	exec, ok := s.byID[id]
+	if ok {
 		fn(exec)
 	}
 }
 
-// List returns all executions, most recent first.
 func (s *MemoryExecutionStore) List() []*Execution {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -143,14 +169,13 @@ func (s *MemoryExecutionStore) List() []*Execution {
 	for i := 0; i < s.count; i++ {
 		idx := (s.head - 1 - i + s.capacity) % s.capacity
 		if s.buffer[idx] != nil {
-			result = append(result, s.buffer[idx])
+			result = append(result, s.buffer[idx].snapshot())
 		}
 	}
 
 	return result
 }
 
-// Count returns the number of stored executions.
 func (s *MemoryExecutionStore) Count() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -158,7 +183,6 @@ func (s *MemoryExecutionStore) Count() int {
 	return s.count
 }
 
-// AppendEvent stores an event for a given execution.
 func (s *MemoryExecutionStore) AppendEvent(executionID string, ev event.Event) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -208,7 +232,6 @@ func (s *MemoryExecutionStore) UpdateStep(executionID, stepID string, fn func(st
 	}
 }
 
-// GetEvents returns all stored events for an execution.
 func (s *MemoryExecutionStore) GetEvents(executionID string) []event.Event {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -224,7 +247,6 @@ func (s *MemoryExecutionStore) GetEvents(executionID string) []event.Event {
 	return out
 }
 
-// IncrStepExecCount increments the execution counter for a step.
 func (s *MemoryExecutionStore) IncrStepExecCount(stepID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -232,7 +254,6 @@ func (s *MemoryExecutionStore) IncrStepExecCount(stepID string) {
 	s.stepExecCounts[stepID]++
 }
 
-// StepExecCounts returns the execution count per step.
 func (s *MemoryExecutionStore) StepExecCounts() map[string]int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -253,12 +274,20 @@ func (s *MemoryExecutionStore) RefreshStepMetrics() {
 	for i := 0; i < s.count; i++ {
 		idx := (s.head - 1 - i + s.capacity) % s.capacity
 		if s.buffer[idx] != nil {
-			execs = append(execs, s.buffer[idx])
+			execs = append(execs, s.buffer[idx].snapshot())
 		}
 	}
 
 	s.mu.RUnlock()
 
+	metrics := computeStepMetrics(execs)
+
+	s.metricsMu.Lock()
+	s.stepMetrics = metrics
+	s.metricsMu.Unlock()
+}
+
+func computeStepMetrics(execs []*Execution) map[string]*StepMetrics {
 	metrics := make(map[string]*StepMetrics)
 
 	for _, exec := range execs {
@@ -295,12 +324,9 @@ func (s *MemoryExecutionStore) RefreshStepMetrics() {
 		}
 	}
 
-	s.metricsMu.Lock()
-	s.stepMetrics = metrics
-	s.metricsMu.Unlock()
+	return metrics
 }
 
-// GetStepMetrics returns cached metrics for a given step.
 func (s *MemoryExecutionStore) GetStepMetrics(stepID string) *StepMetrics {
 	s.metricsMu.RLock()
 	defer s.metricsMu.RUnlock()
@@ -309,10 +335,16 @@ func (s *MemoryExecutionStore) GetStepMetrics(stepID string) *StepMetrics {
 		return nil
 	}
 
-	return s.stepMetrics[stepID]
+	m := s.stepMetrics[stepID]
+	if m == nil {
+		return nil
+	}
+
+	cp := *m
+
+	return &cp
 }
 
-// GetAllStepMetrics returns all cached step metrics.
 func (s *MemoryExecutionStore) GetAllStepMetrics() map[string]*StepMetrics {
 	s.metricsMu.RLock()
 	defer s.metricsMu.RUnlock()

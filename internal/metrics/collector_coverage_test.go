@@ -39,8 +39,6 @@ func (s *CollectorCoverageSuite) writeFile(name, content string) string {
 	return p
 }
 
-// ─── readCPUTicks ────────────────────────────────────────────────────────
-
 func (s *CollectorCoverageSuite) TestReadCPUTicks_ValidStatFile() {
 	// /proc/self/stat format: pid (comm) state fields...
 	// Fields after ')': state, ppid, pgrp, session, tty_nr, tpgid,
@@ -154,8 +152,6 @@ func (s *CollectorCoverageSuite) TestReadCPUTicks_CommFieldWithSpaces() {
 	s.Equal(int64(500), ticks) // 200 + 300
 }
 
-// ─── readRSSKB ───────────────────────────────────────────────────────────
-
 func (s *CollectorCoverageSuite) TestReadRSSKB_ValidFile() {
 	content := `Name:	myprocess
 VmPeak:	123456 kB
@@ -218,8 +214,6 @@ func (s *CollectorCoverageSuite) TestReadRSSKB_VmRSSTooFewFields() {
 	s.False(ok)
 	s.Equal(int64(0), rss)
 }
-
-// ─── readNetDev ──────────────────────────────────────────────────────────
 
 func (s *CollectorCoverageSuite) TestReadNetDev_ValidFile() {
 	content := `Inter-|   Receive                                                |  Transmit
@@ -344,8 +338,6 @@ func (s *CollectorCoverageSuite) TestReadNetDev_MixedValidAndInvalid() {
 	s.Equal(int64(2000), tx)
 }
 
-// ─── updateCPUPercent ────────────────────────────────────────────────────
-
 func (s *CollectorCoverageSuite) TestUpdateCPUPercent_FirstCall_SetsPrev() {
 	c := New()
 
@@ -390,8 +382,6 @@ func (s *CollectorCoverageSuite) TestUpdateCPUPercent_ZeroElapsed() {
 	// the guard (elapsed > 0) might prevent it. Either way, it shouldn't panic.
 	// The important thing is this doesn't crash.
 }
-
-// ─── collect with fake proc files ────────────────────────────────────────
 
 func (s *CollectorCoverageSuite) TestCollect_WithFakeProcFiles() {
 	origStat := procStatPath
@@ -515,8 +505,6 @@ func (s *CollectorCoverageSuite) TestCollect_OnlyCPUAvailable() {
 	s.True(snap.Available)
 }
 
-// ─── String ──────────────────────────────────────────────────────────────
-
 func (s *CollectorCoverageSuite) TestString_FormatsCorrectly() {
 	m := ProcessMetrics{
 		CPUPercent: 42.5,
@@ -549,8 +537,6 @@ func (s *CollectorCoverageSuite) TestString_ZeroValues() {
 	s.Contains(str, "cpu=0.0%")
 	s.Contains(str, "available=false")
 }
-
-// ─── Start with ticker tick ──────────────────────────────────────────────
 
 func (s *CollectorCoverageSuite) TestStart_TickerTrigger() {
 	synctest.Test(s.T(), func(t *testing.T) {

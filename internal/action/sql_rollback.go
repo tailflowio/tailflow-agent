@@ -11,7 +11,8 @@ type SQLRollbackAction struct{}
 func NewSQLRollbackAction() Action { return &SQLRollbackAction{} }
 
 func (a *SQLRollbackAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["name"]; !ok {
+	_, ok := ctx.Config["name"]
+	if !ok {
 		return errors.New("sql.rollback action requires 'name' in config")
 	}
 

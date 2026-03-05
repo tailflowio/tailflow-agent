@@ -11,11 +11,13 @@ type SQLBeginAction struct{}
 func NewSQLBeginAction() Action { return &SQLBeginAction{} }
 
 func (a *SQLBeginAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["dsn"]; !ok {
+	_, ok := ctx.Config["dsn"]
+	if !ok {
 		return errors.New("sql.begin action requires 'dsn' in config")
 	}
 
-	if _, ok := ctx.Config["name"]; !ok {
+	_, ok = ctx.Config["name"]
+	if !ok {
 		return errors.New("sql.begin action requires 'name' in config")
 	}
 

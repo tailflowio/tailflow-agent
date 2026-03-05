@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"slices"
 	"sort"
@@ -22,8 +21,12 @@ import (
 	"github.com/tailflow/tailflow/pkg/workflow"
 )
 
+func (s *Server) handleGetVersion(w http.ResponseWriter, r *http.Request) {
+	s.writeJSON(r.Context(), w, http.StatusOK, map[string]string{"version": s.config.Version})
+}
+
 func (s *Server) handleGetMetrics(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.metrics.Snapshot())
+	s.writeJSON(r.Context(), w, http.StatusOK, s.metrics.Snapshot())
 }
 
 func (s *Server) handleGetWorkflow(w http.ResponseWriter, r *http.Request) {
@@ -36,33 +39,33 @@ func (s *Server) handleGetWorkflow(w http.ResponseWriter, r *http.Request) {
 			*parser.Workflow
 			NextRun *time.Time `json:"next_run,omitempty"`
 		}{Workflow: wf, NextRun: nextRun}
-		writeJSON(w, http.StatusOK, resp)
+		s.writeJSON(r.Context(), w, http.StatusOK, resp)
 
 		return
 	}
 
-	writeJSON(w, http.StatusOK, wf)
+	s.writeJSON(r.Context(), w, http.StatusOK, wf)
 }
 
 func (s *Server) handleGetWorkflowGraph(w http.ResponseWriter, r *http.Request) {
 	dag, err := engine.BuildDAG(s.config.Workflow.Steps)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeError(r.Context(), w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	graph := buildGraph(s.config.Workflow, dag)
-	writeJSON(w, http.StatusOK, graph)
+	s.writeJSON(r.Context(), w, http.StatusOK, graph)
 }
 
 func (s *Server) handleValidateWorkflow(w http.ResponseWriter, r *http.Request) {
 	err := parser.Validate(s.config.Workflow)
 	if err != nil {
-		writeJSON(w, http.StatusOK, api.ValidateResponse{Valid: false, Errors: []string{err.Error()}})
+		s.writeJSON(r.Context(), w, http.StatusOK, api.ValidateResponse{Valid: false, Errors: []string{err.Error()}})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, api.ValidateResponse{Valid: true})
+	s.writeJSON(r.Context(), w, http.StatusOK, api.ValidateResponse{Valid: true})
 }
 
 //nolint:contextcheck // intentional: async execution outlives request
@@ -77,7 +80,7 @@ func (s *Server) handleRunWorkflow(w http.ResponseWriter, r *http.Request) {
 
 	executionID := s.runWorkflowAsync(req.Params)
 
-	writeJSON(w, http.StatusAccepted, api.RunResponse{
+	s.writeJSON(r.Context(), w, http.StatusAccepted, api.RunResponse{
 		ExecutionID: executionID,
 		Status:      runtime.StatusRunning,
 	})
@@ -108,13 +111,15 @@ func (s *Server) handleGetWorkflowActivity(w http.ResponseWriter, r *http.Reques
 
 			if step.Status == runtime.StatusRunning {
 				activity[stepID].Running = append(activity[stepID].Running, exec.ID)
-			} else {
-				activity[stepID].Waiting = append(activity[stepID].Waiting, exec.ID)
+
+				continue
 			}
+
+			activity[stepID].Waiting = append(activity[stepID].Waiting, exec.ID)
 		}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	s.writeJSON(r.Context(), w, http.StatusOK, map[string]any{
 		"steps":       activity,
 		"exec_counts": s.config.ExecutionStore.StepExecCounts(),
 	})
@@ -125,7 +130,7 @@ func (s *Server) handleGetStepDetail(w http.ResponseWriter, r *http.Request) {
 
 	step := s.findStep(stepID)
 	if step == nil {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("step %q not found", stepID))
+		s.writeError(r.Context(), w, http.StatusNotFound, fmt.Sprintf("step %q not found", stepID))
 		return
 	}
 
@@ -136,7 +141,7 @@ func (s *Server) handleGetStepDetail(w http.ResponseWriter, r *http.Request) {
 		metrics = &store.StepMetrics{}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	s.writeJSON(r.Context(), w, http.StatusOK, map[string]any{
 		"step":    step,
 		"history": history,
 		"metrics": metrics,
@@ -193,16 +198,16 @@ func buildHistoryEntry(exec *store.Execution, sr *runtime.StepResult) stepHistor
 		Error:       errStr,
 	}
 
+	entry.StartedAt = exec.StartedAt.Format(time.RFC3339)
 	if sr.StartedAt != nil {
 		entry.StartedAt = sr.StartedAt.Format(time.RFC3339)
-	} else {
-		entry.StartedAt = exec.StartedAt.Format(time.RFC3339)
 	}
 
-	if sr.StartedAt != nil && sr.FinishedAt != nil {
+	switch {
+	case sr.StartedAt != nil && sr.FinishedAt != nil:
 		entry.FinishedAt = sr.FinishedAt.Format(time.RFC3339)
 		entry.DurationMs = sr.FinishedAt.Sub(*sr.StartedAt).Milliseconds()
-	} else if exec.FinishedAt != nil {
+	case exec.FinishedAt != nil:
 		entry.FinishedAt = exec.FinishedAt.Format(time.RFC3339)
 	}
 
@@ -219,7 +224,7 @@ func (s *Server) handleListExecutions(w http.ResponseWriter, r *http.Request) {
 
 	paged := paginateExecutions(execs, r)
 
-	writeJSON(w, http.StatusOK, map[string]any{"items": paged, "total": total})
+	s.writeJSON(r.Context(), w, http.StatusOK, map[string]any{"items": paged, "total": total})
 }
 
 func filterByStatus(execs []*store.Execution, statusFilter string) []*store.Execution {
@@ -304,11 +309,11 @@ func (s *Server) handleGetExecution(w http.ResponseWriter, r *http.Request) {
 
 	exec, err := s.config.ExecutionStore.Get(id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+		s.writeError(r.Context(), w, http.StatusNotFound, err.Error())
 		return
 	}
 
-	writeJSON(w, http.StatusOK, exec)
+	s.writeJSON(r.Context(), w, http.StatusOK, exec)
 }
 
 func (s *Server) handleCancelExecution(w http.ResponseWriter, r *http.Request) {
@@ -316,21 +321,21 @@ func (s *Server) handleCancelExecution(w http.ResponseWriter, r *http.Request) {
 
 	exec, err := s.config.ExecutionStore.Get(id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+		s.writeError(r.Context(), w, http.StatusNotFound, err.Error())
 		return
 	}
 
 	if exec.Status != runtime.StatusRunning && exec.Status != runtime.StatusWaiting {
-		writeError(w, http.StatusConflict, fmt.Sprintf("execution is %s, not cancellable", exec.Status))
+		s.writeError(r.Context(), w, http.StatusConflict, fmt.Sprintf("execution is %s, not cancellable", exec.Status))
 		return
 	}
 
 	if !s.cancelExecution(id) {
-		writeError(w, http.StatusNotFound, "execution cancel function not found")
+		s.writeError(r.Context(), w, http.StatusNotFound, "execution cancel function not found")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"cancelled": true})
+	s.writeJSON(r.Context(), w, http.StatusOK, map[string]any{"cancelled": true})
 }
 
 func (s *Server) handlePublicTrigger(w http.ResponseWriter, r *http.Request) {
@@ -339,7 +344,7 @@ func (s *Server) handlePublicTrigger(w http.ResponseWriter, r *http.Request) {
 	wf := s.config.Workflow
 
 	if wf.Trigger == nil {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("no workflow matches %s %s", r.Method, path))
+		s.writeError(r.Context(), w, http.StatusNotFound, fmt.Sprintf("no workflow matches %s %s", r.Method, path))
 		return
 	}
 
@@ -347,23 +352,24 @@ func (s *Server) handlePublicTrigger(w http.ResponseWriter, r *http.Request) {
 		(wf.Trigger.Webhook != nil && wf.Trigger.Webhook.Path == path)
 
 	if !matched {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("no workflow matches %s %s", r.Method, path))
+		s.writeError(r.Context(), w, http.StatusNotFound, fmt.Sprintf("no workflow matches %s %s", r.Method, path))
 		return
 	}
 
-	s.executeTriggerWorkflow(w, r, wf) //nolint:contextcheck // intentional: trigger execution may outlive request
+	s.executeTriggerWorkflow(w, r, wf)
 }
 
+//nolint:contextcheck // execution context derives from s.ctx, intentionally outlives request
 func (s *Server) executeTriggerWorkflow(w http.ResponseWriter, r *http.Request, wf *parser.Workflow) {
 	triggerData, params := s.buildTriggerData(r)
 	executionID, opts, stopCapture := s.prepareTriggerExecution(wf, triggerData, params)
 
-	execCtx, cancel := context.WithCancel(context.Background())
+	execCtx, cancel := context.WithCancel(s.ctx)
 	s.registerCancel(executionID, cancel)
 
 	if wf.Trigger.HTTP != nil && wf.Trigger.HTTP.Async {
 		s.runTriggerAsync(executionID, wf, params, opts, execCtx, stopCapture)
-		writeJSON(w, http.StatusAccepted, map[string]any{
+		s.writeJSON(r.Context(), w, http.StatusAccepted, map[string]any{
 			"execution_id": executionID,
 			"status":       runtime.StatusRunning,
 		})
@@ -425,11 +431,13 @@ func (s *Server) runTriggerAsync(
 	opts engine.ExecuteOptions, execCtx context.Context, stopCapture func(),
 ) {
 	go func() {
-		defer stopCapture()
 		defer s.unregisterCancel(executionID)
 
 		result, err := s.config.Executor.Execute(execCtx, wf, params, opts)
+
+		stopCapture()
 		s.finalizeExecution(executionID, result, err, execCtx)
+		s.ensureWorkflowCompleted(executionID, result, err, execCtx)
 	}()
 }
 
@@ -444,53 +452,77 @@ func (s *Server) runTriggerSync(
 	stopCapture()
 
 	s.finalizeExecution(executionID, result, err, execCtx)
+	s.ensureWorkflowCompleted(executionID, result, err, execCtx)
 	s.writeTriggerResponse(w, wf, result, err, execCtx, executionID)
 }
 
-// writeTriggerResponse writes the HTTP response for a synchronous trigger execution.
 func (s *Server) writeTriggerResponse(
 	w http.ResponseWriter, wf *parser.Workflow, result *engine.ExecuteResult,
 	err error, execCtx context.Context, executionID string,
 ) {
 	if err != nil {
 		if execCtx.Err() != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"status": runtime.StatusCancelled, "execution_id": executionID})
+			s.writeJSON(execCtx, w, http.StatusOK, map[string]any{"status": runtime.StatusCancelled, "execution_id": executionID})
 			return
 		}
 
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeError(execCtx, w, http.StatusInternalServerError, err.Error())
 
 		return
 	}
 
-	// Check for response action output
-	for _, step := range wf.Steps {
-		if step.Action == "response" {
-			if sr, ok := result.Steps[step.ID]; ok && sr.Output != nil {
-				if outMap, ok := sr.Output.(map[string]any); ok {
-					status := 200
-					if s, ok := outMap["status"].(int); ok {
-						status = s
-					}
+	outMap := findResponseStepOutput(wf, result)
+	if outMap != nil {
+		writeResponseStepOutput(w, outMap)
+		s.writeJSON(execCtx, w, responseStatus(outMap), outMap["body"])
 
-					if h, ok := outMap["headers"].(map[string]string); ok {
-						for k, v := range h {
-							w.Header().Set(k, v)
-						}
-					}
-
-					writeJSON(w, status, outMap["body"])
-
-					return
-				}
-			}
-		}
+		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	s.writeJSON(execCtx, w, http.StatusOK, map[string]any{
 		"status":       result.Status,
 		"execution_id": executionID,
 	})
+}
+
+func findResponseStepOutput(wf *parser.Workflow, result *engine.ExecuteResult) map[string]any {
+	for _, step := range wf.Steps {
+		if step.Action != "response" {
+			continue
+		}
+
+		sr, ok := result.Steps[step.ID]
+		if !ok || sr.Output == nil {
+			continue
+		}
+
+		outMap, ok := sr.Output.(map[string]any)
+		if ok {
+			return outMap
+		}
+	}
+
+	return nil
+}
+
+func responseStatus(outMap map[string]any) int {
+	s, ok := outMap["status"].(int)
+	if ok {
+		return s
+	}
+
+	return http.StatusOK
+}
+
+func writeResponseStepOutput(w http.ResponseWriter, outMap map[string]any) {
+	h, ok := outMap["headers"].(map[string]string)
+	if !ok {
+		return
+	}
+
+	for k, v := range h {
+		w.Header().Set(k, v)
+	}
 }
 
 func (s *Server) handleWaitWebhook(w http.ResponseWriter, r *http.Request) {
@@ -499,7 +531,7 @@ func (s *Server) handleWaitWebhook(w http.ResponseWriter, r *http.Request) {
 
 	parts := strings.SplitN(trimmed, "/", 2)
 	if len(parts) < 2 {
-		writeError(w, http.StatusBadRequest, "expected /api/wait/{executionID}/{path...}")
+		s.writeError(r.Context(), w, http.StatusBadRequest, "expected /api/wait/{executionID}/{path...}")
 		return
 	}
 
@@ -524,11 +556,11 @@ func (s *Server) handleWaitWebhook(w http.ResponseWriter, r *http.Request) {
 
 	err := s.waitRegistry.Deliver(executionID, path, req)
 	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+		s.writeError(r.Context(), w, http.StatusNotFound, err.Error())
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"delivered": true})
+	s.writeJSON(r.Context(), w, http.StatusOK, map[string]any{"delivered": true})
 }
 
 func buildGraph(wf *parser.Workflow, _ *engine.DAG) workflow.Graph {
@@ -577,7 +609,7 @@ func extractLoopPipeline(config map[string]any) []workflow.PipelineAction {
 		return nil
 	}
 
-	var pipeline []workflow.PipelineAction
+	pipeline := make([]workflow.PipelineAction, 0, len(arr))
 
 	for _, item := range arr {
 		m, ok := item.(map[string]any)
@@ -594,6 +626,10 @@ func extractLoopPipeline(config map[string]any) []workflow.PipelineAction {
 				Title:  actTitle,
 			})
 		}
+	}
+
+	if len(pipeline) == 0 {
+		return nil
 	}
 
 	return pipeline
@@ -628,22 +664,21 @@ func buildStepEdges(step parser.Step) []workflow.GraphEdge {
 	return edges
 }
 
-func writeJSON(w http.ResponseWriter, status int, data any) {
+func (s *Server) writeJSON(ctx context.Context, w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 
 	err := json.NewEncoder(w).Encode(data)
 	if err != nil {
-		slog.Warn("failed to write JSON response", "error", err)
+		s.config.Logger.WarnContext(ctx, "failed to write JSON response", "error", err)
 	}
 }
 
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, api.ErrorResponse{Error: msg})
+func (s *Server) writeError(ctx context.Context, w http.ResponseWriter, status int, msg string) {
+	s.writeJSON(ctx, w, status, api.ErrorResponse{Error: msg})
 }
 
-// buildActionServices creates the ActionServices wired to this server's
-// event bus and wait registry.
 func (s *Server) buildActionServices() *runtime.ActionServices {
 	return &runtime.ActionServices{
 		WaitWebhookRegister:  s.waitRegistry.Register,
@@ -688,23 +723,22 @@ func (s *Server) buildActionServices() *runtime.ActionServices {
 	}
 }
 
-// captureEvents subscribes to the event bus, stores events and updates
-// step state in real-time for a given execution. Returns a stop function.
 func (s *Server) captureEvents(executionID string) func() {
-	ch := s.config.EventBus.Subscribe(200)
+	ch := s.config.EventBus.Subscribe(10_000)
 	done := make(chan struct{})
 
 	go func() {
 		defer close(done)
 
 		lt := &loopTracker{}
+		completedSeen := false
 
 		for ev := range ch {
 			if ev.ExecutionID != executionID {
 				continue
 			}
 
-			s.processEvent(executionID, ev, lt)
+			s.processEvent(executionID, ev, lt, &completedSeen)
 		}
 	}()
 
@@ -714,8 +748,17 @@ func (s *Server) captureEvents(executionID string) func() {
 	}
 }
 
-func (s *Server) processEvent(executionID string, ev event.Event, lt *loopTracker) {
+func (s *Server) processEvent(executionID string, ev event.Event, lt *loopTracker, completedSeen *bool) {
 	lt.Track(ev)
+
+	// Deduplicate workflow.completed — only store the first one
+	if ev.Type == event.WorkflowCompleted {
+		if *completedSeen {
+			return
+		}
+
+		*completedSeen = true
+	}
 
 	// Reset body steps to pending on goto so dashboard stays coherent during loops
 	if ev.Type == event.StepGoto && lt.Body != nil {
@@ -756,7 +799,9 @@ func (s *Server) applyStepEvent(executionID string, ev event.Event) {
 	case event.StepCompleted:
 		s.config.ExecutionStore.UpdateStep(executionID, ev.StepID, func(r *runtime.StepResult) {
 			r.Status = runtime.StatusSuccess
-			if o, ok := ev.Data["output"]; ok {
+
+			o, ok := ev.Data["output"]
+			if ok {
 				r.Output = o
 			}
 		})
@@ -771,7 +816,8 @@ func (s *Server) applyStepEvent(executionID string, ev event.Event) {
 		})
 	case event.StepOutput:
 		s.config.ExecutionStore.UpdateStep(executionID, ev.StepID, func(r *runtime.StepResult) {
-			if o, ok := ev.Data["output"]; ok {
+			o, ok := ev.Data["output"]
+			if ok {
 				r.Output = o
 			}
 		})
@@ -795,22 +841,18 @@ func (s *Server) applyWorkflowCompleted(executionID string, ev event.Event) {
 	})
 }
 
-// finalizeExecution updates the stored execution with the engine result.
-// Uses UpdateExecution to hold the store lock during the entire mutation,
-// preventing races with captureEvents which also updates the execution.
 func (s *Server) finalizeExecution(
 	executionID string, result *engine.ExecuteResult, err error, execCtx context.Context,
 ) {
 	s.config.ExecutionStore.UpdateExecution(executionID, func(exec *store.Execution) {
-		if err != nil {
-			if execCtx.Err() != nil {
-				exec.Status = runtime.StatusCancelled
-				exec.Error = "execution cancelled"
-			} else {
-				exec.Status = runtime.StatusFailed
-				exec.Error = err.Error()
-			}
-		} else {
+		switch {
+		case err != nil && execCtx.Err() != nil:
+			exec.Status = runtime.StatusCancelled
+			exec.Error = "execution cancelled"
+		case err != nil:
+			exec.Status = runtime.StatusFailed
+			exec.Error = err.Error()
+		default:
 			exec.Status = result.Status
 			mergeStepResults(exec, result.Steps)
 
@@ -829,7 +871,6 @@ func (s *Server) finalizeExecution(
 	})
 }
 
-// headerMap converts http.Header to a flat map[string]string.
 func headerMap(h http.Header) map[string]string {
 	headers := make(map[string]string, len(h))
 	for k := range h {
@@ -839,8 +880,6 @@ func headerMap(h http.Header) map[string]string {
 	return headers
 }
 
-// mergeStepResults merges engine results into the execution, keeping
-// Input data that was set via event tracking during execution.
 func mergeStepResults(exec *store.Execution, engineSteps map[string]*runtime.StepResult) {
 	if engineSteps == nil {
 		return

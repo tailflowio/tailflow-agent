@@ -20,7 +20,6 @@ func NewCronScheduler(logger *slog.Logger) *CronScheduler {
 	}
 }
 
-// Add registers a cron job with the given spec.
 func (cs *CronScheduler) Add(spec string, fn func()) error {
 	_, err := cs.cron.AddFunc(spec, fn)
 	if err != nil {
@@ -32,20 +31,17 @@ func (cs *CronScheduler) Add(spec string, fn func()) error {
 	return nil
 }
 
-// Start begins the cron scheduler.
 func (cs *CronScheduler) Start() {
 	cs.cron.Start()
 	cs.logger.Info("cron scheduler started")
 }
 
-// Stop gracefully stops the cron scheduler.
 func (cs *CronScheduler) Stop() {
 	ctx := cs.cron.Stop()
 	<-ctx.Done()
 	cs.logger.Info("cron scheduler stopped")
 }
 
-// NextRun parses a cron expression and returns the next scheduled time.
 func NextRun(spec string) *time.Time {
 	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
 

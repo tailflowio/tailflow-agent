@@ -186,8 +186,6 @@ func (s *RabbitMQConsumerTestSuite) TestStop_ClosesChannelAndConnection() {
 	s.True(mockConn.closed)
 }
 
-// --- openChannel: QoS error path ---
-
 func (s *RabbitMQConsumerTestSuite) TestOpenChannel_QosError() {
 	cfg := &parser.RabbitMQTrigger{
 		URL:      "amqp://localhost:5672",
@@ -275,8 +273,6 @@ func (s *RabbitMQConsumerTestSuite) TestOpenChannel_WithPrefetch_Success() {
 	s.NotNil(msgs)
 	s.True(qosCalled)
 }
-
-// --- handleMessage: AckOnSuccess tests ---
 
 func (s *RabbitMQConsumerTestSuite) TestHandleMessage_AckOnSuccess_True_Success() {
 	cfg := &parser.RabbitMQTrigger{
@@ -400,8 +396,6 @@ func (s *RabbitMQConsumerTestSuite) TestHandleMessage_NoAckOnSuccess_AckError() 
 	s.True(receivedNilAckFn, "ackFn should be nil when AckOnSuccess is false")
 	s.True(ack.ackCalled)
 }
-
-// --- openChannel: nil dial falls back to realAMQPDial ---
 
 func (s *RabbitMQConsumerTestSuite) TestOpenChannel_NilDial_UsesRealAMQPDial() {
 	original := amqpRawDial

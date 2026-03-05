@@ -85,16 +85,23 @@ func parseCommandArgs(ctx *ActionContext) []string {
 }
 
 func applyExecOptions(command *exec.Cmd, ctx *ActionContext) {
-	if dir, ok := ctx.Config["dir"]; ok {
+	dir, ok := ctx.Config["dir"]
+	if ok {
 		command.Dir = fmt.Sprintf("%v", dir)
 	}
 
-	if envMap, ok := ctx.Config["env"]; ok {
-		if envM, ok := envMap.(map[string]any); ok {
-			for k, v := range envM {
-				command.Env = append(command.Env, fmt.Sprintf("%s=%v", k, v))
-			}
-		}
+	envMap, ok := ctx.Config["env"]
+	if !ok {
+		return
+	}
+
+	envM, ok := envMap.(map[string]any)
+	if !ok {
+		return
+	}
+
+	for k, v := range envM {
+		command.Env = append(command.Env, fmt.Sprintf("%s=%v", k, v))
 	}
 }
 
@@ -148,11 +155,7 @@ func captureStreams(ctx *ActionContext, stdoutPipe, stderrPipe io.Reader) (strin
 			buf.WriteString(line)
 			buf.WriteByte('\n')
 
-			if prefix != "" {
-				ctx.EmitLog(prefix + line)
-			} else {
-				ctx.EmitLog(line)
-			}
+			ctx.EmitLog(prefix + line)
 		}
 	}
 

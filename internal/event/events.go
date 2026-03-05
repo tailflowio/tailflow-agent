@@ -3,41 +3,41 @@ package event
 import (
 	"encoding/json"
 	"time"
+
+	sharedevent "github.com/tailflow/tailflow-shared/pkg/event"
 )
+
+// timeNow is a clock function for NewEvent. Override in tests.
+var timeNow = time.Now
 
 // jsonUnmarshalFn is used by SnapshotData. Override in tests to simulate unmarshal errors.
 var jsonUnmarshalFn = json.Unmarshal
 
-type EventType string
-
-const (
-	WorkflowStarted   EventType = "workflow.started"
-	WorkflowCompleted EventType = "workflow.completed"
-	StepStarted       EventType = "step.started"
-	StepCompleted     EventType = "step.completed"
-	StepFailed        EventType = "step.failed"
-	StepSkipped       EventType = "step.skipped"
-	StepLog           EventType = "step.log"
-	StepWaiting       EventType = "step.waiting"
-	StepInput         EventType = "step.input"
-	StepOutput        EventType = "step.output"
-	StepGoto          EventType = "step.goto"
-	Metrics           EventType = "metrics"
+type (
+	EventType = sharedevent.EventType
+	Event     = sharedevent.Event
 )
 
-type Event struct {
-	Type        EventType      `json:"type"`
-	Timestamp   time.Time      `json:"timestamp"`
-	ExecutionID string         `json:"execution_id"`
-	StepID      string         `json:"step_id,omitempty"`
-	Data        map[string]any `json:"data,omitempty"`
-	Message     string         `json:"message,omitempty"`
-}
+// Re-export shared constants.
+const (
+	WorkflowStarted   = sharedevent.WorkflowStarted
+	WorkflowCompleted = sharedevent.WorkflowCompleted
+	StepStarted       = sharedevent.StepStarted
+	StepCompleted     = sharedevent.StepCompleted
+	StepFailed        = sharedevent.StepFailed
+	StepSkipped       = sharedevent.StepSkipped
+	StepLog           = sharedevent.StepLog
+	StepWaiting       = sharedevent.StepWaiting
+	StepInput         = sharedevent.StepInput
+	StepOutput        = sharedevent.StepOutput
+	StepGoto          = sharedevent.StepGoto
+	Metrics           = sharedevent.Metrics
+)
 
 func NewEvent(typ EventType, executionID, stepID, message string) Event {
 	return Event{
 		Type:        typ,
-		Timestamp:   time.Now(),
+		Timestamp:   timeNow(),
 		ExecutionID: executionID,
 		StepID:      stepID,
 		Message:     message,

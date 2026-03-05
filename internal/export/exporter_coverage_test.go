@@ -3,6 +3,8 @@ package export
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +17,25 @@ import (
 	"github.com/tailflow/tailflow/internal/event"
 )
 
+// errorBodyTransport is an http.RoundTripper that returns a response with a
+// body whose Read method always returns an error. Used to test the io.ReadAll
+// error branch in post().
+type errorBodyTransport struct{}
+
+func (t *errorBodyTransport) RoundTrip(_ *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(&errReader{}),
+	}, nil
+}
+
+// errReader is an io.Reader that always returns an error.
+type errReader struct{}
+
+func (r *errReader) Read(_ []byte) (int, error) {
+	return 0, fmt.Errorf("simulated read error")
+}
+
 type ExporterCoverageSuite struct {
 	suite.Suite
 }
@@ -25,8 +46,6 @@ func TestExporterCoverage(t *testing.T) {
 
 func (s *ExporterCoverageSuite) SetupTest() {}
 
-// ─── New ─────────────────────────────────────────────────────────────────
-
 func (s *ExporterCoverageSuite) TestNew_DefaultIntervals() {
 	bus := event.NewBus()
 	defer bus.Close()
@@ -34,7 +53,7 @@ func (s *ExporterCoverageSuite) TestNew_DefaultIntervals() {
 	exp := New(Config{
 		ExportURL: "http://localhost",
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
 	s.Equal(1*time.Second, exp.flushInterval)
@@ -52,7 +71,7 @@ func (s *ExporterCoverageSuite) TestNew_CustomIntervals() {
 	exp := New(Config{
 		ExportURL:         "http://localhost",
 		EventBus:          bus,
-		Logger:            slog.Default(),
+		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		FlushInterval:     5 * time.Second,
 		HeartbeatInterval: 30 * time.Second,
 	})
@@ -60,8 +79,6 @@ func (s *ExporterCoverageSuite) TestNew_CustomIntervals() {
 	s.Equal(5*time.Second, exp.flushInterval)
 	s.Equal(30*time.Second, exp.heartbeatInterval)
 }
-
-// ─── Shutdown ────────────────────────────────────────────────────────────
 
 func (s *ExporterCoverageSuite) TestShutdown_WaitsForGoroutines() {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -106,8 +123,6 @@ func (s *ExporterCoverageSuite) TestShutdown_WaitsForGoroutines() {
 	}
 }
 
-// ─── tryRegister ─────────────────────────────────────────────────────────
-
 func (s *ExporterCoverageSuite) TestTryRegister_InvalidJSON() {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -121,10 +136,10 @@ func (s *ExporterCoverageSuite) TestTryRegister_InvalidJSON() {
 	exp := New(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
-	ok := exp.tryRegister(map[string]any{"test": true}, 1*time.Second)
+	ok := exp.tryRegister(context.Background(), map[string]any{"test": true}, 1*time.Second)
 	s.False(ok)
 }
 
@@ -141,10 +156,10 @@ func (s *ExporterCoverageSuite) TestTryRegister_EmptyAgentID() {
 	exp := New(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
-	ok := exp.tryRegister(map[string]any{"test": true}, 1*time.Second)
+	ok := exp.tryRegister(context.Background(), map[string]any{"test": true}, 1*time.Second)
 	s.False(ok)
 }
 
@@ -160,14 +175,12 @@ func (s *ExporterCoverageSuite) TestTryRegister_HTTPError() {
 	exp := New(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
-	ok := exp.tryRegister(map[string]any{"test": true}, 1*time.Second)
+	ok := exp.tryRegister(context.Background(), map[string]any{"test": true}, 1*time.Second)
 	s.False(ok)
 }
-
-// ─── register ────────────────────────────────────────────────────────────
 
 func (s *ExporterCoverageSuite) TestRegister_ContextCancelDuringBackoff() {
 	// Server always returns error so register keeps retrying
@@ -191,7 +204,7 @@ func (s *ExporterCoverageSuite) TestRegister_ContextCancelDuringBackoff() {
 	exp := New(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -254,7 +267,7 @@ func (s *ExporterCoverageSuite) TestRegister_BackoffCapsAtMax() {
 	exp := New(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
 	ctx := context.Background()
@@ -269,8 +282,6 @@ func (s *ExporterCoverageSuite) TestRegister_BackoffCapsAtMax() {
 	mu.Unlock()
 }
 
-// ─── flushBatch ──────────────────────────────────────────────────────────
-
 func (s *ExporterCoverageSuite) TestFlushBatch_EmptyBatch() {
 	bus := event.NewBus()
 	defer bus.Close()
@@ -278,7 +289,7 @@ func (s *ExporterCoverageSuite) TestFlushBatch_EmptyBatch() {
 	exp := New(Config{
 		ExportURL: "http://localhost",
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
 	batch := []event.Event{}
@@ -293,7 +304,7 @@ func (s *ExporterCoverageSuite) TestFlushBatch_NotRegistered() {
 	exp := New(Config{
 		ExportURL: "http://localhost",
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
 	batch := []event.Event{
@@ -317,7 +328,7 @@ func (s *ExporterCoverageSuite) TestFlushBatch_IngestError() {
 	exp := New(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
 	// Mark as registered
@@ -356,7 +367,7 @@ func (s *ExporterCoverageSuite) TestFlushBatch_Chunking() {
 	exp := New(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
 	exp.mu.Lock()
@@ -405,7 +416,7 @@ func (s *ExporterCoverageSuite) TestFlushBatch_ChunkingSecondChunkFails() {
 	exp := New(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
 	exp.mu.Lock()
@@ -428,8 +439,6 @@ func (s *ExporterCoverageSuite) TestFlushBatch_ChunkingSecondChunkFails() {
 	mu.Unlock()
 }
 
-// ─── finalFlush ──────────────────────────────────────────────────────────
-
 func (s *ExporterCoverageSuite) TestFinalFlush_DrainsChannel() {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -442,7 +451,7 @@ func (s *ExporterCoverageSuite) TestFinalFlush_DrainsChannel() {
 	exp := New(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
 	exp.mu.Lock()
@@ -474,7 +483,7 @@ func (s *ExporterCoverageSuite) TestFinalFlush_SkipsMetricsEvents() {
 	exp := New(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
 	exp.mu.Lock()
@@ -500,7 +509,7 @@ func (s *ExporterCoverageSuite) TestFinalFlush_EmptyBatchNoOp() {
 	exp := New(Config{
 		ExportURL: "http://localhost",
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
 	ch := make(chan event.Event, 10)
@@ -523,7 +532,7 @@ func (s *ExporterCoverageSuite) TestFinalFlush_ClosedChannel() {
 	exp := New(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
 	exp.mu.Lock()
@@ -539,8 +548,6 @@ func (s *ExporterCoverageSuite) TestFinalFlush_ClosedChannel() {
 	exp.finalFlush(ch, &batch)
 }
 
-// ─── awaitRegistrationThenFlush ──────────────────────────────────────────
-
 func (s *ExporterCoverageSuite) TestAwaitRegistrationThenFlush_AlreadyRegistered() {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -553,7 +560,7 @@ func (s *ExporterCoverageSuite) TestAwaitRegistrationThenFlush_AlreadyRegistered
 	exp := New(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
 	exp.mu.Lock()
@@ -576,7 +583,7 @@ func (s *ExporterCoverageSuite) TestAwaitRegistrationThenFlush_Timeout() {
 	exp := New(Config{
 		ExportURL: "http://localhost:0",
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
 	// Not registered, will timeout
@@ -613,7 +620,7 @@ func (s *ExporterCoverageSuite) TestAwaitRegistrationThenFlush_RegistersDuringWa
 	exp := New(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
 	batch := []event.Event{
@@ -637,8 +644,6 @@ func (s *ExporterCoverageSuite) TestAwaitRegistrationThenFlush_RegistersDuringWa
 	s.Less(elapsed, 3*time.Second)
 	s.True(ingestCalled.Load(), "expected ingest to be called after delayed registration")
 }
-
-// ─── batchLoop ───────────────────────────────────────────────────────────
 
 func (s *ExporterCoverageSuite) TestBatchLoop_BufferOverflow() {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -819,8 +824,6 @@ func (s *ExporterCoverageSuite) TestBatchLoop_MetricsEventStored() {
 	exp.Shutdown()
 }
 
-// ─── applyServerConfig ──────────────────────────────────────────────────
-
 func (s *ExporterCoverageSuite) TestApplyServerConfig_EmptyBody() {
 	bus := event.NewBus()
 	defer bus.Close()
@@ -828,7 +831,7 @@ func (s *ExporterCoverageSuite) TestApplyServerConfig_EmptyBody() {
 	exp := New(Config{
 		ExportURL: "http://localhost",
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
 	changed := exp.applyServerConfig(nil)
@@ -845,7 +848,7 @@ func (s *ExporterCoverageSuite) TestApplyServerConfig_InvalidJSON() {
 	exp := New(Config{
 		ExportURL: "http://localhost",
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
 	changed := exp.applyServerConfig([]byte("not-json"))
@@ -859,7 +862,7 @@ func (s *ExporterCoverageSuite) TestApplyServerConfig_NoChanges() {
 	exp := New(Config{
 		ExportURL: "http://localhost",
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
 	// No flush_interval_s or heartbeat_interval_s fields
@@ -875,7 +878,7 @@ func (s *ExporterCoverageSuite) TestApplyServerConfig_SameValues() {
 	exp := New(Config{
 		ExportURL:         "http://localhost",
 		EventBus:          bus,
-		Logger:            slog.Default(),
+		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		HeartbeatInterval: 10 * time.Second,
 		FlushInterval:     1 * time.Second,
 	})
@@ -898,7 +901,7 @@ func (s *ExporterCoverageSuite) TestApplyServerConfig_OnlyHeartbeatChanges() {
 	exp := New(Config{
 		ExportURL:         "http://localhost",
 		EventBus:          bus,
-		Logger:            slog.Default(),
+		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		HeartbeatInterval: 10 * time.Second,
 		FlushInterval:     1 * time.Second,
 	})
@@ -921,7 +924,7 @@ func (s *ExporterCoverageSuite) TestApplyServerConfig_OnlyFlushChanges() {
 	exp := New(Config{
 		ExportURL:         "http://localhost",
 		EventBus:          bus,
-		Logger:            slog.Default(),
+		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		HeartbeatInterval: 10 * time.Second,
 		FlushInterval:     1 * time.Second,
 	})
@@ -944,7 +947,7 @@ func (s *ExporterCoverageSuite) TestApplyServerConfig_FlushBelowMinimum() {
 	exp := New(Config{
 		ExportURL:     "http://localhost",
 		EventBus:      bus,
-		Logger:        slog.Default(),
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 		FlushInterval: 1 * time.Second,
 	})
 
@@ -965,7 +968,7 @@ func (s *ExporterCoverageSuite) TestApplyServerConfig_HeartbeatBelowMinimum() {
 	exp := New(Config{
 		ExportURL:         "http://localhost",
 		EventBus:          bus,
-		Logger:            slog.Default(),
+		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		HeartbeatInterval: 10 * time.Second,
 	})
 
@@ -980,8 +983,6 @@ func (s *ExporterCoverageSuite) TestApplyServerConfig_HeartbeatBelowMinimum() {
 	exp.mu.Unlock()
 }
 
-// ─── post ────────────────────────────────────────────────────────────────
-
 func (s *ExporterCoverageSuite) TestPost_InvalidURL() {
 	bus := event.NewBus()
 	defer bus.Close()
@@ -989,7 +990,7 @@ func (s *ExporterCoverageSuite) TestPost_InvalidURL() {
 	exp := New(Config{
 		ExportURL: "://invalid-url",
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
 	_, err := exp.post(context.Background(), "/test", map[string]any{"key": "value"})
@@ -1004,7 +1005,7 @@ func (s *ExporterCoverageSuite) TestPost_UnmarshalablePayload() {
 	exp := New(Config{
 		ExportURL: "http://localhost",
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
 	// A channel cannot be marshaled to JSON
@@ -1020,7 +1021,7 @@ func (s *ExporterCoverageSuite) TestPost_ConnectionError() {
 	exp := New(Config{
 		ExportURL: "http://127.0.0.1:1", // port that won't be listening
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
 	_, err := exp.post(context.Background(), "/test", map[string]any{"key": "value"})
@@ -1040,7 +1041,7 @@ func (s *ExporterCoverageSuite) TestPost_Non2xxStatus() {
 	exp := New(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
 	_, err := exp.post(context.Background(), "/test", map[string]any{"key": "value"})
@@ -1063,7 +1064,7 @@ func (s *ExporterCoverageSuite) TestPost_NoAPIKey() {
 	exp := New(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 		APIKey:    "",
 	})
 
@@ -1087,7 +1088,7 @@ func (s *ExporterCoverageSuite) TestPost_WithAPIKey() {
 	exp := New(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 		APIKey:    "my-secret-key",
 	})
 
@@ -1109,7 +1110,7 @@ func (s *ExporterCoverageSuite) TestPost_CancelledContext() {
 	exp := New(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1118,8 +1119,6 @@ func (s *ExporterCoverageSuite) TestPost_CancelledContext() {
 	_, err := exp.post(ctx, "/test", map[string]any{"key": "value"})
 	s.Error(err)
 }
-
-// ─── Full integration: finalFlush with awaitRegistration ─────────────────
 
 func (s *ExporterCoverageSuite) TestFinalFlush_TriggersAwaitRegistration() {
 	var mu sync.Mutex
@@ -1141,7 +1140,7 @@ func (s *ExporterCoverageSuite) TestFinalFlush_TriggersAwaitRegistration() {
 	exp := New(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
 	// Not registered initially
@@ -1164,8 +1163,6 @@ func (s *ExporterCoverageSuite) TestFinalFlush_TriggersAwaitRegistration() {
 	s.True(ingestCalled, "expected ingest to be called during finalFlush")
 	mu.Unlock()
 }
-
-// ─── Full integration: context-cancel triggers finalFlush in batchLoop ──
 
 func (s *ExporterCoverageSuite) TestBatchLoop_ContextCancelTriggersFinalFlush() {
 	var mu sync.Mutex
@@ -1220,8 +1217,6 @@ func (s *ExporterCoverageSuite) TestBatchLoop_ContextCancelTriggersFinalFlush() 
 	mu.Unlock()
 }
 
-// ─── Execution tracking via finalFlush ───────────────────────────────────
-
 func (s *ExporterCoverageSuite) TestFinalFlush_TracksWorkflowStarted() {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -1234,7 +1229,7 @@ func (s *ExporterCoverageSuite) TestFinalFlush_TracksWorkflowStarted() {
 	exp := New(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
-		Logger:    slog.Default(),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
 	exp.mu.Lock()
@@ -1256,8 +1251,6 @@ func (s *ExporterCoverageSuite) TestFinalFlush_TracksWorkflowStarted() {
 	s.True(exists, "expected execution to be tracked in activeExecutions")
 }
 
-// ─── batchLoop overflow (direct channel manipulation) ────────────────────
-
 func (s *ExporterCoverageSuite) TestBatchLoop_OverflowDropsOldest() {
 	// This test directly feeds events into the subscriber channel to exceed maxBatchSize.
 	// We mark the exporter as registered so that finalFlush can flush immediately.
@@ -1272,7 +1265,7 @@ func (s *ExporterCoverageSuite) TestBatchLoop_OverflowDropsOldest() {
 	exp := New(Config{
 		ExportURL:         srv.URL,
 		EventBus:          bus,
-		Logger:            slog.Default(),
+		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		FlushInterval:     10 * time.Second, // Long interval so ticker doesn't drain
 		HeartbeatInterval: 10 * time.Second,
 	})
@@ -1314,7 +1307,24 @@ func (s *ExporterCoverageSuite) TestBatchLoop_OverflowDropsOldest() {
 	}
 }
 
-// ─── applyServerConfig: intervalChange channel full (default branch) ─────
+func (s *ExporterCoverageSuite) TestPost_ReadBodyError() {
+	bus := event.NewBus()
+	defer bus.Close()
+
+	exp := New(Config{
+		ExportURL: "http://localhost",
+		EventBus:  bus,
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+
+	// Replace the client transport with one that returns a response whose
+	// Body.Read always errors.
+	exp.client.Transport = &errorBodyTransport{}
+
+	_, err := exp.post(context.Background(), "/test", map[string]any{"key": "value"})
+	s.Error(err)
+	s.Contains(err.Error(), "read response body")
+}
 
 func (s *ExporterCoverageSuite) TestApplyServerConfig_IntervalChangeChannelFull() {
 	bus := event.NewBus()
@@ -1323,7 +1333,7 @@ func (s *ExporterCoverageSuite) TestApplyServerConfig_IntervalChangeChannelFull(
 	exp := New(Config{
 		ExportURL:     "http://localhost",
 		EventBus:      bus,
-		Logger:        slog.Default(),
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 		FlushInterval: 1 * time.Second,
 	})
 

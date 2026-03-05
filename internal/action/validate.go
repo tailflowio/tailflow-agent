@@ -3,6 +3,7 @@ package action
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/go-playground/validator/v10"
 )
@@ -13,7 +14,8 @@ type ValidateAction struct{}
 func NewValidateAction() Action { return &ValidateAction{} }
 
 func (a *ValidateAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["rules"]; !ok {
+	_, ok := ctx.Config["rules"]
+	if !ok {
 		return errors.New("validate action requires 'rules' in config")
 	}
 
@@ -28,15 +30,42 @@ func (a *ValidateAction) Execute(ctx *ActionContext) (any, error) {
 		return map[string]any{"valid": false, "errors": []any{}}, nil
 	}
 
-	// data can be a map or nil
-	var data map[string]any
+	data := extractValidationData(ctx)
 
-	if d, ok := ctx.Config["data"]; ok {
-		if dm, ok := d.(map[string]any); ok {
-			data = dm
-		}
+	validationErrs := runValidationRules(rules, data)
+
+	result := map[string]any{
+		"valid":  len(validationErrs) == 0,
+		"errors": validationErrs,
 	}
 
+	if len(validationErrs) == 0 {
+		return result, nil
+	}
+
+	fail, ok := ctx.Config["fail_on_error"].(bool)
+	if !ok || !fail {
+		return result, nil
+	}
+
+	return result, buildValidationError(validationErrs)
+}
+
+func extractValidationData(ctx *ActionContext) map[string]any {
+	d, ok := ctx.Config["data"]
+	if !ok {
+		return nil
+	}
+
+	dm, ok := d.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	return dm
+}
+
+func runValidationRules(rules map[string]any, data map[string]any) []map[string]any {
 	v := validator.New()
 	var validationErrs []map[string]any
 
@@ -45,24 +74,33 @@ func (a *ValidateAction) Execute(ctx *ActionContext) (any, error) {
 		value := data[field]
 
 		err := v.Var(value, rule)
-		if err != nil {
-			var ve validator.ValidationErrors
-			if errors.As(err, &ve) {
-				for _, e := range ve {
-					validationErrs = append(validationErrs, map[string]any{
-						"field":   field,
-						"tag":     e.Tag(),
-						"value":   value,
-						"message": fmt.Sprintf("field '%s' failed on '%s' validation", field, e.Tag()),
-					})
-				}
-			}
+		if err == nil {
+			continue
+		}
+
+		var ve validator.ValidationErrors
+		if !errors.As(err, &ve) {
+			continue
+		}
+
+		for _, e := range ve {
+			validationErrs = append(validationErrs, map[string]any{
+				"field":   field,
+				"tag":     e.Tag(),
+				"value":   value,
+				"message": fmt.Sprintf("field '%s' failed on '%s' validation", field, e.Tag()),
+			})
 		}
 	}
 
-	// Always return nil error — validation failure is not a step failure
-	return map[string]any{
-		"valid":  len(validationErrs) == 0,
-		"errors": validationErrs,
-	}, nil
+	return validationErrs
+}
+
+func buildValidationError(validationErrs []map[string]any) error {
+	msgs := make([]string, len(validationErrs))
+	for i, e := range validationErrs {
+		msgs[i] = fmt.Sprintf("%v", e["message"])
+	}
+
+	return fmt.Errorf("validation failed: %s", strings.Join(msgs, "; "))
 }

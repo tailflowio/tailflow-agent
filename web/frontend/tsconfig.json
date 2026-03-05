@@ -16,8 +16,10 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@tailflow/shared": ["../../../tailflow-shared/web/src/index.ts"],
+      "@tailflow/shared/*": ["../../../tailflow-shared/web/src/*"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.vue"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.vue", "../../../tailflow-shared/web/src/**/*.ts", "../../../tailflow-shared/web/src/**/*.vue"]
 }

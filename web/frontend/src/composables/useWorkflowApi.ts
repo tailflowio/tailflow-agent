@@ -20,6 +20,7 @@ export interface GraphNode {
   id: string
   label: string
   type: string
+  action?: string
   pipeline?: PipelineAction[]
   when?: string
 }
@@ -49,9 +50,11 @@ export interface Execution {
 
 export interface StepResult {
   status: string
+  started_at?: string
+  finished_at?: string
   input?: unknown
   output?: unknown
-  error?: string
+  error?: string | { message: string }
 }
 
 export interface StepDetailHistory {
@@ -80,13 +83,11 @@ export interface StepDetail {
 
 export interface ProcessMetrics {
   cpu_percent: number
-  rss_kb: number
+  memory_bytes: number
   goroutines: number
-  heap_mb: number
   net_rx_bytes: number
   net_tx_bytes: number
   uptime_s: number
-  available: boolean
 }
 
 export interface ListExecutionsParams {
@@ -110,7 +111,7 @@ export function useWorkflowApi() {
     loading.value = true
     error.value = null
     try {
-      const res = await fetch(url, options)
+      const res = await fetch(url, { cache: 'no-store', ...options })
       if (!res.ok) {
         const body = await res.json().catch(() => ({ error: res.statusText }))
         throw new Error(body.error || res.statusText)

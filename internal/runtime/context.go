@@ -67,8 +67,13 @@ func (c *ExecutionContext) GetStepResult(stepID string) (*StepResult, bool) {
 	defer c.mu.RUnlock()
 
 	r, ok := c.Steps[stepID]
+	if !ok {
+		return nil, false
+	}
 
-	return r, ok
+	cp := *r
+
+	return &cp, true
 }
 
 func (c *ExecutionContext) ClearStepResult(stepID string) {
@@ -94,6 +99,19 @@ func (c *ExecutionContext) GetVariable(key string) (any, bool) {
 	return v, ok
 }
 
+func (c *ExecutionContext) HasFailedSteps() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	for _, sr := range c.Steps {
+		if sr.Status == StatusFailed {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (c *ExecutionContext) ToMap() map[string]any {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -117,11 +135,16 @@ func (c *ExecutionContext) ToMap() map[string]any {
 		stepsMap[id] = stepMap
 	}
 
+	vars := make(map[string]any, len(c.Variables))
+	for k, v := range c.Variables {
+		vars[k] = v
+	}
+
 	m := map[string]any{
 		"params":  c.Params,
 		"env":     c.Env,
 		"steps":   stepsMap,
-		"vars":    c.Variables,
+		"vars":    vars,
 		"trigger": c.TriggerData,
 	}
 
@@ -129,7 +152,8 @@ func (c *ExecutionContext) ToMap() map[string]any {
 }
 
 func (c *ExecutionContext) ResolveParam(name string) (any, error) {
-	if v, ok := c.Params[name]; ok {
+	v, ok := c.Params[name]
+	if ok {
 		return v, nil
 	}
 

@@ -303,6 +303,59 @@ func (s *HTTPActionTestSuite) TestCustomContentTypeWithBody() {
 	s.Equal(200, out.(map[string]any)["status"])
 }
 
+// parseConfigDuration: timeout is not a string (e.g. an int) returns 0, false.
+func (s *HTTPActionTestSuite) TestParseConfigDuration_NonStringTimeout() {
+	ctx := newTestContext(map[string]any{
+		"url":     "http://example.com",
+		"timeout": 42,
+	})
+	d, ok := parseConfigDuration(ctx)
+	s.False(ok)
+	s.Equal(time.Duration(0), d)
+}
+
+// parseConfigDuration: timeout is an invalid duration string returns 0, false.
+func (s *HTTPActionTestSuite) TestParseConfigDuration_InvalidDurationString() {
+	ctx := newTestContext(map[string]any{
+		"url":     "http://example.com",
+		"timeout": "not-a-duration",
+	})
+	d, ok := parseConfigDuration(ctx)
+	s.False(ok)
+	s.Equal(time.Duration(0), d)
+}
+
+// parseConfigDuration: timeout is a boolean (non-string) returns 0, false.
+func (s *HTTPActionTestSuite) TestParseConfigDuration_BoolTimeout() {
+	ctx := newTestContext(map[string]any{
+		"url":     "http://example.com",
+		"timeout": true,
+	})
+	d, ok := parseConfigDuration(ctx)
+	s.False(ok)
+	s.Equal(time.Duration(0), d)
+}
+
+// resolveHTTPTimeout: non-string timeout falls through to default 30s.
+func (s *HTTPActionTestSuite) TestResolveHTTPTimeout_NonStringTimeoutUsesDefault() {
+	ctx := newTestContext(map[string]any{
+		"url":     "http://example.com",
+		"timeout": 42,
+	})
+	d := resolveHTTPTimeout(ctx)
+	s.Equal(30*time.Second, d)
+}
+
+// resolveHTTPTimeout: invalid duration string falls through to default 30s.
+func (s *HTTPActionTestSuite) TestResolveHTTPTimeout_InvalidDurationUsesDefault() {
+	ctx := newTestContext(map[string]any{
+		"url":     "http://example.com",
+		"timeout": "xyz",
+	})
+	d := resolveHTTPTimeout(ctx)
+	s.Equal(30*time.Second, d)
+}
+
 func (s *HTTPActionTestSuite) TestReadResponseBodyError() {
 	// Create a server that hijacks the connection and sends a partial response
 	// with a Content-Length that exceeds the actual body, then abruptly closes
@@ -326,7 +379,8 @@ func (s *HTTPActionTestSuite) TestReadResponseBodyError() {
 		bufrw.Flush()
 
 		// Abruptly close with TCP RST
-		if tc, ok := conn.(*net.TCPConn); ok {
+		tc, ok := conn.(*net.TCPConn)
+		if ok {
 			tc.SetLinger(0)
 		}
 		conn.Close()
