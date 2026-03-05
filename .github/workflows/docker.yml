@@ -21,8 +21,12 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Create web/dist placeholder for embed
+        run: mkdir -p web/dist && touch web/dist/.gitkeep
+
       - uses: golangci/golangci-lint-action@v6
         with:
+          version: v2.10.1
           args: --config scripts/.golangci.yaml
 
   test:
@@ -33,6 +37,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+
+      - name: Create web/dist placeholder for embed
+        run: mkdir -p web/dist && touch web/dist/.gitkeep
 
       - name: Run tests with coverage
         run: bash scripts/cover.sh
