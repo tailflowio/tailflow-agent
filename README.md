@@ -483,16 +483,10 @@ The [`examples/`](./examples) directory contains ready-to-run workflows:
 
 TailFlow agents can push events, heartbeats, and system metrics to a central SaaS platform for distributed workflow monitoring.
 
-```
-┌──────────────────┐         HTTPS          ┌──────────────────┐
-│   TailFlow Agent │ ─────────────────────> │   SaaS Platform  │
-│   (self-hosted)  │                        │   (central)      │
-│                  │  /register             │                  │
-│  - Runs workflow │  /ingest (events)      │  - Dashboard     │
-│  - Local UI      │  /heartbeat (metrics)  │  - Alerting      │
-│  - Export events │ <───────────────────── │  - History       │
-│                  │  agent_id, config      │                  │
-└──────────────────┘                        └──────────────────┘
+```mermaid
+graph LR
+    Agent["TailFlow Agent<br/><i>(self-hosted)</i><br/>- Runs workflows<br/>- Local UI<br/>- Export events"] -->|"/register<br/>/ingest (events)<br/>/heartbeat (metrics)"| SaaS["SaaS Platform<br/><i>(central)</i><br/>- Dashboard<br/>- Alerting<br/>- History"]
+    SaaS -->|"agent_id, config"| Agent
 ```
 
 ### Enable export
@@ -595,32 +589,14 @@ tailflow serve --selfhosted \
 
 ## Architecture
 
-```
-                    ┌─────────────────────────────────┐
-                    │         YAML Workflow            │
-                    │    (parser + validator)          │
-                    └──────────┬──────────────────────┘
-                               │
-                    ┌──────────▼──────────────────────┐
-                    │       DAG Engine                 │
-                    │  (topological sort, parallel     │
-                    │   execution, retries, goto)      │
-                    └──────────┬──────────────────────┘
-                               │
-          ┌────────────────────┼────────────────────┐
-          │                    │                    │
-  ┌───────▼──────┐   ┌────────▼───────┐   ┌───────▼──────┐
-  │   Actions    │   │  Event Bus     │   │   Services   │
-  │  (34 built   │   │  (real-time    │   │ (DB pool,    │
-  │   in)        │   │   SSE stream)  │   │  KV store,   │
-  │              │   │                │   │  locks, wait)│
-  └──────────────┘   └──┬─────┬──────┘   └──────────────┘
-                        │     │
-               ┌────────▼┐   ┌▼───────────┐
-               │  Web UI │   │  SaaS      │
-               │(embedded│   │  Exporter  │
-               │  SPA)   │   │ (optional) │
-               └─────────┘   └────────────┘
+```mermaid
+graph TD
+    WF["YAML Workflow<br/><i>parser + validator</i>"] --> DAG["DAG Engine<br/><i>topological sort, parallel<br/>execution, retries, goto</i>"]
+    DAG --> ACT["Actions<br/><i>34 built-in</i>"]
+    DAG --> EVT["Event Bus<br/><i>real-time SSE stream</i>"]
+    DAG --> SVC["Services<br/><i>DB pool, KV store,<br/>locks, wait</i>"]
+    EVT --> UI["Web UI<br/><i>embedded SPA</i>"]
+    EVT --> EXP["SaaS Exporter<br/><i>optional</i>"]
 ```
 
 ### Key design decisions
