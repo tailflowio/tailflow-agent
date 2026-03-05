@@ -41,7 +41,6 @@ type realAMQPConn struct {
 func (r *realAMQPConn) Channel() (amqpChan, error) { return r.channelFn() }
 func (r *realAMQPConn) Close() error               { return r.closeFn() }
 
-// realAMQPDial is the production dialer.
 func realAMQPDial(url string) (amqpConn, error) {
 	c, err := amqpRawDial(url)
 	if err != nil {

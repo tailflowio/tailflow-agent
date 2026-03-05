@@ -6,13 +6,13 @@ import (
 	"time"
 )
 
-// DelayAction waits for a specified duration.
 type DelayAction struct{}
 
 func NewDelayAction() Action { return &DelayAction{} }
 
 func (a *DelayAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["duration"]; !ok {
+	_, ok := ctx.Config["duration"]
+	if !ok {
 		return errors.New("delay action requires 'duration' in config")
 	}
 

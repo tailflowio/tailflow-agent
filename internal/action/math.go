@@ -28,11 +28,13 @@ type MathAction struct{}
 func NewMathAction() Action { return &MathAction{} }
 
 func (a *MathAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["input"]; !ok {
+	_, ok := ctx.Config["input"]
+	if !ok {
 		return errors.New("math action requires 'input' in config")
 	}
 
-	if _, ok := ctx.Config["operations"]; !ok {
+	_, ok = ctx.Config["operations"]
+	if !ok {
 		return errors.New("math action requires 'operations' in config")
 	}
 

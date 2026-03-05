@@ -7,6 +7,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src'),
+      '@tailflow/shared': resolve(__dirname, '../../../tailflow-shared/web/src'),
     },
   },
   build: {

@@ -7,13 +7,13 @@ import (
 	"github.com/tailflow/tailflow/internal/runtime"
 )
 
-// ConditionAction evaluates an if/then/else condition.
 type ConditionAction struct{}
 
 func NewConditionAction() Action { return &ConditionAction{} }
 
 func (a *ConditionAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["if"]; !ok {
+	_, ok := ctx.Config["if"]
+	if !ok {
 		return errors.New("condition action requires 'if' in config")
 	}
 
@@ -40,7 +40,8 @@ func (a *ConditionAction) Execute(ctx *ActionContext) (any, error) {
 		"branch":    branch,
 	}
 
-	if val, ok := ctx.Config[configKey]; ok {
+	val, ok := ctx.Config[configKey]
+	if ok {
 		output["value"] = val
 	}
 

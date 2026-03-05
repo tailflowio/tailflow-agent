@@ -36,7 +36,7 @@ type RedisKVStore struct {
 	client redisClient
 }
 
-func NewRedisKVStore(url string) (*RedisKVStore, error) {
+func NewRedisKVStore(ctx context.Context, url string) (*RedisKVStore, error) {
 	opts, err := redis.ParseURL(url)
 	if err != nil {
 		return nil, fmt.Errorf("redis: invalid URL: %w", err)
@@ -44,12 +44,12 @@ func NewRedisKVStore(url string) (*RedisKVStore, error) {
 
 	client := newRedisClientFn(opts)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	err = client.Ping(ctx).Err()
+	err = client.Ping(pingCtx).Err()
 	if err != nil {
-		client.Close()
+		_ = client.Close()
 		return nil, fmt.Errorf("redis: ping failed: %w", err)
 	}
 

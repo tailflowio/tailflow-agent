@@ -16,7 +16,7 @@ type Route struct {
 }
 
 func ResolveRoutes(workflows []*parser.Workflow) []Route {
-	var routes []Route
+	routes := make([]Route, 0, len(workflows))
 
 	for _, wf := range workflows {
 		if wf.Trigger == nil {

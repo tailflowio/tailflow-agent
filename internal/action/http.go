@@ -16,7 +16,8 @@ type HTTPAction struct{}
 func NewHTTPAction() Action { return &HTTPAction{} }
 
 func (a *HTTPAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["url"]; !ok {
+	_, ok := ctx.Config["url"]
+	if !ok {
 		return errors.New("http action requires 'url' in config")
 	}
 
@@ -25,7 +26,9 @@ func (a *HTTPAction) Validate(ctx *ActionContext) error {
 
 func (a *HTTPAction) Execute(ctx *ActionContext) (any, error) {
 	method := "GET"
-	if m, ok := ctx.Config["method"]; ok {
+
+	m, ok := ctx.Config["method"]
+	if ok {
 		method = strings.ToUpper(fmt.Sprintf("%v", m))
 	}
 
@@ -70,7 +73,8 @@ func buildHTTPBody(ctx *ActionContext) (io.Reader, error) {
 		return nil, nil
 	}
 
-	if b, ok := body.(string); ok {
+	b, ok := body.(string)
+	if ok {
 		return strings.NewReader(b), nil
 	}
 
@@ -83,8 +87,10 @@ func buildHTTPBody(ctx *ActionContext) (io.Reader, error) {
 }
 
 func applyHTTPHeaders(req *http.Request, ctx *ActionContext, bodyReader io.Reader) {
-	if headers, ok := ctx.Config["headers"]; ok {
-		if hMap, ok := headers.(map[string]any); ok {
+	headers, ok := ctx.Config["headers"]
+	if ok {
+		hMap, ok := headers.(map[string]any)
+		if ok {
 			for k, v := range hMap {
 				req.Header.Set(k, fmt.Sprintf("%v", v))
 			}
@@ -97,14 +103,9 @@ func applyHTTPHeaders(req *http.Request, ctx *ActionContext, bodyReader io.Reade
 }
 
 func resolveHTTPTimeout(ctx *ActionContext) time.Duration {
-	if t, ok := ctx.Config["timeout"]; ok {
-		ts, ok := t.(string)
-		if ok {
-			d, parseErr := time.ParseDuration(ts)
-			if parseErr == nil {
-				return d
-			}
-		}
+	d, ok := parseConfigDuration(ctx)
+	if ok {
+		return d
 	}
 
 	_, hasDeadline := ctx.Deadline()
@@ -113,6 +114,25 @@ func resolveHTTPTimeout(ctx *ActionContext) time.Duration {
 	}
 
 	return 30 * time.Second
+}
+
+func parseConfigDuration(ctx *ActionContext) (time.Duration, bool) {
+	t, ok := ctx.Config["timeout"]
+	if !ok {
+		return 0, false
+	}
+
+	ts, ok := t.(string)
+	if !ok {
+		return 0, false
+	}
+
+	d, err := time.ParseDuration(ts)
+	if err != nil {
+		return 0, false
+	}
+
+	return d, true
 }
 
 func parseHTTPResponse(resp *http.Response) (map[string]any, error) {
@@ -129,11 +149,9 @@ func parseHTTPResponse(resp *http.Response) (map[string]any, error) {
 
 	var jsonBody any
 
-	err = json.Unmarshal(respBody, &jsonBody)
-	if err == nil {
+	output["body"] = string(respBody)
+	if json.Unmarshal(respBody, &jsonBody) == nil {
 		output["body"] = jsonBody
-	} else {
-		output["body"] = string(respBody)
 	}
 
 	return output, nil

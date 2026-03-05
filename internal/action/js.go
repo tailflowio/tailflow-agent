@@ -20,7 +20,8 @@ type JSAction struct{}
 func NewJSAction() Action { return &JSAction{} }
 
 func (a *JSAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["script"]; !ok {
+	_, ok := ctx.Config["script"]
+	if !ok {
 		return errors.New("js action requires 'script' in config")
 	}
 
@@ -32,16 +33,34 @@ func (a *JSAction) Execute(ctx *ActionContext) (any, error) {
 
 	vm := goja.New()
 
-	// Expose context to JS
+	err := setupJSVM(vm, ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	wrapped := fmt.Sprintf("(function() { %s })()", script)
+
+	val, err := vm.RunString(wrapped)
+	if err != nil {
+		return nil, fmt.Errorf("js: %w", err)
+	}
+
+	if val == nil || goja.IsUndefined(val) || goja.IsNull(val) {
+		return nil, nil
+	}
+
+	return val.Export(), nil
+}
+
+func setupJSVM(vm *goja.Runtime, ctx *ActionContext) error {
 	ctxMap := ctx.ExecCtx.ToMap()
 	for k, v := range ctxMap {
 		err := gojaVMSet(vm, k, v)
 		if err != nil {
-			return nil, fmt.Errorf("js: set %q: %w", k, err)
+			return fmt.Errorf("js: set %q: %w", k, err)
 		}
 	}
 
-	// Expose ctx.get and ctx.set helpers
 	ctxObj := vm.NewObject()
 
 	err := gojaObjSet(ctxObj, "get", func(call goja.FunctionCall) goja.Value {
@@ -55,7 +74,7 @@ func (a *JSAction) Execute(ctx *ActionContext) (any, error) {
 		return vm.ToValue(v)
 	})
 	if err != nil {
-		return nil, fmt.Errorf("js: set ctx.get: %w", err)
+		return fmt.Errorf("js: set ctx.get: %w", err)
 	}
 
 	err = gojaObjSet(ctxObj, "set", func(call goja.FunctionCall) goja.Value {
@@ -66,25 +85,13 @@ func (a *JSAction) Execute(ctx *ActionContext) (any, error) {
 		return goja.Undefined()
 	})
 	if err != nil {
-		return nil, fmt.Errorf("js: set ctx.set: %w", err)
+		return fmt.Errorf("js: set ctx.set: %w", err)
 	}
 
 	err = gojaVMSet(vm, "ctx", ctxObj)
 	if err != nil {
-		return nil, fmt.Errorf("js: set ctx: %w", err)
+		return fmt.Errorf("js: set ctx: %w", err)
 	}
 
-	// Wrap in a function to support return statements
-	wrapped := fmt.Sprintf("(function() { %s })()", script)
-
-	val, err := vm.RunString(wrapped)
-	if err != nil {
-		return nil, fmt.Errorf("js: %w", err)
-	}
-
-	if val == nil || goja.IsUndefined(val) || goja.IsNull(val) {
-		return nil, nil
-	}
-
-	return val.Export(), nil
+	return nil
 }

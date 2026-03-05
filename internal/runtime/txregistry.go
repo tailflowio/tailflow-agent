@@ -25,7 +25,8 @@ func (r *MemoryTxRegistry) Begin(ctx context.Context, db *sql.DB, name string) (
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, ok := r.txs[name]; ok {
+	_, ok := r.txs[name]
+	if ok {
 		return nil, fmt.Errorf("txregistry: transaction %q already exists", name)
 	}
 

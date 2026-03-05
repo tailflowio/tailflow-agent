@@ -1,7 +1,10 @@
+import { sharedEn } from '@tailflow/shared'
+
 export default {
+  ...sharedEn,
   nav: {
     overview: 'Overview',
-    steps: 'Steps',
+    workflow: 'Workflow',
     executions: 'Executions',
     run: 'Run',
     lightMode: 'Light mode',
@@ -36,6 +39,10 @@ export default {
     workflowMetrics: 'Workflow',
     metricsUnavailable: 'Requires Linux',
   },
+  workflow: {
+    graph: 'Graph',
+    list: 'List',
+  },
   steps: {
     title: 'Steps',
     count: '{count} steps in {name}',
@@ -66,12 +73,16 @@ export default {
     live: 'live',
     results: 'Results',
     collapseAll: 'Collapse all',
+    expand: 'Show',
+    collapse: 'Hide',
     waiting: 'Waiting: {type}',
     input: 'Input',
     output: 'Output',
     pipeline: 'Pipeline',
     error: 'Error',
+    loading: 'Loading...',
     events: 'Events',
+    graph: 'Graph',
   },
   executions: {
     title: 'Executions',
@@ -90,6 +101,9 @@ export default {
     sortDate: 'Date',
     sortDuration: 'Duration',
     loading: 'Loading...',
+    connectionLost: 'Unable to reach the agent',
+    connectionLostDesc: 'The workflow agent is not responding. Make sure it is running and try again.',
+    retry: 'Retry',
     showing: '{count} of {total}',
   },
   search: {

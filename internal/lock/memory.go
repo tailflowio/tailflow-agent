@@ -14,7 +14,8 @@ func NewMemoryLocker() *MemoryLocker {
 }
 
 func (l *MemoryLocker) Acquire(_ context.Context, key string) (func(), bool, error) {
-	if _, loaded := l.locks.LoadOrStore(key, struct{}{}); loaded {
+	_, loaded := l.locks.LoadOrStore(key, struct{}{})
+	if loaded {
 		return nil, false, nil
 	}
 
@@ -30,7 +31,8 @@ func NewMemoryDeduplicator() *MemoryDeduplicator {
 }
 
 func (d *MemoryDeduplicator) IsDuplicate(_ context.Context, eventID string) (bool, error) {
-	if _, loaded := d.seen.LoadOrStore(eventID, struct{}{}); loaded {
+	_, loaded := d.seen.LoadOrStore(eventID, struct{}{})
+	if loaded {
 		return true, nil
 	}
 

@@ -52,7 +52,7 @@ func (c *RabbitMQConsumer) openChannel() (<-chan amqp.Delivery, error) {
 
 	ch, err := conn.Channel()
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("rabbitmq channel: %w", err)
 	}
 
@@ -61,8 +61,8 @@ func (c *RabbitMQConsumer) openChannel() (<-chan amqp.Delivery, error) {
 	if c.config.Prefetch > 0 {
 		err = ch.Qos(c.config.Prefetch, 0, false)
 		if err != nil {
-			ch.Close()
-			conn.Close()
+			_ = ch.Close()
+			_ = conn.Close()
 
 			return nil, fmt.Errorf("rabbitmq qos: %w", err)
 		}
@@ -70,8 +70,8 @@ func (c *RabbitMQConsumer) openChannel() (<-chan amqp.Delivery, error) {
 
 	msgs, err := ch.Consume(c.config.Queue, "", false, false, false, false, nil)
 	if err != nil {
-		ch.Close()
-		conn.Close()
+		_ = ch.Close()
+		_ = conn.Close()
 
 		return nil, fmt.Errorf("rabbitmq consume: %w", err)
 	}
@@ -107,16 +107,18 @@ func (c *RabbitMQConsumer) handleMessage(msg amqp.Delivery, onMessage func(map[s
 
 	if c.config.AckOnSuccess {
 		ackFn := func(success bool) {
-			if success {
-				err := msg.Ack(false)
-				if err != nil {
-					c.logger.Error("rabbitmq ack failed", "error", err)
-				}
-			} else {
+			if !success {
 				err := msg.Nack(false, true)
 				if err != nil {
 					c.logger.Error("rabbitmq nack failed", "error", err)
 				}
+
+				return
+			}
+
+			err := msg.Ack(false)
+			if err != nil {
+				c.logger.Error("rabbitmq ack failed", "error", err)
 			}
 		}
 		onMessage(triggerData, ackFn)
@@ -134,11 +136,11 @@ func (c *RabbitMQConsumer) handleMessage(msg amqp.Delivery, onMessage func(map[s
 
 func (c *RabbitMQConsumer) Stop() {
 	if c.ch != nil {
-		c.ch.Close()
+		_ = c.ch.Close()
 	}
 
 	if c.conn != nil {
-		c.conn.Close()
+		_ = c.conn.Close()
 	}
 
 	c.logger.Info("rabbitmq consumer stopped")

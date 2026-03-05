@@ -38,6 +38,12 @@ const (
 	statusSkipped
 )
 
+const (
+	eventBusBuffer   = 1000
+	logDisplayMaxLen = 40
+	logTruncatedLen  = 37
+)
+
 type pipelineAction struct {
 	action string
 	title  string
@@ -321,7 +327,7 @@ func parsePipelineActions(config map[string]any) []pipelineAction {
 		return nil
 	}
 
-	var actions []pipelineAction
+	actions := make([]pipelineAction, 0, len(arr))
 
 	for _, item := range arr {
 		m, ok := item.(map[string]any)
@@ -622,8 +628,8 @@ func (r *cliRenderer) printActiveStepLine(st *stepTracker, now time.Time) {
 	}
 
 	log := st.lastLog
-	if len(log) > 40 {
-		log = log[:37] + "..."
+	if len(log) > logDisplayMaxLen {
+		log = log[:logTruncatedLen] + "..."
 	}
 
 	fmt.Printf("  %s  %s %s %s\n",
@@ -738,7 +744,7 @@ func (r *cliRenderer) handleEvent(ev event.Event) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	switch ev.Type { //nolint:exhaustive // non-display events handled by default
+	switch ev.Type {
 	case event.WorkflowStarted:
 		r.printLinef("  %s %s\n", r.c("1;34", "▶"), r.c("1", "Execution started"))
 	case event.StepStarted:
@@ -756,7 +762,7 @@ func (r *cliRenderer) handleEvent(ev event.Event) {
 	case event.StepWaiting:
 		title := r.stepTitle(ev.StepID)
 		r.printLinef("  %s  %s %s\n", r.c("33", "⏳"), title, ev.Message)
-	default:
+	case event.WorkflowCompleted, event.StepInput, event.StepOutput, event.Metrics:
 		return
 	}
 }
@@ -881,7 +887,8 @@ func (r *cliRenderer) handleStepGoto(ev event.Event) {
 	iteration := 2
 
 	if ev.Data != nil {
-		if iter, ok := ev.Data["iteration"].(float64); ok {
+		iter, ok := ev.Data["iteration"].(float64)
+		if ok {
 			iteration = int(iter)
 		}
 	}
@@ -900,34 +907,38 @@ func (r *cliRenderer) handleStepGoto(ev event.Event) {
 
 func (r *cliRenderer) initLoopBody(ev event.Event, iteration int) {
 	r.loopBody = make(map[string]bool)
-
-	if ev.Data != nil {
-		if body, ok := ev.Data["body"].([]any); ok {
-			for _, b := range body {
-				if s, ok := b.(string); ok {
-					r.loopBody[s] = true
-				}
-			}
-		}
-	}
-
 	r.loopStepID = ev.StepID
 	r.loopIteration = iteration
 
-	if ev.Data != nil {
-		if maxIter, ok := ev.Data["max_iterations"].(float64); ok {
-			r.loopMaxIter = int(maxIter)
+	if ev.Data == nil {
+		return
+	}
+
+	body, bodyOK := ev.Data["body"].([]any)
+	if bodyOK {
+		for _, b := range body {
+			s, sOK := b.(string)
+			if !sOK {
+				continue
+			}
+
+			r.loopBody[s] = true
 		}
+	}
+
+	maxIter, ok := ev.Data["max_iterations"].(float64)
+	if ok {
+		r.loopMaxIter = int(maxIter)
 	}
 }
 
 func (r *cliRenderer) stepTitle(stepID string) string {
 	st, ok := r.steps[stepID]
-	if ok {
-		return st.title
+	if !ok {
+		return stepID
 	}
 
-	return stepID
+	return st.title
 }
 
 func (r *cliRenderer) formatDuration(stepID string) string {
@@ -998,7 +1009,8 @@ func detectNoColor(flagValue bool) bool {
 		return true
 	}
 
-	if _, ok := os.LookupEnv("NO_COLOR"); ok {
+	_, ok := os.LookupEnv("NO_COLOR")
+	if ok {
 		return true
 	}
 
@@ -1215,7 +1227,10 @@ func setupActionRegistry(
 	for _, step := range wf.Steps {
 		_, err := reg.Create(step.Action)
 		if err != nil {
-			dbPool.Close()
+			closeErr := dbPool.Close()
+			if closeErr != nil {
+				logger.Warn("failed to close db pool", "error", closeErr)
+			}
 
 			return nil, nil, nil, fmt.Errorf("step %q uses %q which requires 'tailflow serve'", step.ID, step.Action)
 		}
@@ -1223,7 +1238,12 @@ func setupActionRegistry(
 
 	exec := engine.NewExecutor(reg, bus, logger, wf.Sensitive)
 
-	return exec, services, func() { dbPool.Close() }, nil
+	return exec, services, func() {
+		err := dbPool.Close()
+		if err != nil {
+			logger.Warn("failed to close db pool", "error", err)
+		}
+	}, nil
 }
 
 func setupRunResources(
@@ -1237,7 +1257,7 @@ func setupRunResources(
 
 	res.exporter, res.exportCancel = setupExporter(exportURL, apiKey, exporterName, bus, wf)
 
-	ch := bus.Subscribe(1000)
+	ch := bus.Subscribe(eventBusBuffer)
 
 	res.wg.Go(func() {
 		for ev := range ch {

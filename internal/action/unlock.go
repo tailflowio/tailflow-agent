@@ -11,7 +11,8 @@ type UnlockAction struct{}
 func NewUnlockAction() Action { return &UnlockAction{} }
 
 func (a *UnlockAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["key"]; !ok {
+	_, ok := ctx.Config["key"]
+	if !ok {
 		return errors.New("unlock action requires 'key' in config")
 	}
 

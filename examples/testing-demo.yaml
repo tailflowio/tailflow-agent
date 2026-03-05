@@ -1,0 +1,68 @@
+version: "2.0"
+name: "testing-demo"
+description: "User registration workflow with inline test cases"
+tags: ["testing", "validation"]
+
+trigger:
+  http:
+    method: POST
+    path: /users/register
+
+steps:
+  - id: validate
+    action: validate
+    title: "Validate registration data"
+    config:
+      data: "{{ trigger.body }}"
+      rules:
+        email: "required"
+        password: "required"
+    testing:
+      - name: "valid input"
+        output:
+          valid: true
+        expect:
+          status: "success"
+
+      - name: "missing email"
+        error:
+          message: "validation failed: email is required"
+        expect:
+          status: "failed"
+          error:
+            message: "validation failed: email is required"
+
+  - id: hash-password
+    action: js
+    title: "Hash password"
+    depends_on: [validate]
+    config:
+      script: |
+        let body = trigger.body;
+        // Simulate password hashing
+        let hash = "hashed_" + body.password.split("").reverse().join("");
+        return {
+          email: body.email,
+          password_hash: hash,
+          created_at: new Date().toISOString(),
+        };
+    testing:
+      - name: "successful hash"
+        output:
+          email: "alice@example.com"
+          password_hash: "hashed_321drowssap"
+          created_at: "2025-01-01T00:00:00.000Z"
+        expect:
+          status: "success"
+          output:
+            email: "alice@example.com"
+
+  - id: respond
+    action: response
+    title: "Return user"
+    depends_on: [hash-password]
+    config:
+      status: 201
+      body:
+        email: "{{ steps.hash-password.output.email }}"
+        created_at: "{{ steps.hash-password.output.created_at }}"

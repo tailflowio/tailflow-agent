@@ -1,0 +1,41 @@
+version: "2.0"
+name: "webhook-trigger"
+description: "Listen for GitHub webhooks with HMAC validation and branch filter"
+tags: ["webhook", "hmac", "github"]
+
+trigger:
+  webhook:
+    path: /hooks/github
+    secret: "{{ env.GITHUB_WEBHOOK_SECRET }}"
+    filter: "body.ref == 'refs/heads/main'"
+
+steps:
+  - id: extract
+    action: js
+    title: "Extract push details"
+    config:
+      script: |
+        let payload = trigger.body;
+        return {
+          repo: payload.repository ? payload.repository.full_name : "unknown",
+          branch: (payload.ref || "").replace("refs/heads/", ""),
+          pusher: payload.pusher ? payload.pusher.name : "unknown",
+          commit_count: payload.commits ? payload.commits.length : 0,
+          head_commit: payload.head_commit ? payload.head_commit.message : "",
+        };
+
+  - id: log-event
+    action: log
+    title: "Log push event"
+    depends_on: [extract]
+    config:
+      message: "Push to {{ steps.extract.output.repo }}#{{ steps.extract.output.branch }} by {{ steps.extract.output.pusher }} ({{ steps.extract.output.commit_count }} commits)"
+
+  - id: save-latest
+    action: kv.set
+    title: "Store latest push metadata"
+    depends_on: [extract]
+    config:
+      key: "github:latest-push:{{ steps.extract.output.repo }}"
+      value: "{{ steps.extract.output }}"
+      ttl: "24h"

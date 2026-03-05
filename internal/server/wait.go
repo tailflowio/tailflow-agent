@@ -28,7 +28,6 @@ func NewWaitRegistry() *WaitRegistry {
 	}
 }
 
-// Register creates a new wait registration and returns a channel and cleanup function.
 func (wr *WaitRegistry) Register(executionID, stepID, path string, ctx context.Context) (<-chan runtime.WaitRequest, func()) {
 	key := executionID + "/" + path
 	ch := make(chan runtime.WaitRequest, 1)
@@ -61,7 +60,6 @@ func (wr *WaitRegistry) Register(executionID, stepID, path string, ctx context.C
 	return ch, cleanup
 }
 
-// Deliver sends a WaitRequest to a registered wait.webhook.
 func (wr *WaitRegistry) Deliver(executionID, path string, req runtime.WaitRequest) error {
 	key := executionID + "/" + path
 

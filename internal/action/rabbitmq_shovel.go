@@ -76,15 +76,18 @@ type RabbitMQShovelAction struct{}
 func NewRabbitMQShovelAction() Action { return &RabbitMQShovelAction{} }
 
 func (a *RabbitMQShovelAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["url"]; !ok {
+	_, ok := ctx.Config["url"]
+	if !ok {
 		return errors.New("rabbitmq.shovel requires 'url' in config")
 	}
 
-	if _, ok := ctx.Config["source_queue"]; !ok {
+	_, ok = ctx.Config["source_queue"]
+	if !ok {
 		return errors.New("rabbitmq.shovel requires 'source_queue' in config")
 	}
 
-	if _, ok := ctx.Config["dest_queue"]; !ok {
+	_, ok = ctx.Config["dest_queue"]
+	if !ok {
 		return errors.New("rabbitmq.shovel requires 'dest_queue' in config")
 	}
 
@@ -128,17 +131,21 @@ func parseShovelConfig(ctx *ActionContext) shovelConfig {
 
 	cfg.destURL = cfg.sourceURL
 
-	if v, ok := ctx.Config["dest_url"]; ok {
+	v, ok := ctx.Config["dest_url"]
+	if ok {
 		cfg.destURL = fmt.Sprintf("%v", v)
 	}
 
-	if v, ok := ctx.Config["count"]; ok {
-		if n, ok := toInt(v); ok {
+	v, ok = ctx.Config["count"]
+	if ok {
+		n, intOK := toInt(v)
+		if intOK {
 			cfg.count = n
 		}
 	}
 
-	if v, ok := ctx.Config["strip_headers"]; ok {
+	v, ok = ctx.Config["strip_headers"]
+	if ok {
 		switch val := v.(type) {
 		case bool:
 			cfg.stripHeaders = val
@@ -158,7 +165,7 @@ func openShovelChannelsImpl(cfg shovelConfig) (shovelSourceChan, shovelDestChan,
 
 	sourceCh, err := sourceConn.Channel()
 	if err != nil {
-		sourceConn.Close()
+		_ = sourceConn.Close()
 		return nil, nil, nil, fmt.Errorf("rabbitmq.shovel: source channel: %w", err)
 	}
 
@@ -166,8 +173,8 @@ func openShovelChannelsImpl(cfg shovelConfig) (shovelSourceChan, shovelDestChan,
 	if cfg.destURL != cfg.sourceURL {
 		destConn, err = shovelDialFn(cfg.destURL)
 		if err != nil {
-			sourceCh.Close()
-			sourceConn.Close()
+			_ = sourceCh.Close()
+			_ = sourceConn.Close()
 
 			return nil, nil, nil, fmt.Errorf("rabbitmq.shovel: dial dest: %w", err)
 		}
@@ -176,24 +183,24 @@ func openShovelChannelsImpl(cfg shovelConfig) (shovelSourceChan, shovelDestChan,
 	destCh, err := destConn.Channel()
 	if err != nil {
 		if destConn != sourceConn {
-			destConn.Close()
+			_ = destConn.Close()
 		}
 
-		sourceCh.Close()
-		sourceConn.Close()
+		_ = sourceCh.Close()
+		_ = sourceConn.Close()
 
 		return nil, nil, nil, fmt.Errorf("rabbitmq.shovel: dest channel: %w", err)
 	}
 
 	cleanup := func() {
-		destCh.Close()
+		_ = destCh.Close()
 
 		if destConn != sourceConn {
-			destConn.Close()
+			_ = destConn.Close()
 		}
 
-		sourceCh.Close()
-		sourceConn.Close()
+		_ = sourceCh.Close()
+		_ = sourceConn.Close()
 	}
 
 	return sourceCh, &realShovelDest{ch: destCh}, cleanup, nil

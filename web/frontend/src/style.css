@@ -181,3 +181,35 @@ body {
 .yaml-bool { color: rgb(var(--c-amber)); }
 .yaml-null { color: var(--g-8); font-style: italic; }
 .yaml-dash { color: var(--g-8); }
+
+/* ── Sparkline fill (fixed colors, immune to theme variable inversion) ── */
+.sparkline-fill { fill: rgba(180, 180, 180, 0.08); }
+:root.light .sparkline-fill { fill: rgba(30, 30, 30, 0.06); }
+
+/* ── Keyboard shortcut keys (on bg-g-14 button which flips per theme) ── */
+.kbd-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 3px;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  line-height: 1;
+  border-radius: 4px;
+}
+/* Dark mode: button is white → dark keys matching UI bg */
+.kbd-key {
+  color: var(--g-7);
+  background: var(--g-4);
+  border: 1px solid var(--g-6);
+  box-shadow: 0 1px 0 var(--g-6);
+}
+/* Light mode: button is dark → light keys */
+:root.light .kbd-key {
+  color: rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.3);
+}

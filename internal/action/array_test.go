@@ -541,3 +541,61 @@ func (s *ArrayActionTestSuite) TestSortStringComparison() {
 	s.Require().NoError(err)
 	s.NotNil(out)
 }
+
+// toAnySlice: non-slice type (e.g. a plain string) returns nil, false.
+func (s *ArrayActionTestSuite) TestToAnySlice_NonSliceType() {
+	result, ok := toAnySlice("not-a-slice")
+	s.False(ok)
+	s.Nil(result)
+}
+
+// toAnySlice: non-slice type int returns nil, false.
+func (s *ArrayActionTestSuite) TestToAnySlice_IntType() {
+	result, ok := toAnySlice(42)
+	s.False(ok)
+	s.Nil(result)
+}
+
+// toAnySlice: typed slice ([]string) is converted via reflect path.
+func (s *ArrayActionTestSuite) TestToAnySlice_TypedStringSlice() {
+	input := []string{"a", "b", "c"}
+	result, ok := toAnySlice(input)
+	s.True(ok)
+	s.Require().Len(result, 3)
+	s.Equal("a", result[0])
+	s.Equal("b", result[1])
+	s.Equal("c", result[2])
+}
+
+// toAnySlice: typed slice ([]int) is converted via reflect path.
+func (s *ArrayActionTestSuite) TestToAnySlice_TypedIntSlice() {
+	input := []int{1, 2, 3}
+	result, ok := toAnySlice(input)
+	s.True(ok)
+	s.Require().Len(result, 3)
+	s.Equal(1, result[0])
+	s.Equal(2, result[1])
+	s.Equal(3, result[2])
+}
+
+// toAnySlice: nil returns nil, false (nil has no reflect Slice kind).
+func (s *ArrayActionTestSuite) TestToAnySlice_Nil() {
+	result, ok := toAnySlice(nil)
+	s.False(ok)
+	s.Nil(result)
+}
+
+// toAnySlice: empty typed slice returns empty []any.
+func (s *ArrayActionTestSuite) TestToAnySlice_EmptyTypedSlice() {
+	input := []string{}
+	result, ok := toAnySlice(input)
+	s.True(ok)
+	s.Require().Len(result, 0)
+}
+
+// toAnySlice: map type returns nil, false.
+func (s *ArrayActionTestSuite) TestToAnySlice_MapType() {
+	result, ok := toAnySlice(map[string]string{"a": "b"})
+	s.False(ok)
+	s.Nil(result)
+}

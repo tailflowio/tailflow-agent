@@ -47,7 +47,7 @@ func FindLoopBody(dag *DAG, targetID, gotoID string) []string {
 	}
 
 	// Intersection
-	var body []string
+	body := make([]string, 0, len(forward))
 
 	for id := range forward {
 		if backward[id] {
@@ -58,7 +58,6 @@ func FindLoopBody(dag *DAG, targetID, gotoID string) []string {
 	return body
 }
 
-// loopInDegree counts the number of parents of stepID that are within the bodySet.
 func loopInDegree(dag *DAG, bodySet map[string]bool, stepID string) int {
 	count := 0
 
@@ -71,9 +70,6 @@ func loopInDegree(dag *DAG, bodySet map[string]bool, stepID string) int {
 	return count
 }
 
-// handleGoto evaluates the goto condition for a node that just completed successfully,
-// and if triggered, resets the loop body and enqueues the ready nodes.
-// Returns true if a goto was triggered (caller should NOT propagate to children).
 func (e *Executor) handleGoto(
 	n *DAGNode,
 	execCtx *runtime.ExecutionContext,
@@ -98,22 +94,41 @@ func (e *Executor) handleGoto(
 	gotoIterations[n.Step.ID]++
 	iter := gotoIterations[n.Step.ID]
 
-	// Reset loop body: clear results and recompute in-degrees
+	resetLoopBody(dag, li, inDegree, completed, execCtx)
+	readyNodes = collectReadyLoopNodes(dag, li, inDegree)
+
+	e.publishGotoEvent(execCtx, n, iter, maxIter, li.body)
+
+	return readyNodes, true
+}
+
+func resetLoopBody(
+	dag *DAG, li loopInfo, inDegree map[string]int,
+	completed *int, execCtx *runtime.ExecutionContext,
+) {
 	for _, bid := range li.body {
 		inDegree[bid] = loopInDegree(dag, li.bodySet, bid)
 		*completed--
 
 		execCtx.ClearStepResult(bid)
 	}
+}
 
-	// Collect nodes in the body with inDegree == 0
+func collectReadyLoopNodes(dag *DAG, li loopInfo, inDegree map[string]int) []*DAGNode {
+	var ready []*DAGNode
+
 	for _, bid := range li.body {
 		if inDegree[bid] == 0 {
-			readyNodes = append(readyNodes, dag.Nodes[bid])
+			ready = append(ready, dag.Nodes[bid])
 		}
 	}
 
-	// Emit step.goto event
+	return ready
+}
+
+func (e *Executor) publishGotoEvent(
+	execCtx *runtime.ExecutionContext, n *DAGNode, iter, maxIter int, body []string,
+) {
 	e.bus.Publish(event.Event{
 		Type:        event.StepGoto,
 		Timestamp:   time.Now(),
@@ -124,9 +139,7 @@ func (e *Executor) handleGoto(
 			"target":         n.Step.Goto.Target,
 			"iteration":      iter + 1,
 			"max_iterations": maxIter,
-			"body":           li.body,
+			"body":           body,
 		},
 	})
-
-	return readyNodes, true
 }

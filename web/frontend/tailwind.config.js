@@ -9,6 +9,7 @@ export default {
   content: [
     resolve(__configDir, "index.html"),
     resolve(__configDir, "src/**/*.{vue,js,ts,jsx,tsx}"),
+    resolve(__configDir, "../../../tailflow-shared/web/src/**/*.{vue,js,ts,jsx,tsx}"),
   ],
   theme: {
     extend: {

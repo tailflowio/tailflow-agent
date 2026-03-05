@@ -3,6 +3,7 @@ package action
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -12,7 +13,8 @@ type LoopAction struct{}
 func NewLoopAction() Action { return &LoopAction{} }
 
 func (a *LoopAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["items"]; !ok {
+	_, ok := ctx.Config["items"]
+	if !ok {
 		return errors.New("loop action requires 'items' in config")
 	}
 
@@ -20,14 +22,15 @@ func (a *LoopAction) Validate(ctx *ActionContext) error {
 }
 
 func (a *LoopAction) Execute(ctx *ActionContext) (any, error) {
-	items, ok := ctx.Config["items"].([]any)
+	items, ok := toAnySlice(ctx.Config["items"])
 	if !ok {
 		return nil, errors.New("loop action: 'items' must be an array")
 	}
 
 	lp := parseLoopParams(ctx)
 
-	if rawActions, ok := ctx.Config["actions"]; ok {
+	rawActions, ok := ctx.Config["actions"]
+	if ok {
 		pipeline, err := parsePipelineActions(rawActions)
 		if err != nil {
 			return nil, fmt.Errorf("loop action: %w", err)
@@ -67,15 +70,18 @@ func parseLoopParams(ctx *ActionContext) loopParams {
 		concurrency: 1,
 	}
 
-	if as, ok := ctx.Config["as"]; ok {
+	as, ok := ctx.Config["as"]
+	if ok {
 		lp.varName = fmt.Sprintf("%v", as)
 	}
 
-	if idx, ok := ctx.Config["index"]; ok {
+	idx, ok := ctx.Config["index"]
+	if ok {
 		lp.indexName = fmt.Sprintf("%v", idx)
 	}
 
-	if c, ok := toInt(ctx.Config["concurrency"]); ok && c > 0 {
+	c, ok := toInt(ctx.Config["concurrency"])
+	if ok && c > 0 {
 		lp.concurrency = c
 	}
 
@@ -219,24 +225,21 @@ func runPipelineSteps(
 	loopVars map[string]any,
 	idx, total int,
 ) ([]actionResult, error) {
-	var results []actionResult
+	results := make([]actionResult, 0, len(pipeline))
+	label := loopItemLabel(loopVars)
 
 	for si, ps := range pipeline {
-		if ctx.EmitLog != nil {
-			ctx.EmitLog(fmt.Sprintf("[%d/%d] step %d/%d %s", idx+1, total, si+1, len(pipeline), ps.Action))
-		}
+		emitStepStart(ctx, idx, total, si, len(pipeline), ps.Action, label)
 
 		start := time.Now()
 		output, err := ctx.RunAction(ps.Action, deepCopyMap(ps.Config), loopVars)
 		durationMs := time.Since(start).Milliseconds()
 
 		if err != nil {
-			return appendFailedStep(ctx, results, ps, output, durationMs, err, idx, total, si, len(pipeline))
+			return appendFailedStep(ctx, results, ps, output, durationMs, err, idx, total, si, len(pipeline), label)
 		}
 
-		if ctx.EmitLog != nil {
-			ctx.EmitLog(fmt.Sprintf("[%d/%d] step %d/%d %s OK (%dms)", idx+1, total, si+1, len(pipeline), ps.Action, durationMs))
-		}
+		emitStepSuccess(ctx, idx, total, si, len(pipeline), ps.Action, label, durationMs)
 
 		loopVars["prev"] = output
 
@@ -258,10 +261,20 @@ func appendFailedStep(
 	durationMs int64,
 	err error,
 	idx, total, si, pipelineLen int,
+	label string,
 ) ([]actionResult, error) {
 	if ctx.EmitLog != nil {
-		ctx.EmitLog(fmt.Sprintf("[%d/%d] step %d/%d %s FAILED (%dms): %s",
-			idx+1, total, si+1, pipelineLen, ps.Action, durationMs, err.Error()))
+		hint := lastStdoutLine(output)
+
+		switch {
+		case label != "" && hint != "":
+			ctx.EmitLog(fmt.Sprintf("[%d/%d] %s FAILED: %s", idx+1, total, label, hint))
+		case label != "":
+			ctx.EmitLog(fmt.Sprintf("[%d/%d] %s FAILED (%dms)", idx+1, total, label, durationMs))
+		default:
+			ctx.EmitLog(fmt.Sprintf("[%d/%d] step %d/%d %s FAILED (%dms): %s",
+				idx+1, total, si+1, pipelineLen, ps.Action, durationMs, err.Error()))
+		}
 	}
 
 	results = append(results, actionResult{
@@ -286,15 +299,22 @@ func setLastIterationVars(ctx *ActionContext, items []any, varName, indexName st
 func buildLoopOutput[T any](ctx *ActionContext, items []any, results []T, errs []error) (any, error) {
 	errorPolicy, _ := ctx.Config["error_policy"].(string)
 
-	var loopErrors []map[string]any
+	var loopErrors []any
 
 	for i, err := range errs {
 		if err != nil {
-			loopErrors = append(loopErrors, map[string]any{
+			entry := map[string]any{
 				"index":   i,
 				"item":    items[i],
 				"message": err.Error(),
-			})
+			}
+
+			detail := extractResultDetail(results[i])
+			if detail != "" {
+				entry["detail"] = detail
+			}
+
+			loopErrors = append(loopErrors, entry)
 		}
 	}
 
@@ -330,6 +350,102 @@ func (a *LoopAction) executeLegacy(ctx *ActionContext, items []any, varName, ind
 		"iterations": len(items),
 		"items":      results,
 	}, nil
+}
+
+func loopItemLabel(loopVars map[string]any) string {
+	for k, v := range loopVars {
+		if k == "index" || k == "prev" {
+			continue
+		}
+
+		m, ok := v.(map[string]any)
+		if ok {
+			for _, field := range []string{"path", "name", "id", "title"} {
+				s, found := m[field].(string)
+				if found && s != "" {
+					return s
+				}
+			}
+		}
+
+		s, ok := v.(string)
+		if ok {
+			return s
+		}
+	}
+
+	return ""
+}
+
+func lastStdoutLine(output any) string {
+	outMap, ok := output.(map[string]any)
+	if !ok {
+		return ""
+	}
+
+	stdout, _ := outMap["stdout"].(string)
+	stdout = strings.TrimSpace(stdout)
+
+	if stdout == "" {
+		return ""
+	}
+
+	lines := strings.Split(stdout, "\n")
+
+	return strings.TrimSpace(lines[len(lines)-1])
+}
+
+func extractResultDetail[T any](result T) string {
+	ir, ok := any(result).(iterationResult)
+	if !ok {
+		return ""
+	}
+
+	for j := len(ir.Actions) - 1; j >= 0; j-- {
+		outMap, ok := ir.Actions[j].Output.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		stdout, _ := outMap["stdout"].(string)
+		stdout = strings.TrimSpace(stdout)
+
+		if stdout == "" {
+			continue
+		}
+
+		lines := strings.Split(stdout, "\n")
+
+		return strings.TrimSpace(lines[len(lines)-1])
+	}
+
+	return ""
+}
+
+func emitStepStart(ctx *ActionContext, idx, total, si, pipelineLen int, action, label string) {
+	if ctx.EmitLog == nil {
+		return
+	}
+
+	if label != "" {
+		ctx.EmitLog(fmt.Sprintf("[%d/%d] %s", idx+1, total, label))
+		return
+	}
+
+	ctx.EmitLog(fmt.Sprintf("[%d/%d] step %d/%d %s", idx+1, total, si+1, pipelineLen, action))
+}
+
+func emitStepSuccess(ctx *ActionContext, idx, total, si, pipelineLen int, action, label string, durationMs int64) {
+	if ctx.EmitLog == nil {
+		return
+	}
+
+	if label != "" {
+		ctx.EmitLog(fmt.Sprintf("[%d/%d] %s OK (%dms)", idx+1, total, label, durationMs))
+		return
+	}
+
+	ctx.EmitLog(fmt.Sprintf("[%d/%d] step %d/%d %s OK (%dms)", idx+1, total, si+1, pipelineLen, action, durationMs))
 }
 
 func firstErrIdx(errs []error) int {

@@ -2,8 +2,6 @@
 
 package action
 
-// registerUnsafeBuiltins registers actions that allow arbitrary code execution
-// or filesystem access. Excluded from SaaS builds via the "saas" build tag.
 func init() { //nolint:gochecknoinits
 	unsafeRegistrations = append(unsafeRegistrations, unsafeRegistration{"exec", NewExecAction})
 	unsafeRegistrations = append(unsafeRegistrations, unsafeRegistration{"js", NewJSAction})

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"sync/atomic"
 	"testing"
@@ -18,7 +19,7 @@ func newTestExecutor() (*Executor, *event.Bus) {
 	bus := event.NewBus()
 	reg := action.NewRegistry()
 	action.RegisterBuiltins(reg)
-	logger := slog.Default()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	return NewExecutor(reg, bus, logger, nil), bus
 }
 
@@ -705,7 +706,8 @@ func (s *EngineTestSuite) TestTriggerDataInStepInput() {
 			select {
 			case ev := <-ch:
 				if ev.Type == event.StepInput && ev.Data != nil {
-					if _, ok := ev.Data["trigger"]; ok {
+					_, ok := ev.Data["trigger"]
+					if ok {
 						found = true
 						return true
 					}
@@ -1562,3 +1564,4 @@ func (s *EngineTestSuite) TestTestMode_PartialMatchSliceElementMismatch() {
 	s.Require().NoError(err)
 	s.Equal("failed", result.Status)
 }
+

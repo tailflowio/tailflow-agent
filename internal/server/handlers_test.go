@@ -76,7 +76,6 @@ steps:
 	})
 }
 
-// newTestServerCron creates a server whose workflow has a cron schedule trigger.
 func newTestServerCron(t *testing.T) *Server {
 	t.Helper()
 
@@ -117,7 +116,6 @@ steps:
 	})
 }
 
-// newTestServerHTTPTrigger creates a server with a synchronous HTTP trigger.
 func newTestServerHTTPTrigger(t *testing.T) *Server {
 	t.Helper()
 
@@ -159,7 +157,6 @@ steps:
 	})
 }
 
-// newTestServerAsyncHTTPTrigger creates a server with an async HTTP trigger.
 func newTestServerAsyncHTTPTrigger(t *testing.T) *Server {
 	t.Helper()
 
@@ -202,7 +199,6 @@ steps:
 	})
 }
 
-// newTestServerWebhookTrigger creates a server with a webhook trigger.
 func newTestServerWebhookTrigger(t *testing.T) *Server {
 	t.Helper()
 
@@ -243,8 +239,6 @@ steps:
 	})
 }
 
-// newTestServerGraph creates a server with steps that exercise graph building:
-// depends_on, when conditions, goto, loop action, and empty title.
 func newTestServerGraph(t *testing.T) *Server {
 	t.Helper()
 
@@ -301,8 +295,6 @@ steps:
 		Logger:         logger,
 	})
 }
-
-// ─── Existing tests ─────────────────────────────────────────────────
 
 func (s *HandlersTestSuite) TestGetWorkflow() {
 	srv := newTestServer(s.T())
@@ -469,8 +461,6 @@ func (s *HandlersTestSuite) TestFinalizeExecution_NotFound() {
 		srv.finalizeExecution("nonexistent-id", nil, nil, context.Background())
 	})
 }
-
-// ─── New tests for 100% coverage ────────────────────────────────────
 
 // handleGetMetrics
 func (s *HandlersTestSuite) TestGetMetrics_ReturnsSnapshot() {
@@ -1527,6 +1517,7 @@ func (s *HandlersTestSuite) TestProcessEvent_StepGotoResetsBody() {
 	lt := &loopTracker{}
 
 	// First: StepGoto event with body
+	completedSeen := false
 	srv.processEvent(execID, event.Event{
 		Type:        event.StepGoto,
 		ExecutionID: execID,
@@ -1535,7 +1526,7 @@ func (s *HandlersTestSuite) TestProcessEvent_StepGotoResetsBody() {
 			"iteration": float64(1),
 			"body":      []any{"step_b"},
 		},
-	}, lt)
+	}, lt, &completedSeen)
 
 	// Now lt.Body is set; issue another StepGoto
 	srv.processEvent(execID, event.Event{
@@ -1546,7 +1537,7 @@ func (s *HandlersTestSuite) TestProcessEvent_StepGotoResetsBody() {
 			"iteration": float64(2),
 			"body":      []any{"step_b"},
 		},
-	}, lt)
+	}, lt, &completedSeen)
 
 	exec, _ := srv.config.ExecutionStore.Get(execID)
 	s.Equal("pending", exec.Steps["step_b"].Status)
@@ -1563,12 +1554,13 @@ func (s *HandlersTestSuite) TestProcessEvent_EmptyStepID() {
 	})
 
 	lt := &loopTracker{}
+	completedSeen := false
 
 	// Event with empty StepID: should not crash and should not call applyStepEvent
 	srv.processEvent(execID, event.Event{
 		Type:        event.WorkflowStarted,
 		ExecutionID: execID,
-	}, lt)
+	}, lt, &completedSeen)
 }
 
 // processEvent – loop body event after iteration 1 is skipped from event store
@@ -1582,6 +1574,7 @@ func (s *HandlersTestSuite) TestProcessEvent_LoopBodyEventSkipped() {
 	})
 
 	lt := &loopTracker{}
+	completedSeen := false
 
 	// Setup: first goto with iteration=2 and body
 	lt.Track(event.Event{
@@ -1597,7 +1590,7 @@ func (s *HandlersTestSuite) TestProcessEvent_LoopBodyEventSkipped() {
 		Type:        event.StepStarted,
 		ExecutionID: execID,
 		StepID:      "step_b",
-	}, lt)
+	}, lt, &completedSeen)
 
 	// Event should NOT be appended (loop body after iteration 1)
 	events := srv.config.ExecutionStore.GetEvents(execID)
@@ -1796,10 +1789,11 @@ func (b *brokenResponseWriter) Write(data []byte) (int, error) {
 
 func (s *HandlersTestSuite) TestWriteJSON_EncodingError() {
 	w := &brokenResponseWriter{header: http.Header{}}
+	srv := newTestServer(s.T())
 
 	// Should not panic; the error is logged
 	s.NotPanics(func() {
-		writeJSON(w, http.StatusOK, map[string]any{"key": "val"})
+		srv.writeJSON(context.Background(), w, http.StatusOK, map[string]any{"key": "val"})
 	})
 }
 
@@ -2116,4 +2110,75 @@ func (s *HandlersTestSuite) TestWriteTriggerResponse_ResponseActionWithIntStatus
 	srv.writeTriggerResponse(w, srv.config.Workflow, result, nil, context.Background(), "exec-201")
 
 	s.Equal(201, w.Code)
+}
+
+// handleGetVersion – completely untested
+func (s *HandlersTestSuite) TestGetVersion_ReturnsVersion() {
+	srv := newTestServer(s.T())
+	srv.config.Version = "1.2.3"
+
+	req := httptest.NewRequest("GET", "/api/version", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	s.Equal(http.StatusOK, w.Code)
+	s.Contains(w.Header().Get("Content-Type"), "application/json")
+
+	var resp map[string]string
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	s.Require().NoError(err)
+	s.Equal("1.2.3", resp["version"])
+}
+
+// handleGetVersion – empty version string
+func (s *HandlersTestSuite) TestGetVersion_EmptyVersion() {
+	srv := newTestServer(s.T())
+	srv.config.Version = ""
+
+	req := httptest.NewRequest("GET", "/api/version", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	s.Equal(http.StatusOK, w.Code)
+
+	var resp map[string]string
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	s.Require().NoError(err)
+	s.Equal("", resp["version"])
+}
+
+// processEvent – duplicate WorkflowCompleted is deduplicated (completedSeen branch)
+func (s *HandlersTestSuite) TestProcessEvent_DuplicateWorkflowCompleted() {
+	srv := newTestServer(s.T())
+
+	execID := "pe-dedup"
+	srv.config.ExecutionStore.Add(&store.Execution{
+		ID: execID, WorkflowName: "test", Status: runtime.StatusRunning,
+		StartedAt: time.Now(),
+	})
+
+	lt := &loopTracker{}
+	completedSeen := false
+
+	// First WorkflowCompleted event should be stored
+	srv.processEvent(execID, event.Event{
+		Type:        event.WorkflowCompleted,
+		ExecutionID: execID,
+		Data:        map[string]any{"status": "success"},
+	}, lt, &completedSeen)
+
+	s.True(completedSeen)
+	events := srv.config.ExecutionStore.GetEvents(execID)
+	s.Len(events, 1)
+
+	// Second WorkflowCompleted event should be deduplicated (early return)
+	srv.processEvent(execID, event.Event{
+		Type:        event.WorkflowCompleted,
+		ExecutionID: execID,
+		Data:        map[string]any{"status": "success"},
+	}, lt, &completedSeen)
+
+	// Still only 1 event stored — the duplicate was dropped
+	events = srv.config.ExecutionStore.GetEvents(execID)
+	s.Len(events, 1)
 }

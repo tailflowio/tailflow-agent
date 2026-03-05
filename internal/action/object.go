@@ -29,7 +29,8 @@ func (a *ObjectAction) Validate(ctx *ActionContext) error {
 	mode, _ := ctx.Config["mode"].(string)
 
 	if mode == "merge" {
-		if _, ok := ctx.Config["objects"]; !ok {
+		_, ok := ctx.Config["objects"]
+		if !ok {
 			return errors.New("object action in merge mode requires 'objects' in config")
 		}
 	}

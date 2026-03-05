@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import { VueFlow, type Node, type Edge } from '@vue-flow/core'
 import dagre from 'dagre'
 import type { Graph } from '@/composables/useWorkflowApi'
@@ -17,6 +17,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'nodeClick', stepId: string): void
+  (e: 'layoutReady', payload: { maxY: number }): void
 }>()
 
 const nodeTypes: Record<string, any> = {
@@ -175,6 +176,17 @@ function layoutGraph(g: Graph): { nodes: Node[]; edges: Edge[] } {
 }
 
 const layout = computed(() => layoutGraph(props.graph))
+
+watch(layout, (l) => {
+  if (l.nodes.length === 0) return
+  let maxY = 0
+  for (const n of l.nodes) {
+    const h = (n.style && typeof n.style === 'object' && 'height' in n.style) ? Number(n.style.height) : 92
+    const bottom = n.position.y + h
+    if (bottom > maxY) maxY = bottom
+  }
+  emit('layoutReady', { maxY })
+}, { immediate: true })
 
 function onNodeClick({ node }: any) {
   emit('nodeClick', node.id)

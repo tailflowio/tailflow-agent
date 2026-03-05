@@ -1,0 +1,58 @@
+version: "2.0"
+name: "sync-callback"
+description: "Submit a document for OCR processing, wait for external callback, return result"
+tags: ["webhook", "sync", "callback"]
+
+trigger:
+  http:
+    method: POST
+    path: /ocr/submit
+
+steps:
+  - id: validate
+    action: js
+    title: "Validate document"
+    config:
+      script: |
+        let body = trigger.body;
+        if (!body || !body.document_url) throw new Error("document_url is required");
+        return {
+          request_id: "ocr_" + Math.random().toString(36).substr(2, 9),
+          document_url: body.document_url,
+          language: body.language || "en",
+        };
+
+  - id: send-to-provider
+    action: js
+    title: "Send to OCR provider"
+    depends_on: [validate]
+    config:
+      script: |
+        let req = steps.validate.output;
+        // Simulate sending document to an external OCR service
+        // The provider will POST results back to our callback endpoint
+        return {
+          request_id: req.request_id,
+          provider_ref: "ref_" + Math.random().toString(36).substr(2, 12),
+          status: "processing",
+        };
+
+  - id: wait-result
+    action: wait.webhook
+    title: "Wait for OCR callback"
+    depends_on: [send-to-provider]
+    config:
+      path: /ocr-callback
+      timeout: 5m
+
+  - id: respond
+    action: response
+    title: "Return OCR result"
+    depends_on: [wait-result]
+    config:
+      status: 200
+      body:
+        request_id: "{{ steps.validate.output.request_id }}"
+        provider_ref: "{{ steps.send-to-provider.output.provider_ref }}"
+        ocr_text: "{{ steps.wait-result.output.body.text }}"
+        confidence: "{{ steps.wait-result.output.body.confidence }}"

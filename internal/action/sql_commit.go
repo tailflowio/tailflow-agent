@@ -11,7 +11,8 @@ type SQLCommitAction struct{}
 func NewSQLCommitAction() Action { return &SQLCommitAction{} }
 
 func (a *SQLCommitAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["name"]; !ok {
+	_, ok := ctx.Config["name"]
+	if !ok {
 		return errors.New("sql.commit action requires 'name' in config")
 	}
 

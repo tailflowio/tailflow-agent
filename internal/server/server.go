@@ -23,9 +23,8 @@ import (
 // newRabbitMQConsumerFn creates a RabbitMQConsumer. Override in tests.
 var newRabbitMQConsumerFn = NewRabbitMQConsumer
 
-// newRedisKVStoreFn wraps runtime.NewRedisKVStore for testing.
-var newRedisKVStoreFn = func(url string) (runtime.KVStore, error) {
-	return runtime.NewRedisKVStore(url)
+var newRedisKVStoreFn = func(ctx context.Context, url string) (runtime.KVStore, error) {
+	return runtime.NewRedisKVStore(ctx, url)
 }
 
 // Config holds server configuration.
@@ -48,6 +47,7 @@ type Server struct {
 	config          Config
 	mux             *http.ServeMux
 	srv             *http.Server
+	ctx             context.Context
 	waitRegistry    *WaitRegistry
 	rmqWaitMgr      *RabbitMQWaitManager
 	cancelMu        sync.RWMutex
@@ -62,13 +62,14 @@ type Server struct {
 	sensitive       *engine.SensitiveRegistry
 }
 
-// New creates a new server.
 func New(config Config) *Server {
 	var kvStore runtime.KVStore
 
 	redisURL := os.Getenv("REDIS_URL")
-	if redisURL != "" {
-		rs, err := newRedisKVStoreFn(redisURL)
+	if redisURL == "" {
+		kvStore = runtime.NewMemoryKVStore()
+	} else {
+		rs, err := newRedisKVStoreFn(context.Background(), redisURL)
 		if err != nil {
 			config.Logger.Warn("failed to connect to Redis, falling back to in-memory KV store", "error", err)
 
@@ -78,13 +79,12 @@ func New(config Config) *Server {
 
 			kvStore = rs
 		}
-	} else {
-		kvStore = runtime.NewMemoryKVStore()
 	}
 
 	s := &Server{
 		config:       config,
 		mux:          http.NewServeMux(),
+		ctx:          context.Background(),
 		waitRegistry: NewWaitRegistry(),
 		rmqWaitMgr:   NewRabbitMQWaitManager(config.Logger),
 		cancels:      make(map[string]context.CancelFunc),
@@ -100,6 +100,7 @@ func New(config Config) *Server {
 }
 
 func (s *Server) Run(ctx context.Context) error {
+	s.ctx = ctx
 	s.metrics.Start(ctx)
 	s.startExporter(ctx)
 	s.startMetricsRefresh(ctx)
@@ -199,13 +200,11 @@ func (s *Server) startMetricsRefresh(ctx context.Context) {
 					Timestamp: time.Now(),
 					Data: map[string]any{
 						"cpu_percent":  snap.CPUPercent,
-						"rss_kb":       snap.RSSKB,
+						"memory_bytes": snap.RSSKB * 1024,
 						"goroutines":   snap.Goroutines,
-						"heap_mb":      snap.HeapMB,
 						"net_rx_bytes": snap.NetRxBytes,
 						"net_tx_bytes": snap.NetTxBytes,
 						"uptime_s":     snap.UptimeS,
-						"available":    snap.Available,
 					},
 				})
 			}
@@ -280,11 +279,11 @@ func (s *Server) shutdownServices(cronSched *CronScheduler, rmqConsumer *RabbitM
 	s.rmqWaitMgr.Close()
 
 	if s.dbPool != nil {
-		s.dbPool.Close()
+		_ = s.dbPool.Close()
 	}
 
 	if s.kvStore != nil {
-		s.kvStore.Close()
+		_ = s.kvStore.Close()
 	}
 
 	s.cancelScheduledTimers()
@@ -301,7 +300,6 @@ type asyncRunOpts struct {
 	OnComplete  func(executionID string, success bool)
 }
 
-// runWorkflowAsync starts an async workflow execution and returns the execution ID.
 func (s *Server) runWorkflowAsync(params map[string]any, opts ...asyncRunOpts) string {
 	wf := s.config.Workflow
 	executionID := uuid.New().String()
@@ -323,11 +321,10 @@ func (s *Server) runWorkflowAsync(params map[string]any, opts ...asyncRunOpts) s
 		opt = opts[0]
 	}
 
-	execCtx, cancel := context.WithCancel(context.Background())
+	execCtx, cancel := context.WithCancel(s.ctx)
 	s.registerCancel(executionID, cancel)
 
 	go func() {
-		defer stopCapture()
 		defer s.unregisterCancel(executionID)
 
 		result, err := s.config.Executor.Execute(execCtx, wf, params, engine.ExecuteOptions{
@@ -335,7 +332,10 @@ func (s *Server) runWorkflowAsync(params map[string]any, opts ...asyncRunOpts) s
 			Services:    services,
 			TriggerData: opt.TriggerData,
 		})
+
+		stopCapture()
 		s.finalizeExecution(executionID, result, err, execCtx)
+		s.ensureWorkflowCompleted(executionID, result, err, execCtx)
 
 		if opt.OnComplete != nil {
 			success := err == nil && result != nil && result.Status == runtime.StatusSuccess
@@ -346,31 +346,26 @@ func (s *Server) runWorkflowAsync(params map[string]any, opts ...asyncRunOpts) s
 	return executionID
 }
 
-// Handler returns the HTTP handler (for testing).
 func (s *Server) Handler() http.Handler {
 	return s.mux
 }
 
-// WaitRegistry returns the server's wait registry.
 func (s *Server) WaitRegistry() *WaitRegistry {
 	return s.waitRegistry
 }
 
-// registerCancel stores a cancel function for a running execution.
 func (s *Server) registerCancel(executionID string, cancel context.CancelFunc) {
 	s.cancelMu.Lock()
 	s.cancels[executionID] = cancel
 	s.cancelMu.Unlock()
 }
 
-// unregisterCancel removes the cancel function for a finished execution.
 func (s *Server) unregisterCancel(executionID string) {
 	s.cancelMu.Lock()
 	delete(s.cancels, executionID)
 	s.cancelMu.Unlock()
 }
 
-// cancelAllExecutions cancels every running execution for graceful shutdown.
 func (s *Server) cancelAllExecutions() {
 	s.cancelMu.Lock()
 	defer s.cancelMu.Unlock()
@@ -380,7 +375,6 @@ func (s *Server) cancelAllExecutions() {
 	}
 }
 
-// cancelExecution cancels a running execution. Returns false if not found.
 func (s *Server) cancelExecution(executionID string) bool {
 	s.cancelMu.RLock()
 	cancel, ok := s.cancels[executionID]
@@ -393,14 +387,44 @@ func (s *Server) cancelExecution(executionID string) bool {
 	return ok
 }
 
-// addScheduledTimer registers a timer for cleanup on shutdown.
 func (s *Server) addScheduledTimer(t *time.Timer) {
 	s.timerMu.Lock()
 	s.scheduledTimers = append(s.scheduledTimers, t)
 	s.timerMu.Unlock()
 }
 
-// cancelScheduledTimers stops all pending scheduled timers.
+func (s *Server) ensureWorkflowCompleted(
+	executionID string, result *engine.ExecuteResult, err error, execCtx context.Context,
+) {
+	// Check if workflow.completed was already stored by captureEvents.
+	for _, ev := range s.config.ExecutionStore.GetEvents(executionID) {
+		if ev.Type == event.WorkflowCompleted {
+			return // already there, nothing to do
+		}
+	}
+
+	status := runtime.StatusSuccess
+
+	switch {
+	case err != nil && execCtx.Err() != nil:
+		status = runtime.StatusCancelled
+	case err != nil:
+		status = runtime.StatusFailed
+	case result != nil:
+		status = result.Status
+	}
+
+	completedEv := event.Event{
+		Type:        event.WorkflowCompleted,
+		Timestamp:   time.Now(),
+		ExecutionID: executionID,
+		Data:        map[string]any{"status": status},
+	}
+
+	s.config.ExecutionStore.AppendEvent(executionID, completedEv)
+	s.config.EventBus.Publish(completedEv)
+}
+
 func (s *Server) cancelScheduledTimers() {
 	s.timerMu.Lock()
 	defer s.timerMu.Unlock()

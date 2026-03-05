@@ -5,6 +5,7 @@ package action
 import (
 	"bytes"
 	"context"
+	"io"
 	"log/slog"
 	"os/exec"
 	"sync"
@@ -88,7 +89,7 @@ func (s *ExecActionTestSuite) TestExecuteStreaming() {
 		},
 		ExecCtx: runtime.NewExecutionContext("test-exec", "test-wf", nil, nil),
 		StepID:  "test-step",
-		Logger:  slog.Default(),
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
 		EmitLog: func(msg string) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -161,7 +162,7 @@ func (s *ExecActionTestSuite) TestStreamingWithStderr() {
 		},
 		ExecCtx: runtime.NewExecutionContext("test-exec", "test-wf", nil, nil),
 		StepID:  "test-step",
-		Logger:  slog.Default(),
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
 		EmitLog: func(msg string) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -206,7 +207,7 @@ func (s *ExecActionTestSuite) TestStreamingFailedCommand() {
 		},
 		ExecCtx: runtime.NewExecutionContext("test-exec", "test-wf", nil, nil),
 		StepID:  "test-step",
-		Logger:  slog.Default(),
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
 		EmitLog: func(msg string) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -229,7 +230,7 @@ func (s *ExecActionTestSuite) TestStreamingStartError() {
 		},
 		ExecCtx: runtime.NewExecutionContext("test-exec", "test-wf", nil, nil),
 		StepID:  "test-step",
-		Logger:  slog.Default(),
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
 		EmitLog: func(msg string) {},
 	}
 
@@ -262,7 +263,7 @@ func (s *ExecActionTestSuite) TestExecuteContextCancelSIGINT() {
 		},
 		ExecCtx: runtime.NewExecutionContext("test-exec", "test-wf", nil, nil),
 		StepID:  "test-step",
-		Logger:  slog.Default(),
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	_, err := a.Execute(ctx)
@@ -282,7 +283,7 @@ func (s *ExecActionTestSuite) TestStreamingContextCancelSIGINT() {
 		},
 		ExecCtx: runtime.NewExecutionContext("test-exec", "test-wf", nil, nil),
 		StepID:  "test-step",
-		Logger:  slog.Default(),
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
 		EmitLog: func(msg string) {},
 	}
 
@@ -310,7 +311,7 @@ func (s *ExecActionTestSuite) TestStreamingStdoutPipeError() {
 		Config:  map[string]any{},
 		ExecCtx: runtime.NewExecutionContext("test-exec", "test-wf", nil, nil),
 		StepID:  "test-step",
-		Logger:  slog.Default(),
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
 		EmitLog: func(msg string) {},
 	}
 
@@ -331,7 +332,7 @@ func (s *ExecActionTestSuite) TestStreamingStderrPipeError() {
 		Config:  map[string]any{},
 		ExecCtx: runtime.NewExecutionContext("test-exec", "test-wf", nil, nil),
 		StepID:  "test-step",
-		Logger:  slog.Default(),
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
 		EmitLog: func(msg string) {},
 	}
 

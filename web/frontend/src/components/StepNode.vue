@@ -54,15 +54,6 @@ function nodeClass(s: string) {
   return 'border-g-6 bg-g-3'
 }
 
-function dotClass(s: string) {
-  if (s === 'running') return 'bg-g-12 animate-pulse'
-  if (s === 'success') return 'bg-emerald-400'
-  if (s === 'failed') return 'bg-red-400'
-  if (s === 'skipped') return 'bg-g-7'
-  if (s === 'waiting') return 'bg-amber-400 animate-pulse'
-  return 'bg-g-7'
-}
-
 function labelClass(s: string) {
   if (s === 'running') return 'text-g-14'
   if (s === 'success') return 'text-emerald-400'

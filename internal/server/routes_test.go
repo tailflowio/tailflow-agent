@@ -55,7 +55,7 @@ func (s *RoutesTestSuite) TestSPARouting_StaticAsset() {
 	srv := newTestServer(s.T())
 
 	// Request an existing static asset file
-	req := httptest.NewRequest("GET", "/assets/DashboardView-BqVgVqfN.js", nil)
+	req := httptest.NewRequest("GET", "/assets/DashboardView-jnNJTy3N.js", nil)
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 
@@ -63,8 +63,6 @@ func (s *RoutesTestSuite) TestSPARouting_StaticAsset() {
 	s.Equal(http.StatusOK, w.Code)
 	s.Contains(w.Header().Get("Content-Type"), "javascript")
 }
-
-// --- handleFallbackUI tests ---
 
 func (s *RoutesTestSuite) TestHandleFallbackUI_Root() {
 	srv := newTestServer(s.T())
@@ -98,8 +96,6 @@ func (s *RoutesTestSuite) TestHandleFallbackUI_OtherPath_Returns404() {
 
 	s.Equal(http.StatusNotFound, w.Code)
 }
-
-// --- setupUIRoutes when distSubFS fails ---
 
 func (s *RoutesTestSuite) TestSetupUIRoutes_DistFSError_UsesFallback() {
 	original := distSubFS

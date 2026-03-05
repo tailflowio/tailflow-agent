@@ -12,8 +12,6 @@ import (
 	"github.com/stretchr/testify/suite"
 )
 
-// ---- dbpool.go coverage: Get and Close ----
-
 type DBPoolCoverageTestSuite struct {
 	suite.Suite
 }
@@ -163,6 +161,40 @@ func (s *DBPoolCoverageTestSuite) TestClose_WithConnections() {
 	pool.mu.RUnlock()
 }
 
+// TestGet_MySQLURL covers the openAndPing path where a mysql:// URL is
+// converted to Go driver DSN format via mysqlURLToDSN.
+func (s *DBPoolCoverageTestSuite) TestGet_MySQLURL() {
+	pool := NewMemoryDBPool()
+
+	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	s.Require().NoError(err)
+
+	mock.ExpectPing()
+
+	origOpen := sqlOpenFn
+	defer func() { sqlOpenFn = origOpen }()
+
+	sqlOpenFn = func(driver, dsn string) (*sql.DB, error) {
+		s.Equal("mysql", driver)
+		s.Contains(dsn, "tcp(")
+		return db, nil
+	}
+
+	got, err := pool.Get(context.Background(), "mysql://user:pass@localhost:3306/testdb")
+	s.NoError(err)
+	s.NotNil(got)
+}
+
+// TestGet_MySQLURLConversionError covers the openAndPing branch where
+// mysqlURLToDSN returns an error for a malformed mysql:// URL.
+func (s *DBPoolCoverageTestSuite) TestGet_MySQLURLConversionError() {
+	pool := NewMemoryDBPool()
+
+	_, err := pool.Get(context.Background(), "mysql://user:pass@host/db\x7f")
+	s.Error(err)
+	s.Contains(err.Error(), "invalid mysql URL")
+}
+
 // TestClose_FirstDBCloseReturnsError covers the branch where the first
 // db.Close() call returns an error (firstErr is set).
 func (s *DBPoolCoverageTestSuite) TestClose_FirstDBCloseReturnsError() {
@@ -187,8 +219,6 @@ func (s *DBPoolCoverageTestSuite) TestClose_FirstDBCloseReturnsError() {
 	pool.mu.RUnlock()
 }
 
-// ---- kv_memory.go coverage: Close method ----
-
 type KVMemoryCoverageTestSuite struct {
 	suite.Suite
 }
@@ -207,8 +237,6 @@ func (s *KVMemoryCoverageTestSuite) TestClose() {
 	err := store.Close()
 	s.NoError(err)
 }
-
-// ---- txregistry.go coverage: RollbackAll error logging ----
 
 type TxRegistryCoverageTestSuite struct {
 	suite.Suite

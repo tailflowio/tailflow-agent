@@ -1,6 +1,9 @@
 package event
 
-import "sync"
+import (
+	"sync"
+	"sync/atomic"
+)
 
 // Subscriber is a function that handles events.
 type Subscriber func(Event)
@@ -10,6 +13,7 @@ type Bus struct {
 	mu          sync.RWMutex
 	subscribers []chan Event
 	closed      bool
+	seq         atomic.Uint64
 }
 
 func NewBus() *Bus {
@@ -28,7 +32,6 @@ func (b *Bus) Subscribe(bufSize int) <-chan Event {
 	return ch
 }
 
-// Unsubscribe removes a subscriber channel and closes it.
 func (b *Bus) Unsubscribe(ch <-chan Event) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -48,6 +51,9 @@ func (b *Bus) Unsubscribe(ch <-chan Event) {
 // Non-blocking: if a subscriber's buffer is full, the event is dropped for that subscriber.
 // Data is deep-copied via SnapshotData to prevent concurrent map read/write panics.
 func (b *Bus) Publish(e Event) {
+	// Assign monotonic sequence number for stable ordering.
+	e.Seq = b.seq.Add(1)
+
 	// Snapshot Data before broadcasting to avoid races with goroutines
 	// that may continue to modify the original maps after publishing.
 	if e.Data != nil {
@@ -69,7 +75,6 @@ func (b *Bus) Publish(e Event) {
 	}
 }
 
-// Close closes the bus and all subscriber channels.
 func (b *Bus) Close() {
 	b.mu.Lock()
 	defer b.mu.Unlock()

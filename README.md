@@ -35,10 +35,10 @@ TailFlow lets you express that logic as a **YAML workflow** and handles the rest
 
 | Problem | Without TailFlow | With TailFlow |
 |---------|------------------|---------------|
-| Payment flow with webhook callback | 200+ lines of Go/Node/Python, custom state machine, webhook server | 30 lines of YAML |
+| Sync-over-async with webhook callback | 200+ lines of Go/Node/Python, custom state machine, webhook server | 30 lines of YAML |
 | API endpoint with validation + DB transaction | Controller, service, repository layers, error handling | One YAML file |
 | Retry logic with exponential backoff | Custom retry wrapper, error classification | `retry: { max: 3 }` |
-| Prevent double-spend on concurrent requests | Redis lock implementation, cleanup logic | `action: lock` |
+| Prevent overselling on concurrent requests | Redis lock implementation, cleanup logic | `action: lock` |
 | Shovel messages between RabbitMQ queues | Custom consumer/publisher, ack logic, error handling | `action: rabbitmq.shovel` |
 
 ### How it compares
@@ -86,7 +86,7 @@ docker build -f build/package/Dockerfile -t tailflow:dev .
 tailflow run examples/hello.yaml -p name=World
 
 # Server mode - embedded UI + API + triggers
-tailflow serve examples/payment-sync.yaml --port 8080
+tailflow serve examples/sync-callback.yaml --port 8080
 
 # Self-hosted mode - enables exec, js, file.* actions
 tailflow serve --selfhosted examples/ping.yaml
@@ -142,51 +142,51 @@ steps:
 
 ## Use Cases
 
-### 1. Payment Orchestration
+### 1. Sync-over-Async (Webhook Callback)
 
-Call a payment provider, **wait for the webhook callback**, then respond to the client - all in one synchronous HTTP request.
+Submit a document to an external OCR service, **wait for the callback**, then respond to the client - all in one synchronous HTTP request.
 
 ```yaml
 version: "2.0"
-name: "payment-sync"
+name: "sync-callback"
 trigger:
   http:
     method: POST
-    path: /pay
+    path: /ocr/submit
 
 steps:
   - id: validate
     action: js
     config:
       script: |
-        if (!trigger.body.amount) throw new Error("amount required");
-        return { order_id: "ord_" + Date.now(), amount: trigger.body.amount };
+        if (!trigger.body.document_url) throw new Error("document_url is required");
+        return { request_id: "ocr_" + Date.now(), document_url: trigger.body.document_url };
 
-  - id: call-provider
+  - id: send-to-provider
     action: http
     depends_on: [validate]
     config:
       method: POST
-      url: "https://provider.com/charge"
+      url: "https://ocr-provider.com/process"
       body:
-        amount: "{{ steps.validate.output.amount }}"
-        callback_url: "{{ env.BASE_URL }}/api/wait/{{ execution.id }}/provider-callback"
+        document_url: "{{ steps.validate.output.document_url }}"
+        callback_url: "{{ env.BASE_URL }}/api/wait/{{ execution.id }}/ocr-callback"
 
-  - id: wait-callback
+  - id: wait-result
     action: wait.webhook
-    depends_on: [call-provider]
+    depends_on: [send-to-provider]
     config:
-      path: /provider-callback
+      path: /ocr-callback
       timeout: 5m
 
   - id: respond
     action: response
-    depends_on: [wait-callback]
+    depends_on: [wait-result]
     config:
       status: 200
       body:
-        paid: true
-        order_id: "{{ steps.validate.output.order_id }}"
+        request_id: "{{ steps.validate.output.request_id }}"
+        ocr_text: "{{ steps.wait-result.output.body.text }}"
 ```
 
 **What happens:** Client POSTs to `/pay` -> workflow calls provider -> **pauses and waits** for provider to call back -> responds to the original client request. Zero polling, zero state machine.
@@ -242,28 +242,27 @@ steps:
 
 ### 3. Race Condition Prevention
 
-Distributed locks prevent concurrent operations from conflicting:
+Distributed locks prevent concurrent requests from overselling stock:
 
 ```yaml
 steps:
   - id: acquire
     action: lock
     config:
-      key: "payment-{{ trigger.body.order_id }}"
-      timeout: "30s"
+      key: "stock-{{ trigger.body.sku }}"
+      timeout: "10s"
 
-  - id: process
-    action: http
+  - id: check-stock
+    action: kv.get
     depends_on: [acquire]
     config:
-      method: POST
-      url: "https://bank.com/transfer"
+      key: "stock:{{ trigger.body.sku }}"
 
   - id: release
     action: unlock
-    depends_on: [process]
+    depends_on: [check-stock]
     config:
-      key: "payment-{{ trigger.body.order_id }}"
+      key: "stock-{{ trigger.body.sku }}"
 ```
 
 ### 4. Scheduled Monitoring
@@ -454,12 +453,14 @@ The [`examples/`](./examples) directory contains ready-to-run workflows:
 | [`hello.yaml`](./examples/hello.yaml) | Hello world | Parameters, variables |
 | [`ping.yaml`](./examples/ping.yaml) | Ping a host | Exec, streaming output |
 | [`api-trigger.yaml`](./examples/api-trigger.yaml) | REST API endpoint | HTTP trigger, JS validation, response |
-| [`payment-sync.yaml`](./examples/payment-sync.yaml) | Synchronous payment | Wait for webhook, sync-over-async |
-| [`payment-async.yaml`](./examples/payment-async.yaml) | Async payment | Async HTTP trigger, 202 response |
-| [`payment-webhook.yaml`](./examples/payment-webhook.yaml) | Payment with callback | Webhook trigger, async processing |
+| [`sync-callback.yaml`](./examples/sync-callback.yaml) | Sync-over-async | wait.webhook, JS, response |
+| [`async-trigger.yaml`](./examples/async-trigger.yaml) | Async background job | async: true HTTP trigger, 202, kv.set |
+| [`webhook-trigger.yaml`](./examples/webhook-trigger.yaml) | Webhook with HMAC | Webhook trigger, secret, filter |
 | [`sql-transaction.yaml`](./examples/sql-transaction.yaml) | SQL transactions | Begin, insert, commit, rollback on error |
 | [`sql-users.yaml`](./examples/sql-users.yaml) | User CRUD | SQL queries, HTTP response |
-| [`lock-payment.yaml`](./examples/lock-payment.yaml) | Race condition prevention | Distributed locks |
+| [`lock-unlock.yaml`](./examples/lock-unlock.yaml) | Distributed locking | lock/unlock, kv.get/set, condition, when |
+| [`testing-demo.yaml`](./examples/testing-demo.yaml) | Inline testing | testing field: mock output, mock error, expect |
+| [`sensitive-fields.yaml`](./examples/sensitive-fields.yaml) | Sensitive masking | sensitive field, token redaction |
 | [`js-workflow.yaml`](./examples/js-workflow.yaml) | JavaScript scripting | ES6 via Goja, computed values |
 | [`loop.yaml`](./examples/loop.yaml) | List iteration | Loop action with pipeline |
 | [`goto.yaml`](./examples/goto.yaml) | Conditional loops | Goto with max iterations |
@@ -712,7 +713,7 @@ version: "2.0"                    # Required - schema version
 name: "my-workflow"               # Workflow name
 description: "What it does"       # Optional
 revision: "1.0.0"                 # Optional - workflow version (semver, int, git hash...)
-tags: ["api", "payments"]         # Optional - for categorization
+tags: ["api", "automation"]       # Optional - for categorization
 author: "team-name"               # Optional
 
 params:                           # Input parameters
@@ -856,14 +857,12 @@ Declare sensitive key names at the workflow top-level to automatically mask thei
 
 ```yaml
 version: "2.0"
-name: "payment"
+name: "sensitive-fields"
 
 sensitive:
-  - token
+  - access_token
   - refresh_token
-  - card_number
-  - api_key
-  - password
+  - client_secret
 
 params:
   - name: api_key

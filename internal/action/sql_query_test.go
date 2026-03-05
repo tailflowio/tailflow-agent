@@ -32,7 +32,6 @@ func (m *mockSQLRows) Close() error {
 	return nil
 }
 
-// helper that provides all services (Locker, DBPool, TxRegistry) using fakes
 func newTestContextWithAllServices(t testing.TB, config map[string]any) *ActionContext {
 	services := &runtime.ActionServices{
 		Locker:     fakeruntime.NewLocker(t),

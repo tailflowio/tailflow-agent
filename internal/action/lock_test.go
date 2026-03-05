@@ -3,6 +3,7 @@ package action
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"testing"
 	"time"
@@ -22,7 +23,7 @@ func newTestContextWithServices(config map[string]any, locker runtime.Locker) *A
 		Config:   config,
 		ExecCtx:  runtime.NewExecutionContext("test-exec", "test-wf", nil, nil),
 		StepID:   "test-step",
-		Logger:   slog.Default(),
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Services: services,
 	}
 }

@@ -1,13 +1,7 @@
 import { ref, onUnmounted } from 'vue'
+import type { WorkflowEvent } from '@tailflow/shared'
 
-export interface WorkflowEvent {
-  type: string
-  timestamp: string
-  execution_id: string
-  step_id?: string
-  data?: Record<string, unknown>
-  message?: string
-}
+export type { WorkflowEvent }
 
 export interface StepVolume {
   input?: unknown
@@ -31,7 +25,11 @@ export interface PipelineEntry {
   durationMs?: number
 }
 
-export function useSSE(executionId: string) {
+export interface SSEOptions {
+  onDisconnect?: () => void
+}
+
+export function useSSE(executionId: string, options?: SSEOptions) {
   const events = ref<WorkflowEvent[]>([])
   const connected = ref(false)
   const finished = ref(false)
@@ -139,6 +137,20 @@ export function useSSE(executionId: string) {
     eventSource = new EventSource(`/api/executions/${executionId}/events`)
 
     eventSource.addEventListener('connected', () => {
+      // Clear all state on (re)connect — server replays stored events
+      events.value = []
+      pendingEvents = []
+      pendingStatuses = {}
+      pendingVolumes = {}
+      pendingIterations = {}
+      pendingOutputEntries = {}
+      pendingPipelineUpdates = {}
+      stepStatuses.value = {}
+      stepVolumes.value = {}
+      stepIterations.value = {}
+      stepOutputHistory.value = {}
+      stepPipelineProgress.value = {}
+      pendingFinished = false
       connected.value = true
     })
 
@@ -284,6 +296,19 @@ export function useSSE(executionId: string) {
 
     eventSource.onerror = () => {
       connected.value = false
+      // If the connection closed before we got workflow.completed,
+      // flush any pending events and mark finished to stop auto-reconnect.
+      if (!finished.value && pendingFinished) {
+        if (rafId !== null) {
+          cancelAnimationFrame(rafId)
+          rafId = null
+        }
+        flushBatch()
+      }
+      // Notify caller so it can re-fetch execution status
+      if (!finished.value && options?.onDisconnect) {
+        options.onDisconnect()
+      }
     }
   }
 

@@ -115,7 +115,7 @@ const configHtml = computed(() => step.value?.config ? yamlHtml(step.value.confi
     <div class="flex items-start justify-between mb-6">
       <div class="flex items-center gap-3">
         <button
-          @click="router.push({ name: 'steps' })"
+          @click="router.push({ name: 'workflow' })"
           class="text-g-8 hover:text-g-13 transition-colors"
         >
           <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -278,8 +278,17 @@ const configHtml = computed(() => step.value?.config ? yamlHtml(step.value.confi
     </div>
   </div>
 
-  <div v-else-if="api.loading.value" class="flex items-center justify-center py-20">
-    <div class="w-5 h-5 border-2 border-g-7 border-t-g-12 rounded-full animate-spin" />
+  <div v-else-if="api.loading.value" class="flex flex-col items-center justify-center py-32">
+    <div class="w-6 h-6 border-2 border-g-5 border-t-g-9 rounded-full animate-spin" />
+    <span class="mt-3 text-sm text-g-7">{{ t('executions.loading') }}</span>
   </div>
-  <div v-else-if="api.error.value" class="text-red-400 text-sm">{{ api.error.value }}</div>
+  <div v-else-if="api.error.value" class="flex flex-col items-center justify-center py-32">
+    <div class="w-12 h-12 rounded-full bg-red-400/10 flex items-center justify-center mb-4">
+      <svg class="w-6 h-6 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+      </svg>
+    </div>
+    <p class="text-sm font-medium text-g-12 mb-1">{{ t('executions.connectionLost') }}</p>
+    <p class="text-[13px] text-g-7 text-center max-w-sm">{{ t('executions.connectionLostDesc') }}</p>
+  </div>
 </template>

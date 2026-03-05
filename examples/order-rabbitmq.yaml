@@ -1,6 +1,6 @@
 version: "2.0"
 name: "order-confirmation"
-description: "Cree une commande puis attend la confirmation via RabbitMQ"
+description: "Create an order and wait for confirmation via RabbitMQ"
 tags: ["rabbitmq", "order"]
 
 trigger:
@@ -11,7 +11,7 @@ trigger:
 steps:
   - id: validate-input
     action: validate
-    title: "Valider la demande"
+    title: "Validate request"
     config:
       data: "{{ trigger.body }}"
       rules:
@@ -19,7 +19,7 @@ steps:
 
   - id: create-order
     action: set
-    title: "Creer la commande"
+    title: "Create order"
     depends_on: [validate-input]
     config:
       order_id: "{{ uuid() }}"
@@ -29,7 +29,7 @@ steps:
 
   - id: wait-confirmation
     action: wait.rabbitmq
-    title: "Attendre la confirmation"
+    title: "Wait for confirmation"
     depends_on: [create-order]
     config:
       url: "{{ env.RABBITMQ_URL }}"
@@ -40,7 +40,7 @@ steps:
 
   - id: respond
     action: response
-    title: "Repondre au client"
+    title: "Send response"
     depends_on: [wait-confirmation]
     config:
       status: 200

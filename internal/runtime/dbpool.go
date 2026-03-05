@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -40,7 +41,40 @@ func detectDriver(dsn string) (string, error) {
 		return "mysql", nil
 	}
 
-	return "", errors.New("dbpool: cannot detect driver for DSN (expected postgres:// or @tcp(...))")
+	if strings.HasPrefix(dsn, "mysql://") {
+		return "mysql", nil
+	}
+
+	return "", errors.New("dbpool: cannot detect driver for DSN (expected postgres://, mysql:// or @tcp(...))")
+}
+
+func mysqlURLToDSN(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("dbpool: invalid mysql URL: %w", err)
+	}
+
+	host := u.Hostname()
+
+	port := u.Port()
+	if port == "" {
+		port = "3306"
+	}
+
+	var userInfo string
+	if u.User != nil {
+		userInfo = u.User.String() + "@"
+	}
+
+	dbName := strings.TrimPrefix(u.Path, "/")
+	query := u.RawQuery
+
+	dsn := fmt.Sprintf("%stcp(%s:%s)/%s", userInfo, host, port, dbName)
+	if query != "" {
+		dsn += "?" + query
+	}
+
+	return dsn, nil
 }
 
 func (p *MemoryDBPool) Get(ctx context.Context, dsn string) (*sql.DB, error) {
@@ -61,16 +95,36 @@ func (p *MemoryDBPool) Get(ctx context.Context, dsn string) (*sql.DB, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if cachedDB, ok := p.pool[dsn]; ok {
+	cachedDB, ok := p.pool[dsn]
+	if ok {
 		return cachedDB, nil
 	}
 
+	db, err := openAndPing(ctx, dsn)
+	if err != nil {
+		return nil, err
+	}
+
+	p.pool[dsn] = db
+
+	return db, nil
+}
+
+func openAndPing(ctx context.Context, dsn string) (*sql.DB, error) {
 	driver, err := detectDriver(dsn)
 	if err != nil {
 		return nil, err
 	}
 
-	db, err = sqlOpenFn(driver, dsn)
+	openDSN := dsn
+	if driver == "mysql" && strings.HasPrefix(dsn, "mysql://") {
+		openDSN, err = mysqlURLToDSN(dsn)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	db, err := sqlOpenFn(driver, openDSN)
 	if err != nil {
 		return nil, fmt.Errorf("dbpool: open %s: %w", driver, err)
 	}
@@ -81,11 +135,9 @@ func (p *MemoryDBPool) Get(ctx context.Context, dsn string) (*sql.DB, error) {
 
 	err = db.PingContext(ctx)
 	if err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("dbpool: ping %s: %w", driver, err)
 	}
-
-	p.pool[dsn] = db
 
 	return db, nil
 }

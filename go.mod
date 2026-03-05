@@ -2,6 +2,8 @@ module github.com/tailflow/tailflow
 
 go 1.26.0
 
+require github.com/tailflowio/tailflow-shared v1.0.0
+
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/dop251/goja v0.0.0-20260106131823-651366fbe6e3
@@ -10,6 +12,7 @@ require (
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.8.0
+	github.com/joho/godotenv v1.5.1
 	github.com/rabbitmq/amqp091-go v1.10.0
 	github.com/redis/go-redis/v9 v9.17.3
 	github.com/robfig/cron/v3 v3.0.1

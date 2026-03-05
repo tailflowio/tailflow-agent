@@ -12,7 +12,8 @@ type LockAction struct{}
 func NewLockAction() Action { return &LockAction{} }
 
 func (a *LockAction) Validate(ctx *ActionContext) error {
-	if _, ok := ctx.Config["key"]; !ok {
+	_, ok := ctx.Config["key"]
+	if !ok {
 		return errors.New("lock action requires 'key' in config")
 	}
 
@@ -28,8 +29,10 @@ func (a *LockAction) Execute(ctx *ActionContext) (any, error) {
 
 	timeout := 30 * time.Second
 
-	if t, ok := ctx.Config["timeout"]; ok {
-		if d, err := time.ParseDuration(fmt.Sprintf("%v", t)); err == nil {
+	t, ok := ctx.Config["timeout"]
+	if ok {
+		d, err := time.ParseDuration(fmt.Sprintf("%v", t))
+		if err == nil {
 			timeout = d
 		}
 	}
