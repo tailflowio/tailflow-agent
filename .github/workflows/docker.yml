@@ -24,7 +24,7 @@ jobs:
       - name: Create web/dist placeholder for embed
         run: mkdir -p web/dist && touch web/dist/.gitkeep
 
-      - uses: golangci/golangci-lint-action@v6
+      - uses: golangci/golangci-lint-action@v7
         with:
           version: v2.10.1
           args: --config scripts/.golangci.yaml
