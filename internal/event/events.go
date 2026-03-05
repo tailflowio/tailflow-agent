@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
-	sharedevent "github.com/tailflow/tailflow-shared/pkg/event"
+	sharedevent "github.com/tailflowio/tailflow-shared/pkg/event"
 )
 
 // timeNow is a clock function for NewEvent. Override in tests.
