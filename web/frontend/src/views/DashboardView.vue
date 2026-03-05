@@ -197,6 +197,16 @@ function ago(d: string) {
 
 <template>
   <div v-if="workflow">
+    <!-- Shared sparkline gradient (transparent top → 10% bottom) -->
+    <svg class="absolute w-0 h-0 overflow-hidden text-g-12" aria-hidden="true">
+      <defs>
+        <linearGradient id="spark-grad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="currentColor" stop-opacity="0" />
+          <stop offset="100%" stop-color="currentColor" stop-opacity="0.1" />
+        </linearGradient>
+      </defs>
+    </svg>
+
     <!-- Header -->
     <div class="flex items-start justify-between mb-6">
       <div>
@@ -262,37 +272,37 @@ function ago(d: string) {
     <!-- System metrics -->
     <div v-if="sysMetrics" class="mb-6">
       <h2 class="text-sm font-medium text-g-12 mb-3">{{ t('dashboard.systemMetrics') }}</h2>
-      <div class="grid grid-cols-5 gap-3">
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden">
-          <svg v-if="cpuHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" viewBox="0 0 200 80" preserveAspectRatio="none">
-            <path :d="sparklinePath(cpuHistory, 200, 80)" class="sparkline-fill" />
+      <div v-if="sysMetrics.available" class="grid grid-cols-5 gap-3">
+        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden anim-enter">
+          <svg v-if="cpuHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" preserveAspectRatio="none">
+            <path :d="sparklinePath(cpuHistory, 200, 80)" fill="url(#spark-grad)" />
           </svg>
           <div class="relative">
             <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.cpu') }}</p>
             <p :class="['text-2xl font-semibold font-mono tabular-nums', cpuColor(sysMetrics.cpu_percent)]">{{ sysMetrics.cpu_percent.toFixed(1) }}%</p>
           </div>
         </div>
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden">
-          <svg v-if="memHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" viewBox="0 0 200 80" preserveAspectRatio="none">
-            <path :d="sparklinePath(memHistory, 200, 80)" class="sparkline-fill" />
+        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden anim-enter delay-1">
+          <svg v-if="memHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" preserveAspectRatio="none">
+            <path :d="sparklinePath(memHistory, 200, 80)" fill="url(#spark-grad)" />
           </svg>
           <div class="relative">
             <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.memory') }}</p>
             <p class="text-2xl font-semibold text-g-14 font-mono tabular-nums">{{ fmtBytes(sysMetrics.memory_bytes) }}</p>
           </div>
         </div>
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden">
-          <svg v-if="goroutineHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" viewBox="0 0 200 80" preserveAspectRatio="none">
-            <path :d="sparklinePath(goroutineHistory, 200, 80)" class="sparkline-fill" />
+        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden anim-enter delay-2">
+          <svg v-if="goroutineHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" preserveAspectRatio="none">
+            <path :d="sparklinePath(goroutineHistory, 200, 80)" fill="url(#spark-grad)" />
           </svg>
           <div class="relative">
             <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.goroutines') }}</p>
             <p class="text-2xl font-semibold text-g-14 font-mono tabular-nums">{{ sysMetrics.goroutines }}</p>
           </div>
         </div>
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden">
-          <svg v-if="netRxHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" viewBox="0 0 200 80" preserveAspectRatio="none">
-            <path :d="sparklinePath(netRxHistory, 200, 80)" class="sparkline-fill" />
+        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden anim-enter delay-3">
+          <svg v-if="netRxHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" preserveAspectRatio="none">
+            <path :d="sparklinePath(netRxHistory, 200, 80)" fill="url(#spark-grad)" />
           </svg>
           <div class="relative">
             <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.network') }}</p>
@@ -306,6 +316,33 @@ function ago(d: string) {
         <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card">
           <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.uptime') }}</p>
           <p class="text-2xl font-semibold text-g-14 font-mono tabular-nums">{{ fmtUptime(sysMetrics.uptime_s) }}</p>
+        </div>
+      </div>
+      <div v-else class="grid grid-cols-5 gap-3">
+        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden anim-enter">
+          <svg v-if="goroutineHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" preserveAspectRatio="none">
+            <path :d="sparklinePath(goroutineHistory, 200, 80)" fill="url(#spark-grad)" />
+          </svg>
+          <div class="relative">
+            <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.goroutines') }}</p>
+            <p class="text-2xl font-semibold text-g-14 font-mono tabular-nums">{{ sysMetrics.goroutines }}</p>
+          </div>
+        </div>
+        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden anim-enter delay-1">
+          <svg v-if="memHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" preserveAspectRatio="none">
+            <path :d="sparklinePath(memHistory, 200, 80)" fill="url(#spark-grad)" />
+          </svg>
+          <div class="relative">
+            <p class="text-xs text-g-9 mb-1.5">Heap</p>
+            <p class="text-2xl font-semibold text-g-14 font-mono tabular-nums">{{ sysMetrics.heap_mb.toFixed(1) }} MB</p>
+          </div>
+        </div>
+        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card anim-enter delay-2">
+          <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.uptime') }}</p>
+          <p class="text-2xl font-semibold text-g-14 font-mono tabular-nums">{{ fmtUptime(sysMetrics.uptime_s) }}</p>
+        </div>
+        <div class="col-span-2 bg-g-2 border border-g-5 rounded-lg p-4 flex items-center lm-card anim-enter delay-3">
+          <span class="text-sm text-g-8">{{ t('dashboard.metricsUnavailable') }}</span>
         </div>
       </div>
     </div>

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -63,6 +64,7 @@ type stepTracker struct {
 	pipelineActions []pipelineAction
 	gotoTarget      string // target step ID for goto, empty if none
 	gotoMaxIter     int    // max_iterations for goto
+	mergeMarker     string // "┐", "┤", "┘" — merge connector for convergent nodes
 }
 
 type loopDisplay struct {
@@ -135,6 +137,7 @@ func (r *cliRenderer) buildTree(wf *parser.Workflow) error {
 		dfs(root, 0, "", last)
 	}
 
+	r.resolveConvergentNodes(dag)
 	r.buildLoopDisplays()
 
 	return nil
@@ -166,6 +169,151 @@ func (r *cliRenderer) addStepTracker(s parser.Step, depth int, parentID string, 
 
 	r.steps[s.ID] = st
 	r.order = append(r.order, s.ID)
+}
+
+func (r *cliRenderer) resolveConvergentNodes(dag *engine.DAG) {
+	processed := make(map[string]bool)
+
+	for {
+		found := false
+
+		for _, id := range r.order {
+			if processed[id] {
+				continue
+			}
+
+			node := dag.Nodes[id]
+			if len(node.Parents) <= 1 {
+				continue
+			}
+
+			parentIDs := make([]string, 0, len(node.Parents))
+			sharedParent := ""
+			allSiblings := true
+
+			for i, p := range node.Parents {
+				pid := p.Step.ID
+				st := r.steps[pid]
+
+				if st == nil {
+					allSiblings = false
+					break
+				}
+
+				if i == 0 {
+					sharedParent = st.parentID
+				} else if st.parentID != sharedParent {
+					allSiblings = false
+					break
+				}
+
+				parentIDs = append(parentIDs, pid)
+			}
+
+			if !allSiblings {
+				processed[id] = true
+				continue
+			}
+
+			orderIdx := make(map[string]int, len(r.order))
+			for i, oid := range r.order {
+				orderIdx[oid] = i
+			}
+
+			sort.Slice(parentIDs, func(a, b int) bool {
+				return orderIdx[parentIDs[a]] < orderIdx[parentIDs[b]]
+			})
+
+			descSet := map[string]bool{id: true}
+
+			var collect func(string)
+			collect = func(nid string) {
+				for _, c := range dag.Nodes[nid].Children {
+					if !descSet[c.Step.ID] {
+						descSet[c.Step.ID] = true
+						collect(c.Step.ID)
+					}
+				}
+			}
+
+			collect(id)
+
+			var subtree, remaining []string
+
+			for _, oid := range r.order {
+				if descSet[oid] {
+					subtree = append(subtree, oid)
+				} else {
+					remaining = append(remaining, oid)
+				}
+			}
+
+			lastParentID := parentIDs[len(parentIDs)-1]
+			lastParentIdx := -1
+
+			for i, oid := range remaining {
+				if oid == lastParentID {
+					lastParentIdx = i
+					break
+				}
+			}
+
+			if lastParentIdx == -1 {
+				processed[id] = true
+				continue
+			}
+
+			lastParentDepth := r.steps[lastParentID].depth
+			insertIdx := lastParentIdx + 1
+
+			for insertIdx < len(remaining) {
+				if r.steps[remaining[insertIdx]].depth <= lastParentDepth {
+					break
+				}
+
+				insertIdx++
+			}
+
+			for i := insertIdx - 1; i > lastParentIdx; i-- {
+				if r.steps[remaining[i]].parentID == lastParentID {
+					r.steps[remaining[i]].isLast = false
+					break
+				}
+			}
+
+			newOrder := make([]string, 0, len(r.order))
+			newOrder = append(newOrder, remaining[:insertIdx]...)
+			newOrder = append(newOrder, subtree...)
+			newOrder = append(newOrder, remaining[insertIdx:]...)
+			r.order = newOrder
+
+			childSt := r.steps[id]
+			childSt.parentID = lastParentID
+			childSt.isLast = true
+
+			for i, pid := range parentIDs {
+				pst := r.steps[pid]
+
+				switch {
+				case i == 0:
+					pst.mergeMarker = "┐"
+				case i == len(parentIDs)-1:
+					pst.mergeMarker = "┘"
+				default:
+					pst.mergeMarker = "┤"
+				}
+			}
+
+			processed[id] = true
+			found = true
+
+			break
+		}
+
+		if !found {
+			break
+		}
+	}
 }
 
 func parsePipelineActions(config map[string]any) []pipelineAction {
@@ -354,12 +502,18 @@ func (r *cliRenderer) printTreeStep(idx int, id string, bracketWidth int) {
 	dots := max(totalWidth-usedWidth, 2)
 	dotStr := strings.Repeat("·", dots) + " "
 
-	fmt.Printf("  %s%s%s%s%s\n",
+	var mergeSuffix string
+	if st.mergeMarker != "" {
+		mergeSuffix = " ──" + st.mergeMarker
+	}
+
+	fmt.Printf("  %s%s%s%s%s%s\n",
 		r.c("33", bracket),
 		r.c("90", prefix),
 		r.c("1", idPart),
 		r.c("90", dotStr),
 		r.c("90", label),
+		r.c("36", mergeSuffix),
 	)
 
 	if len(st.pipelineActions) > 0 {
@@ -900,9 +1054,10 @@ func main() {
 	)
 
 	rootCmd := &cobra.Command{
-		Use:     "tailflow",
-		Short:   "TailFlow - Workflow Engine",
-		Version: version,
+		Use:          "tailflow",
+		Short:        "TailFlow - Workflow Engine",
+		Version:      version,
+		SilenceUsage: true,
 	}
 	rootCmd.PersistentFlags().BoolVar(&noColorFlag, "no-color", false, "Disable colour output")
 	rootCmd.PersistentFlags().StringVar(&exporterURL, "exporter-url", "", "SaaS endpoint URL for event export (env: TAILFLOW_EXPORTER_URL)")
@@ -912,6 +1067,7 @@ func main() {
 	rootCmd.AddCommand(runCmd(&noColorFlag, &exporterURL, &exporterKey, &exporterName))
 	rootCmd.AddCommand(validateCmd(&noColorFlag))
 	rootCmd.AddCommand(serveCmd(&exporterURL, &exporterKey, &exporterName))
+	rootCmd.AddCommand(testCmd(&noColorFlag))
 
 	err := rootCmd.Execute()
 	if err != nil {
@@ -1266,6 +1422,219 @@ func buildCLITriggerData(wf *parser.Workflow, data string) map[string]any {
 	return triggerData
 }
 
+func testCmd(noColorFlag *bool) *cobra.Command {
+	var (
+		caseName string
+		listFlag bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "test <workflow.yaml>",
+		Short: "Run workflow test cases",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			noColor := detectNoColor(*noColorFlag)
+
+			if listFlag {
+				return executeTestList(args[0], noColor)
+			}
+
+			return executeTest(args[0], caseName, noColor)
+		},
+	}
+
+	cmd.Flags().StringVar(&caseName, "case", "", "Run a specific test case")
+	cmd.Flags().BoolVar(&listFlag, "list", false, "List all test cases")
+
+	return cmd
+}
+
+func collectTestCases(wf *parser.Workflow) []string {
+	seen := make(map[string]bool)
+	var names []string
+
+	for _, step := range wf.Steps {
+		for _, tc := range step.Testing {
+			if !seen[tc.Name] {
+				seen[tc.Name] = true
+				names = append(names, tc.Name)
+			}
+		}
+	}
+
+	return names
+}
+
+func executeTestList(path string, noColor bool) error {
+	r := &cliRenderer{noColor: noColor}
+
+	wf, err := parser.Parse(path)
+	if err != nil {
+		return err
+	}
+
+	cases := collectTestCases(wf)
+	if len(cases) == 0 {
+		fmt.Printf("  %s No test cases found in %q\n", r.c("33", "⚠"), wf.Name)
+
+		return nil
+	}
+
+	fmt.Printf("\n  Test cases for %q:\n\n", wf.Name)
+
+	var headerBuilder strings.Builder
+
+	fmt.Fprintf(&headerBuilder, "  %-20s", "")
+
+	for _, step := range wf.Steps {
+		fmt.Fprintf(&headerBuilder, "%-18s", step.ID)
+	}
+
+	fmt.Println(r.c("1", headerBuilder.String()))
+
+	for _, caseName := range cases {
+		var rowBuilder strings.Builder
+
+		fmt.Fprintf(&rowBuilder, "  %-20s", caseName)
+
+		for _, step := range wf.Steps {
+			rowBuilder.WriteString(testCaseCell(r, step, caseName))
+		}
+
+		fmt.Println(rowBuilder.String())
+	}
+
+	fmt.Println()
+
+	return nil
+}
+
+func colorPad(r *cliRenderer, code, text string) string {
+	padded := fmt.Sprintf("%-18s", text)
+	if r.noColor {
+		return padded
+	}
+
+	return fmt.Sprintf("\033[%sm%s\033[0m", code, padded)
+}
+
+func testCaseCell(r *cliRenderer, step parser.Step, caseName string) string {
+	tc := findTestCaseInStep(step, caseName)
+
+	switch {
+	case tc == nil:
+		return colorPad(r, "90", "(runs)")
+	case tc.Error != nil:
+		return colorPad(r, "31", "mock error")
+	case tc.Output != nil && tc.Expect != nil:
+		return colorPad(r, "36", "mock+expect")
+	case tc.Output != nil:
+		return colorPad(r, "33", "mock")
+	case tc.Expect != nil:
+		return colorPad(r, "36", "expect")
+	default:
+		return colorPad(r, "90", "(runs)")
+	}
+}
+
+func findTestCaseInStep(step parser.Step, caseName string) *parser.TestCase {
+	for i := range step.Testing {
+		if step.Testing[i].Name == caseName {
+			return &step.Testing[i]
+		}
+	}
+
+	return nil
+}
+
+func executeTest(path string, caseName string, noColor bool) error {
+	wf, err := parser.Parse(path)
+	if err != nil {
+		return err
+	}
+
+	cases := []string{caseName}
+	if caseName == "" {
+		cases = collectTestCases(wf)
+		if len(cases) == 0 {
+			r := &cliRenderer{noColor: noColor}
+			fmt.Printf("  %s No test cases found in %q\n", r.c("33", "⚠"), wf.Name)
+
+			return nil
+		}
+	}
+
+	r := &cliRenderer{noColor: noColor}
+
+	fmt.Printf("\n  Testing %q...\n\n", wf.Name)
+
+	passed := 0
+	failed := 0
+
+	for _, cn := range cases {
+		start := time.Now()
+		testErr := runSingleTestCase(wf, cn)
+		elapsed := time.Since(start).Round(time.Millisecond)
+
+		if testErr != nil {
+			fmt.Printf("  %s  %-20s %s %s\n", r.c("31", "✗"), cn, r.c("90", fmt.Sprintf("(%s)", elapsed)), r.c("31", testErr.Error()))
+
+			failed++
+		} else {
+			fmt.Printf("  %s  %-20s %s\n", r.c("32", "✓"), cn, r.c("90", fmt.Sprintf("passed (%s)", elapsed)))
+
+			passed++
+		}
+	}
+
+	fmt.Printf("\n  %d/%d passed\n\n", passed, len(cases))
+
+	if failed > 0 {
+		os.Exit(1)
+	}
+
+	return nil
+}
+
+func runSingleTestCase(wf *parser.Workflow, caseName string) error {
+	bus := event.NewBus()
+	defer bus.Close()
+
+	reg := action.NewRegistry()
+	action.RegisterBuiltins(reg)
+	reg.SetAllowlist(cliAllowedActions(reg.Names()))
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError + 1}))
+	exec := engine.NewExecutor(reg, bus, logger, wf.Sensitive)
+
+	services := &runtime.ActionServices{
+		DBPool:     runtime.NewMemoryDBPool(),
+		TxRegistry: runtime.NewMemoryTxRegistry(logger),
+		Locker:     runtime.NewMemoryLocker(),
+		KVStore:    runtime.NewMemoryKVStore(),
+	}
+
+	ctx := context.Background()
+
+	result, err := exec.Execute(ctx, wf, nil, engine.ExecuteOptions{
+		Services:     services,
+		TestCaseName: caseName,
+	})
+	if err != nil {
+		return err
+	}
+
+	if result.Status == runtime.StatusFailed {
+		if result.Error != nil {
+			return result.Error
+		}
+
+		return errors.New("workflow failed")
+	}
+
+	return nil
+}
+
 func executeValidate(path string, noColor bool) error {
 	r := &cliRenderer{noColor: noColor}
 
@@ -1274,6 +1643,8 @@ func executeValidate(path string, noColor bool) error {
 		fmt.Printf("  %s %s\n", r.c("31", "✗"), r.c("31", "Validation failed: "+err.Error()))
 		os.Exit(1)
 	}
+
+	r.wfName = wf.Name
 
 	reg := action.NewRegistry()
 	action.RegisterBuiltins(reg)
@@ -1286,14 +1657,16 @@ func executeValidate(path string, noColor bool) error {
 		}
 	}
 
-	_, err = engine.BuildDAG(wf.Steps)
-	if err != nil {
-		fmt.Printf("  %s %s\n", r.c("31", "✗"), r.c("31", "Validation failed: "+err.Error()))
+	buildErr := r.buildTree(wf)
+	if buildErr != nil {
+		fmt.Printf("  %s %s\n", r.c("31", "✗"), r.c("31", "Validation failed: "+buildErr.Error()))
 		os.Exit(1)
 	}
 
 	fmt.Printf("  %s %s\n", r.c("32", "✓"),
 		r.c("32", fmt.Sprintf("Workflow %q is valid (%d steps, %d params)", wf.Name, len(wf.Steps), len(wf.Params))))
+
+	r.printTree()
 
 	return nil
 }

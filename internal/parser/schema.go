@@ -47,6 +47,25 @@ type Step struct {
 	Timeout     string         `json:"timeout,omitempty"      yaml:"timeout,omitempty"`
 	Goto        *GotoConfig    `json:"goto,omitempty"         yaml:"goto,omitempty"`
 	ErrorPolicy string         `json:"error_policy,omitempty" yaml:"error_policy,omitempty"`
+	Testing     []TestCase     `json:"testing,omitempty"      yaml:"testing,omitempty"`
+}
+
+type TestCase struct {
+	Name   string          `json:"name"             yaml:"name"`
+	Output any             `json:"output,omitempty" yaml:"output,omitempty"`
+	Error  *TestCaseError  `json:"error,omitempty"  yaml:"error,omitempty"`
+	Expect *TestCaseExpect `json:"expect,omitempty" yaml:"expect,omitempty"`
+}
+
+type TestCaseError struct {
+	Message string `json:"message"        yaml:"message"`
+	Code    string `json:"code,omitempty" yaml:"code,omitempty"`
+}
+
+type TestCaseExpect struct {
+	Output any            `json:"output,omitempty" yaml:"output,omitempty"`
+	Status string         `json:"status,omitempty" yaml:"status,omitempty"`
+	Error  *TestCaseError `json:"error,omitempty"  yaml:"error,omitempty"`
 }
 
 // RetryConfig defines retry behavior for a step.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -95,6 +96,39 @@ func (s *HTTPCoverageTestSuite) TestCheckExpectedStatus_UnsupportedType() {
 	s.NoError(err)
 }
 
+func (s *HTTPCoverageTestSuite) TestCheckExpectedStatus_MismatchWithBody() {
+	ctx := newTestContext(map[string]any{
+		"expect": map[string]any{"status": 200},
+	})
+
+	output := map[string]any{"body": map[string]any{"error": "internal server error"}}
+	err := checkExpectedStatus(ctx, output, 500)
+	s.Error(err)
+	s.Contains(err.Error(), "expected status 200, got 500")
+	s.Contains(err.Error(), "internal server error")
+}
+
+func (s *HTTPCoverageTestSuite) TestTruncateBody_Nil() {
+	s.Equal("(empty body)", truncateBody(nil, 512))
+}
+
+func (s *HTTPCoverageTestSuite) TestTruncateBody_JSON() {
+	body := map[string]any{"error": "bad request"}
+	result := truncateBody(body, 512)
+	s.Contains(result, "bad request")
+}
+
+func (s *HTTPCoverageTestSuite) TestTruncateBody_LongString() {
+	long := strings.Repeat("x", 600)
+	result := truncateBody(long, 512)
+	s.Len(result, 512+len("…"))
+	s.True(strings.HasSuffix(result, "…"))
+}
+
+func (s *HTTPCoverageTestSuite) TestTruncateBody_UnmarshalableValue() {
+	result := truncateBody(func() {}, 512)
+	s.NotEmpty(result)
+}
 type LoopCoverageTestSuite struct {
 	suite.Suite
 }

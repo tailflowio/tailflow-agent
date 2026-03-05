@@ -99,6 +99,24 @@ tailflow serve --selfhosted \
   examples/ping.yaml
 ```
 
+### `.env` support
+
+TailFlow automatically loads a `.env` file from the working directory at startup. No wrapper or manual `source` needed.
+
+```bash
+# .env
+DATABASE_URL=postgres://localhost/mydb
+SLACK_WEBHOOK=https://hooks.slack.com/xxx
+```
+
+Variables from `.env` are available via `{{ env.DATABASE_URL }}` in your workflows. Environment variables already set in your shell take precedence over `.env` values.
+
+**Priority (highest to lowest):**
+1. CLI flags (`--exporter-url`)
+2. Shell environment (`export X=...`)
+3. `.env` file
+4. Workflow defaults
+
 ### Your first workflow
 
 ```yaml
@@ -397,6 +415,18 @@ TailFlow ships with **34 built-in actions**:
     target: my-step
     when: "steps.my-step.output.status == 'retry'"
     max_iterations: 5
+  testing:                          # Inline test cases (tailflow test)
+    - name: "happy-path"
+      output:                       # Mock: skip execution, inject output
+        order_id: 42
+    - name: "api-down"
+      error:                        # Mock error: inject failure
+        message: "connection refused"
+    - name: "verify-result"
+      expect:                       # Assertion: run normally, then verify
+        status: "success"
+        output:
+          order_id: 42
 ```
 
 ---
@@ -454,16 +484,10 @@ The [`examples/`](./examples) directory contains ready-to-run workflows:
 
 TailFlow agents can push events, heartbeats, and system metrics to a central SaaS platform for distributed workflow monitoring.
 
-```
-┌──────────────────┐         HTTPS          ┌──────────────────┐
-│   TailFlow Agent │ ─────────────────────> │   SaaS Platform  │
-│   (self-hosted)  │                        │   (central)      │
-│                  │  /register             │                  │
-│  - Runs workflow │  /ingest (events)      │  - Dashboard     │
-│  - Local UI      │  /heartbeat (metrics)  │  - Alerting      │
-│  - Export events │ <───────────────────── │  - History       │
-│                  │  agent_id, config      │                  │
-└──────────────────┘                        └──────────────────┘
+```mermaid
+graph LR
+    Agent["TailFlow Agent<br/><i>(self-hosted)</i><br/>- Runs workflows<br/>- Local UI<br/>- Export events"] -->|"/register<br/>/ingest (events)<br/>/heartbeat (metrics)"| SaaS["SaaS Platform<br/><i>(central)</i><br/>- Dashboard<br/>- Alerting<br/>- History"]
+    SaaS -->|"agent_id, config"| Agent
 ```
 
 ### Enable export
@@ -566,32 +590,14 @@ tailflow serve --selfhosted \
 
 ## Architecture
 
-```
-                    ┌─────────────────────────────────┐
-                    │         YAML Workflow            │
-                    │    (parser + validator)          │
-                    └──────────┬──────────────────────┘
-                               │
-                    ┌──────────▼──────────────────────┐
-                    │       DAG Engine                 │
-                    │  (topological sort, parallel     │
-                    │   execution, retries, goto)      │
-                    └──────────┬──────────────────────┘
-                               │
-          ┌────────────────────┼────────────────────┐
-          │                    │                    │
-  ┌───────▼──────┐   ┌────────▼───────┐   ┌───────▼──────┐
-  │   Actions    │   │  Event Bus     │   │   Services   │
-  │  (34 built   │   │  (real-time    │   │ (DB pool,    │
-  │   in)        │   │   SSE stream)  │   │  KV store,   │
-  │              │   │                │   │  locks, wait)│
-  └──────────────┘   └──┬─────┬──────┘   └──────────────┘
-                        │     │
-               ┌────────▼┐   ┌▼───────────┐
-               │  Web UI │   │  SaaS      │
-               │(embedded│   │  Exporter  │
-               │  SPA)   │   │ (optional) │
-               └─────────┘   └────────────┘
+```mermaid
+graph TD
+    WF["YAML Workflow<br/><i>parser + validator</i>"] --> DAG["DAG Engine<br/><i>topological sort, parallel<br/>execution, retries, goto</i>"]
+    DAG --> ACT["Actions<br/><i>34 built-in</i>"]
+    DAG --> EVT["Event Bus<br/><i>real-time SSE stream</i>"]
+    DAG --> SVC["Services<br/><i>DB pool, KV store,<br/>locks, wait</i>"]
+    EVT --> UI["Web UI<br/><i>embedded SPA</i>"]
+    EVT --> EXP["SaaS Exporter<br/><i>optional</i>"]
 ```
 
 ### Key design decisions
@@ -639,6 +645,37 @@ Validate a workflow file without executing it.
 
 ```bash
 tailflow validate <workflow.yaml>
+```
+
+### `tailflow test`
+
+Run inline test cases defined in workflow steps.
+
+```bash
+# Run all test cases
+tailflow test <workflow.yaml>
+
+# Run a specific test case
+tailflow test <workflow.yaml> --case happy-path
+
+# List all test cases as a matrix
+tailflow test <workflow.yaml> --list
+```
+
+| Flag | Description |
+|------|-------------|
+| `--case` | Run a specific test case by name |
+| `--list` | Display the test case matrix (steps vs cases) |
+
+When no `--case` is specified, all cases are executed and a summary is printed:
+
+```
+Testing "my-workflow"...
+
+  happy-path           ✓ passed (45ms)
+  api-down             ✓ passed (12ms)
+
+2/2 passed
 ```
 
 ### Global flags
@@ -740,6 +777,78 @@ steps:                            # Workflow steps (DAG)
       target: step-id
       when: "expression"
       max_iterations: 10
+    testing:                      # Inline test cases (tailflow test)
+      - name: "case-name"
+        output: { ... }           # Mock output (skip execution)
+        error:                    # Mock error (skip execution)
+          message: "..."
+          code: "..."
+        expect:                   # Assertion (verify after execution)
+          status: "success"
+          output: { ... }         # Partial deep match
+          error:
+            message: "..."
+            code: "..."
+```
+
+### Inline Testing
+
+Define test cases directly in your workflow steps. When running `tailflow test`, steps with a matching case name get their action skipped and output/error mocked. Steps without a matching case execute normally with data cascading from the DAG.
+
+**Three modes:**
+
+| Mode | Fields | Behavior |
+|------|--------|----------|
+| **Mock output** | `output` only | Skip execution, inject output |
+| **Mock error** | `error` only | Skip execution, inject error (respects `error_policy`) |
+| **Assertion** | `expect` only | Execute normally, then verify result (partial deep match) |
+| **Mock + Assert** | `output` + `expect` | Inject output AND verify it matches expectations |
+
+**Partial deep match:** The `expect.output` check is partial — your expected map only needs to contain the keys you care about. The actual output can have extra keys.
+
+```yaml
+steps:
+  - id: fetch-user
+    action: http
+    config:
+      url: "https://api.example.com/users/1"
+    testing:
+      - name: "happy-path"
+        output:
+          id: 1
+          name: "Alice"
+          email: "alice@example.com"
+
+      - name: "not-found"
+        error:
+          message: "user not found"
+          code: "not_found"
+
+      - name: "check-format"
+        expect:
+          status: "success"
+          output:
+            id: 1
+
+  - id: greet
+    action: log
+    depends_on: [fetch-user]
+    config:
+      message: "Hello, {{ steps.fetch-user.output.name }}!"
+```
+
+```bash
+tailflow test workflow.yaml --list
+#                     fetch-user        greet
+#   happy-path        mock              (runs)
+#   not-found         mock error        (runs)
+#   check-format      expect            (runs)
+
+tailflow test workflow.yaml --case happy-path
+# fetch-user is mocked → greet runs with mocked data
+
+tailflow test workflow.yaml
+# Runs all 3 cases, prints summary
 ```
 
 ### Sensitive Fields

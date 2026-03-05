@@ -78,10 +78,7 @@ func runValidationRules(rules map[string]any, data map[string]any) []map[string]
 			continue
 		}
 
-		var ve validator.ValidationErrors
-		if !errors.As(err, &ve) {
-			continue
-		}
+		ve := err.(validator.ValidationErrors) //nolint:errorlint // validator only returns this type
 
 		for _, e := range ve {
 			validationErrs = append(validationErrs, map[string]any{
