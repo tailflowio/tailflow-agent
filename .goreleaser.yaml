@@ -8,8 +8,6 @@ before:
   hooks:
     - bash -c "cd web/frontend && npm install && npx vite build"
     - go mod tidy
-    - bash -c "command -v upx >/dev/null || (echo 'upx not found, skipping compression' && exit 0)"
-
 builds:
   - main: ./cmd/tailflow
     binary: tailflow
@@ -25,7 +23,7 @@ builds:
       - -s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}} -X main.date={{.Date}}
     hooks:
       post:
-        - cmd: bash -c "upx --best --lzma {{ .Path }} || true"
+        - cmd: upx --best --lzma {{ .Path }}
 
 archives:
   - formats: [tar.gz]
