@@ -145,10 +145,7 @@ jobs:
           fetch-depth: 0
 
       - name: Checkout tailflow-shared
-        uses: actions/checkout@v4
-        with:
-          repository: tailflowio/tailflow-shared
-          path: ../tailflow-shared
+        run: git clone --depth 1 https://github.com/tailflowio/tailflow-shared.git ../tailflow-shared
 
       - uses: actions/setup-node@v4
         with:
