@@ -23,7 +23,7 @@ builds:
       - -s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}} -X main.date={{.Date}}
     hooks:
       post:
-        - cmd: upx --best --lzma {{ .Path }}
+        - cmd: bash -c '{{ if eq .Os "linux" }}upx --best --lzma {{ .Path }}{{ else }}echo "skip upx for {{ .Os }}"{{ end }}'
 
 archives:
   - formats: [tar.gz]
