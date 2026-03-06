@@ -10,14 +10,15 @@ RUN npx vite build
 
 # Stage 2: Build Go binary
 FROM golang:1.26-alpine AS builder
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates tzdata upx
 ARG VERSION=dev
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=frontend /app/web/dist ./web/dist
-RUN CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /tailflow ./cmd/tailflow/
+RUN CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /tailflow ./cmd/tailflow/ \
+    && upx --best --lzma /tailflow
 
 # Stage 3: Final image
 FROM scratch
