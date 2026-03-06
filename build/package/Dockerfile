@@ -5,6 +5,7 @@ COPY web/frontend/package*.json ./
 RUN npm ci
 COPY web/frontend/ ./
 COPY tailflow-shared/web/src /tailflow-shared/web/src
+RUN ln -s /app/web/frontend/node_modules /tailflow-shared/node_modules
 RUN npx vite build
 
 # Stage 2: Build Go binary
