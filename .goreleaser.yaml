@@ -6,7 +6,7 @@ git:
 
 before:
   hooks:
-    - bash -c "cd web/frontend && npm install && npx vite build"
+    - bash -c "cd web/frontend && npm install && ln -sf $(pwd)/node_modules ../../../tailflow-shared/node_modules && npx vite build"
     - go mod tidy
 builds:
   - main: ./cmd/tailflow
