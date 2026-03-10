@@ -75,7 +75,7 @@ steps:
 	action.RegisterBuiltins(reg)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	exec := engine.NewExecutor(reg, bus, logger, wf.Sensitive)
+	exec := engine.NewExecutor(reg, bus, logger, wf.Sensitive, nil, nil)
 
 	return New(Config{
 		Port:           0,

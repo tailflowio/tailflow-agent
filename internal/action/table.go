@@ -135,12 +135,12 @@ func renderTable(columns []tableColumn, rows [][]string, widths []int, items []a
 }
 
 func emitTableLog(ctx *ActionContext, table string) {
-	if ctx.EmitLog == nil {
+	if ctx.EmitPrint == nil {
 		return
 	}
 
 	for _, line := range strings.Split(strings.TrimRight(table, "\n"), "\n") {
-		ctx.EmitLog(line)
+		ctx.EmitPrint(line)
 	}
 }
 
