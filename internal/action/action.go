@@ -14,12 +14,13 @@ type Action interface {
 
 type ActionContext struct {
 	context.Context
-	Config   map[string]any
-	ExecCtx  *runtime.ExecutionContext
-	StepID   string
-	Logger   *slog.Logger
-	Services *runtime.ActionServices
-	EmitLog  func(msg string) // optional: emit a live log line during execution
+	Config    map[string]any
+	ExecCtx   *runtime.ExecutionContext
+	StepID    string
+	Logger    *slog.Logger
+	Services  *runtime.ActionServices
+	EmitLog   func(msg string) // optional: emit a live log line during execution
+	EmitPrint func(msg string) // optional: emit a log line printed immediately (non-stream)
 
 	// RunAction creates, resolves, and executes an action with extra template variables.
 	// loopVars are merged into the template context under the "loop" key.

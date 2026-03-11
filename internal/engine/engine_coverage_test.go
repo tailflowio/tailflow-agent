@@ -386,3 +386,56 @@ func (s *EngineCoverageTestSuite) TestWorkflowOnError_WithFailedStepsAndContinue
 	// Workflow on_error should have run because hasFailedSteps returns true
 	s.Equal("success", result.Steps["wf_handler"].Status)
 }
+
+func (s *EngineCoverageTestSuite) TestEmitLogActionOutput_WithStream() {
+	exec, bus := newTestExecutor()
+	defer bus.Close()
+
+	wf := &parser.Workflow{
+		Version: "2.0",
+		Name:    "log-stream",
+		Steps: []parser.Step{
+			{
+				ID:     "stream_log",
+				Action: "log",
+				Config: map[string]any{"message": "streaming", "stream": true},
+			},
+		},
+	}
+
+	result, err := exec.Execute(context.Background(), wf, nil)
+	s.Require().NoError(err)
+	s.Equal("success", result.Status)
+}
+
+func (s *EngineCoverageTestSuite) TestStepErrorCode_Canceled() {
+	exec, bus := newTestExecutor()
+	defer bus.Close()
+
+	wf := &parser.Workflow{
+		Version: "2.0",
+		Name:    "cancel-step",
+		Steps: []parser.Step{
+			{
+				ID:     "slow",
+				Action: "delay",
+				Config: map[string]any{"duration": "10s"},
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+	}()
+
+	result, err := exec.Execute(ctx, wf, nil)
+	s.Require().NoError(err)
+	s.Equal("cancelled", result.Status)
+
+	sr := result.Steps["slow"]
+	s.Require().NotNil(sr.Error)
+	s.Equal("cancelled", sr.Error.Code)
+}

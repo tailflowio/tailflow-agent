@@ -42,6 +42,14 @@ func (r *SensitiveRegistry) MaskMap(m map[string]any) map[string]any {
 	return r.maskValue(m).(map[string]any)
 }
 
+func (r *SensitiveRegistry) MaskAny(v any) any {
+	if len(r.keys) == 0 || v == nil {
+		return v
+	}
+
+	return r.maskValue(v)
+}
+
 func (r *SensitiveRegistry) maskValue(v any) any {
 	switch val := v.(type) {
 	case map[string]any:

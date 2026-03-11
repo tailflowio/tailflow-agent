@@ -64,7 +64,7 @@ steps:
 	action.RegisterBuiltins(reg)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	exec := engine.NewExecutor(reg, bus, logger, nil)
+	exec := engine.NewExecutor(reg, bus, logger, nil, nil, nil)
 
 	return New(Config{
 		Port:           0,
@@ -104,7 +104,7 @@ steps:
 	action.RegisterBuiltins(reg)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	exec := engine.NewExecutor(reg, bus, logger, nil)
+	exec := engine.NewExecutor(reg, bus, logger, nil, nil, nil)
 
 	return New(Config{
 		Port:           0,
@@ -145,7 +145,7 @@ steps:
 	action.RegisterBuiltins(reg)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	exec := engine.NewExecutor(reg, bus, logger, nil)
+	exec := engine.NewExecutor(reg, bus, logger, nil, nil, nil)
 
 	return New(Config{
 		Port:           0,
@@ -187,7 +187,7 @@ steps:
 	action.RegisterBuiltins(reg)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	exec := engine.NewExecutor(reg, bus, logger, nil)
+	exec := engine.NewExecutor(reg, bus, logger, nil, nil, nil)
 
 	return New(Config{
 		Port:           0,
@@ -227,7 +227,7 @@ steps:
 	action.RegisterBuiltins(reg)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	exec := engine.NewExecutor(reg, bus, logger, nil)
+	exec := engine.NewExecutor(reg, bus, logger, nil, nil, nil)
 
 	return New(Config{
 		Port:           0,
@@ -284,7 +284,7 @@ steps:
 	action.RegisterBuiltins(reg)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	exec := engine.NewExecutor(reg, bus, logger, nil)
+	exec := engine.NewExecutor(reg, bus, logger, nil, nil, nil)
 
 	return New(Config{
 		Port:           0,

@@ -139,7 +139,7 @@ func (s *TableActionTestSuite) TestExecute_HeaderDefaultsToField() {
 	s.Contains(outMap["table"], "test")
 }
 
-func (s *TableActionTestSuite) TestExecute_WithEmitLog() {
+func (s *TableActionTestSuite) TestExecute_WithEmitPrint() {
 	a := NewTableAction()
 
 	var logged []string
@@ -152,7 +152,7 @@ func (s *TableActionTestSuite) TestExecute_WithEmitLog() {
 			map[string]any{"header": "Col", "field": "x"},
 		},
 	})
-	ctx.EmitLog = func(msg string) {
+	ctx.EmitPrint = func(msg string) {
 		logged = append(logged, msg)
 	}
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -16,10 +17,12 @@ import (
 
 	"github.com/joho/godotenv"
 	"github.com/spf13/cobra"
+
 	"github.com/tailflow/tailflow/internal/action"
 	"github.com/tailflow/tailflow/internal/engine"
 	"github.com/tailflow/tailflow/internal/event"
 	"github.com/tailflow/tailflow/internal/export"
+	tfotel "github.com/tailflow/tailflow/internal/otel"
 	"github.com/tailflow/tailflow/internal/parser"
 	"github.com/tailflow/tailflow/internal/runtime"
 	"github.com/tailflow/tailflow/internal/server"
@@ -89,6 +92,7 @@ type cliRenderer struct {
 	loopIteration int             // current iteration (0 = no loop active)
 	loopMaxIter   int             // max_iterations from the goto event
 	loopStepID    string          // step ID that carries the goto
+	streamLog     string          // last stream log message (persists across steps)
 }
 
 func (r *cliRenderer) c(code, text string) string {
@@ -592,6 +596,12 @@ func (r *cliRenderer) redrawActive() {
 		lines++
 	}
 
+	if r.streamLog != "" {
+		fmt.Printf("  %s   %s\n", r.c("36", "│"), r.c("90", r.streamLog))
+
+		lines++
+	}
+
 	now := time.Now()
 
 	for _, id := range r.activeSteps {
@@ -683,6 +693,7 @@ func (r *cliRenderer) endLoop() {
 	r.loopBody = nil
 	r.loopIteration = 0
 	r.loopMaxIter = 0
+	r.streamLog = ""
 	r.loopStepID = ""
 }
 
@@ -872,6 +883,8 @@ func (r *cliRenderer) handleStepLog(ev event.Event) {
 		return
 	}
 
+	r.streamLog = ev.Message
+
 	st := r.steps[ev.StepID]
 	if st != nil {
 		st.lastLog = ev.Message
@@ -1047,10 +1060,12 @@ func main() {
 	_ = godotenv.Load()
 
 	var (
-		noColorFlag  bool
-		exporterURL  string
-		exporterKey  string
-		exporterName string
+		noColorFlag     bool
+		exporterURL     string
+		exporterKey     string
+		exporterName    string
+		otelEndpoint    string
+		otelServiceName string
 	)
 
 	rootCmd := &cobra.Command{
@@ -1063,10 +1078,12 @@ func main() {
 	rootCmd.PersistentFlags().StringVar(&exporterURL, "exporter-url", "", "SaaS endpoint URL for event export (env: TAILFLOW_EXPORTER_URL)")
 	rootCmd.PersistentFlags().StringVar(&exporterKey, "exporter-key", "", "API key for SaaS authentication (env: TAILFLOW_EXPORTER_KEY)")
 	rootCmd.PersistentFlags().StringVar(&exporterName, "exporter-name", "", "Unique agent name (env: TAILFLOW_EXPORTER_NAME)")
+	rootCmd.PersistentFlags().StringVar(&otelEndpoint, "otel-endpoint", "", "OTLP/HTTP endpoint (env: OTEL_EXPORTER_OTLP_ENDPOINT)")
+	rootCmd.PersistentFlags().StringVar(&otelServiceName, "otel-service-name", "", "Service name (env: OTEL_SERVICE_NAME, default: tailflow)")
 
-	rootCmd.AddCommand(runCmd(&noColorFlag, &exporterURL, &exporterKey, &exporterName))
+	rootCmd.AddCommand(runCmd(&noColorFlag, &exporterURL, &exporterKey, &exporterName, &otelEndpoint, &otelServiceName))
 	rootCmd.AddCommand(validateCmd(&noColorFlag))
-	rootCmd.AddCommand(serveCmd(&exporterURL, &exporterKey, &exporterName))
+	rootCmd.AddCommand(serveCmd(&exporterURL, &exporterKey, &exporterName, &otelEndpoint, &otelServiceName))
 	rootCmd.AddCommand(testCmd(&noColorFlag))
 
 	err := rootCmd.Execute()
@@ -1075,7 +1092,84 @@ func main() {
 	}
 }
 
-func runCmd(noColorFlag *bool, exporterURL, exporterKey, exporterName *string) *cobra.Command {
+func shutdownOTel(result *tfotel.Result) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := result.ForceFlush(ctx); err != nil {
+		log.Printf("[otel] flush error: %v", err)
+	}
+
+	if err := result.Shutdown(ctx); err != nil {
+		log.Printf("[otel] shutdown error: %v", err)
+	}
+}
+
+func resolveOTelConfig(endpoint, serviceName *string) tfotel.Config {
+	ep := flagOrEnv(*endpoint, "OTEL_EXPORTER_OTLP_ENDPOINT")
+	sn := flagOrEnv(*serviceName, "OTEL_SERVICE_NAME")
+
+	return tfotel.Config{
+		Endpoint:    ep,
+		ServiceName: sn,
+		Debug:       os.Getenv("OTEL_DEBUG") != "",
+	}
+}
+
+func buildLogger(level slog.Level, otelResult *tfotel.Result) *slog.Logger {
+	baseHandler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})
+
+	otelHandler := tfotel.NewLogHandler(otelResult.LoggerProvider)
+	if otelHandler == nil {
+		return slog.New(baseHandler)
+	}
+
+	return slog.New(&multiHandler{handlers: []slog.Handler{baseHandler, otelHandler}})
+}
+
+type multiHandler struct {
+	handlers []slog.Handler
+}
+
+func (m *multiHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	for _, h := range m.handlers {
+		if h.Enabled(ctx, level) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (m *multiHandler) Handle(ctx context.Context, r slog.Record) error {
+	for _, h := range m.handlers {
+		if h.Enabled(ctx, r.Level) {
+			_ = h.Handle(ctx, r.Clone())
+		}
+	}
+
+	return nil
+}
+
+func (m *multiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	handlers := make([]slog.Handler, len(m.handlers))
+	for i, h := range m.handlers {
+		handlers[i] = h.WithAttrs(attrs)
+	}
+
+	return &multiHandler{handlers: handlers}
+}
+
+func (m *multiHandler) WithGroup(name string) slog.Handler {
+	handlers := make([]slog.Handler, len(m.handlers))
+	for i, h := range m.handlers {
+		handlers[i] = h.WithGroup(name)
+	}
+
+	return &multiHandler{handlers: handlers}
+}
+
+func runCmd(noColorFlag *bool, exporterURL, exporterKey, exporterName, otelEndpoint, otelServiceName *string) *cobra.Command {
 	var (
 		params []string
 		data   string
@@ -1096,7 +1190,9 @@ func runCmd(noColorFlag *bool, exporterURL, exporterKey, exporterName *string) *
 				return errors.New("--exporter-name (or TAILFLOW_EXPORTER_NAME) is required when exporter is enabled")
 			}
 
-			return executeRun(args[0], params, data, noColor, url, key, name)
+			otelCfg := resolveOTelConfig(otelEndpoint, otelServiceName)
+
+			return executeRun(args[0], params, data, noColor, url, key, name, otelCfg)
 		},
 	}
 	cmd.Flags().StringArrayVarP(&params, "param", "p", nil, "Parameters (key=value)")
@@ -1118,7 +1214,7 @@ func validateCmd(noColorFlag *bool) *cobra.Command {
 	}
 }
 
-func serveCmd(exporterURL, exporterKey, exporterName *string) *cobra.Command {
+func serveCmd(exporterURL, exporterKey, exporterName, otelEndpoint, otelServiceName *string) *cobra.Command {
 	var (
 		port       int
 		maxExecs   int
@@ -1138,7 +1234,9 @@ func serveCmd(exporterURL, exporterKey, exporterName *string) *cobra.Command {
 				return errors.New("--exporter-name (or TAILFLOW_EXPORTER_NAME) is required when exporter is enabled")
 			}
 
-			return executeServe(args[0], port, maxExecs, selfHosted, url, key, name)
+			otelCfg := resolveOTelConfig(otelEndpoint, otelServiceName)
+
+			return executeServe(args[0], port, maxExecs, selfHosted, url, key, name, otelCfg)
 		},
 	}
 	cmd.Flags().IntVarP(&port, "port", "P", 8080, "Server port")
@@ -1171,10 +1269,21 @@ func (rr *runResources) shutdown() {
 	}
 }
 
-func executeRun(path string, rawParams []string, data string, noColor bool, exportURL, apiKey, exporterName string) error {
-	wf, err := parser.Parse(path)
+func executeRun(
+	path string, rawParams []string, data string, noColor bool,
+	exportURL, apiKey, exporterName string, otelCfg tfotel.Config,
+) error {
+	otelCfg.Sync = true
+
+	otelResult, err := tfotel.Setup(context.Background(), otelCfg)
 	if err != nil {
-		return err
+		return fmt.Errorf("otel setup: %w", err)
+	}
+	defer shutdownOTel(otelResult)
+
+	wf, parseErr := parser.Parse(path)
+	if parseErr != nil {
+		return parseErr
 	}
 
 	renderer := &cliRenderer{
@@ -1191,9 +1300,18 @@ func executeRun(path string, rawParams []string, data string, noColor bool, expo
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exec, services, closeFn, err := setupActionRegistry(wf, bus)
-	if err != nil {
-		return err
+	tracer := tfotel.NewTracer(otelResult.TracerProvider)
+
+	bm, bmErr := tfotel.NewBusinessMetrics(otelResult.MeterProvider)
+	if bmErr != nil {
+		return fmt.Errorf("otel business metrics: %w", bmErr)
+	}
+
+	logger := buildLogger(slog.LevelError+1, otelResult)
+
+	exec, services, closeFn, setupErr := setupActionRegistry(wf, bus, logger, tracer, bm)
+	if setupErr != nil {
+		return setupErr
 	}
 
 	defer closeFn()
@@ -1207,13 +1325,13 @@ func executeRun(path string, rawParams []string, data string, noColor bool, expo
 }
 
 func setupActionRegistry(
-	wf *parser.Workflow, bus *event.Bus,
+	wf *parser.Workflow, bus *event.Bus, logger *slog.Logger,
+	tracer *tfotel.Tracer, bm *tfotel.BusinessMetrics,
 ) (*engine.Executor, *runtime.ActionServices, func(), error) {
 	reg := action.NewRegistry()
 	action.RegisterBuiltins(reg)
 
 	dbPool := runtime.NewMemoryDBPool()
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError + 1}))
 
 	services := &runtime.ActionServices{
 		DBPool:     dbPool,
@@ -1236,7 +1354,7 @@ func setupActionRegistry(
 		}
 	}
 
-	exec := engine.NewExecutor(reg, bus, logger, wf.Sensitive)
+	exec := engine.NewExecutor(reg, bus, logger, wf.Sensitive, tracer, bm)
 
 	return exec, services, func() {
 		err := dbPool.Close()
@@ -1605,7 +1723,7 @@ func runSingleTestCase(wf *parser.Workflow, caseName string) error {
 	reg.SetAllowlist(cliAllowedActions(reg.Names()))
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError + 1}))
-	exec := engine.NewExecutor(reg, bus, logger, wf.Sensitive)
+	exec := engine.NewExecutor(reg, bus, logger, wf.Sensitive, nil, nil)
 
 	services := &runtime.ActionServices{
 		DBPool:     runtime.NewMemoryDBPool(),
@@ -1671,10 +1789,19 @@ func executeValidate(path string, noColor bool) error {
 	return nil
 }
 
-func executeServe(path string, port int, maxExecs int, selfHosted bool, exportURL, apiKey, exporterName string) error {
-	wf, err := parser.Parse(path)
+func executeServe(
+	path string, port int, maxExecs int, selfHosted bool,
+	exportURL, apiKey, exporterName string, otelCfg tfotel.Config,
+) error {
+	otelResult, err := tfotel.Setup(context.Background(), otelCfg)
 	if err != nil {
-		return err
+		return fmt.Errorf("otel setup: %w", err)
+	}
+	defer shutdownOTel(otelResult)
+
+	wf, parseErr := parser.Parse(path)
+	if parseErr != nil {
+		return parseErr
 	}
 
 	bus := event.NewBus()
@@ -1684,12 +1811,18 @@ func executeServe(path string, port int, maxExecs int, selfHosted bool, exportUR
 	action.RegisterBuiltins(reg)
 
 	if !selfHosted {
-		// Defense-in-depth: block unsafe actions even if they slipped into the build.
 		reg.SetAllowlist(saasAllowedActions(reg.Names()))
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	exec := engine.NewExecutor(reg, bus, logger, wf.Sensitive)
+	tracer := tfotel.NewTracer(otelResult.TracerProvider)
+
+	bm, bmErr := tfotel.NewBusinessMetrics(otelResult.MeterProvider)
+	if bmErr != nil {
+		return fmt.Errorf("otel business metrics: %w", bmErr)
+	}
+
+	logger := buildLogger(slog.LevelInfo, otelResult)
+	exec := engine.NewExecutor(reg, bus, logger, wf.Sensitive, tracer, bm)
 
 	execStore := store.NewExecutionStore(maxExecs)
 

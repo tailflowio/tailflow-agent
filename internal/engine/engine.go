@@ -16,25 +16,37 @@ import (
 	"github.com/google/uuid"
 	"github.com/tailflow/tailflow/internal/action"
 	"github.com/tailflow/tailflow/internal/event"
+	tfotel "github.com/tailflow/tailflow/internal/otel"
 	"github.com/tailflow/tailflow/internal/parser"
 	"github.com/tailflow/tailflow/internal/runtime"
 )
 
 type Executor struct {
-	registry  *action.Registry
-	bus       *event.Bus
-	eval      *runtime.ExprEvaluator
-	logger    *slog.Logger
-	sensitive *SensitiveRegistry
+	registry        *action.Registry
+	bus             *event.Bus
+	eval            *runtime.ExprEvaluator
+	logger          *slog.Logger
+	sensitive       *SensitiveRegistry
+	tracer          *tfotel.Tracer
+	businessMetrics *tfotel.BusinessMetrics
 }
 
-func NewExecutor(registry *action.Registry, bus *event.Bus, logger *slog.Logger, sensitiveKeys []string) *Executor {
+func NewExecutor(
+	registry *action.Registry, bus *event.Bus, logger *slog.Logger,
+	sensitiveKeys []string, tracer *tfotel.Tracer, businessMetrics *tfotel.BusinessMetrics,
+) *Executor {
+	if tracer == nil {
+		tracer = tfotel.NewTracer(nil)
+	}
+
 	return &Executor{
-		registry:  registry,
-		bus:       bus,
-		eval:      runtime.NewExprEvaluator(),
-		logger:    logger,
-		sensitive: NewSensitiveRegistry(sensitiveKeys),
+		registry:        registry,
+		bus:             bus,
+		eval:            runtime.NewExprEvaluator(),
+		logger:          logger,
+		sensitive:       NewSensitiveRegistry(sensitiveKeys),
+		tracer:          tracer,
+		businessMetrics: businessMetrics,
 	}
 }
 
@@ -77,10 +89,20 @@ func (e *Executor) Execute(
 		execCtx.TestCaseName = opts[0].TestCaseName
 	}
 
+	triggerType := ""
+	if len(opts) > 0 && opts[0].TriggerData != nil {
+		triggerType, _ = opts[0].TriggerData["method"].(string)
+	}
+
+	ctx, finishWorkflow := e.tracer.StartWorkflow(ctx, executionID, wf.Name, triggerType)
+	e.businessMetrics.RecordWorkflowStarted(ctx, wf.Name)
+
 	e.bus.Publish(event.NewEvent(event.WorkflowStarted, executionID, "", fmt.Sprintf("workflow %q started", wf.Name)))
 
 	dag, err := BuildDAG(wf.Steps)
 	if err != nil {
+		finishWorkflow("failed", err)
+
 		return nil, fmt.Errorf("build DAG: %w", err)
 	}
 
@@ -90,7 +112,11 @@ func (e *Executor) Execute(
 		e.executeOnError(ctx, parser.Step{OnError: wf.OnError}, execCtx)
 	}
 
-	return e.buildExecuteResult(ctx, wf.Name, execCtx, execErr, executionID, startedAt), nil
+	result := e.buildExecuteResult(ctx, wf.Name, execCtx, execErr, executionID, startedAt)
+	finishWorkflow(result.Status, result.Error)
+	e.businessMetrics.RecordWorkflowCompleted(ctx, wf.Name, result.Status, tfotel.DurationMs(startedAt))
+
+	return result, nil
 }
 
 func resolveExecutionID(opts []ExecuteOptions) string {
@@ -429,11 +455,18 @@ func (e *Executor) executeNode(ctx context.Context, node *DAGNode, execCtx *runt
 
 	resolvedConfig, err := e.resolveStepConfig(step, execCtx)
 	if err != nil {
+		_, finishStep := e.tracer.StartStep(ctx, step.ID, step.Action, nil)
+		finishStep("failed", err, nil, nil)
+
 		return err
 	}
 
+	ctx, finishStep := e.tracer.StartStep(ctx, step.ID, step.Action, resolvedConfig)
+
 	act, err := e.registry.Create(step.Action)
 	if err != nil {
+		finishStep("failed", err, nil, nil)
+
 		return err
 	}
 
@@ -444,13 +477,29 @@ func (e *Executor) executeNode(ctx context.Context, node *DAGNode, execCtx *runt
 
 	err = act.Validate(actCtx)
 	if err != nil {
+		finishStep("failed", fmt.Errorf("validate: %w", err), nil, nil)
+
 		return fmt.Errorf("validate: %w", err)
 	}
 
 	output, execErr := e.executeWithRetry(ctx, step, act, actCtx, execCtx, logger)
 	if execErr != nil {
+		maskedInput := e.sensitive.MaskMap(e.prepareStepInput(step, resolvedConfig, execCtx))
+		finishStep("failed", execErr, maskedInput, nil)
+		e.businessMetrics.RecordStepCompleted(
+			ctx, step.ID, step.Action, "failed", tfotel.DurationMs(stepStartedAt),
+		)
+		e.businessMetrics.RecordStepError(ctx, step.ID, step.Action, stepErrorCode(execErr))
+
 		return e.handleStepError(ctx, step, output, execErr, execCtx, &stepStartedAt, logger)
 	}
+
+	maskedInput := e.sensitive.MaskMap(e.prepareStepInput(step, resolvedConfig, execCtx))
+	maskedOutput := e.sensitive.MaskAny(output)
+	finishStep("success", nil, maskedInput, maskedOutput)
+	e.businessMetrics.RecordStepCompleted(
+		ctx, step.ID, step.Action, "success", tfotel.DurationMs(stepStartedAt),
+	)
 
 	e.recordStepSuccess(step, output, execCtx, &stepStartedAt, logger)
 
@@ -606,6 +655,18 @@ func (e *Executor) newLogEmitter(stepID string, execCtx *runtime.ExecutionContex
 	}
 }
 
+func (e *Executor) newPrintEmitter(stepID string, execCtx *runtime.ExecutionContext) func(string) {
+	return func(msg string) {
+		e.bus.Publish(event.Event{
+			Type:        event.StepLog,
+			Timestamp:   time.Now(),
+			ExecutionID: execCtx.ExecutionID,
+			StepID:      stepID,
+			Message:     msg,
+		})
+	}
+}
+
 func (e *Executor) createActionContext(
 	ctx context.Context, step parser.Step, resolvedConfig map[string]any,
 	execCtx *runtime.ExecutionContext, logger *slog.Logger, emitLog func(string),
@@ -618,6 +679,7 @@ func (e *Executor) createActionContext(
 		Logger:    logger,
 		Services:  execCtx.Services,
 		EmitLog:   emitLog,
+		EmitPrint: e.newPrintEmitter(step.ID, execCtx),
 		RunAction: e.newRunAction(ctx, step, execCtx, logger, emitLog),
 	}
 }
@@ -641,13 +703,14 @@ func (e *Executor) newRunAction(
 		}
 
 		subCtx := &action.ActionContext{
-			Context:  ctx,
-			Config:   resolved,
-			ExecCtx:  execCtx,
-			StepID:   step.ID,
-			Logger:   logger,
-			Services: execCtx.Services,
-			EmitLog:  emitLog,
+			Context:   ctx,
+			Config:    resolved,
+			ExecCtx:   execCtx,
+			StepID:    step.ID,
+			Logger:    logger,
+			Services:  execCtx.Services,
+			EmitLog:   emitLog,
+			EmitPrint: e.newPrintEmitter(step.ID, execCtx),
 		}
 
 		validateErr := subAct.Validate(subCtx)
@@ -694,12 +757,24 @@ func (e *Executor) executeWithRetry(
 			}
 		}
 
-		timeoutCtx, timeoutCancel := e.applyTimeout(ctx, step)
+		retryCtx := ctx
+		var finishRetry func(error)
+
+		if maxAttempts > 1 {
+			retryCtx, finishRetry = e.tracer.StartRetry(ctx, attempt, maxAttempts)
+			e.businessMetrics.RecordStepRetry(ctx, step.ID, step.Action)
+		}
+
+		timeoutCtx, timeoutCancel := e.applyTimeout(retryCtx, step)
 		actCtx.Context = timeoutCtx
 
 		output, execErr = act.Execute(actCtx)
 
 		timeoutCancel()
+
+		if finishRetry != nil {
+			finishRetry(execErr)
+		}
 
 		if execErr == nil {
 			break
@@ -862,18 +937,24 @@ func (e *Executor) emitLogActionOutput(step parser.Step, output any, execCtx *ru
 		logMsg, _ = outMap["message"].(string)
 		logLevel, _ = outMap["level"].(string)
 	default:
-		// table action already emits step.log via EmitLog during execution
 		return
 	}
 
+	stream, _ := step.Config["stream"].(bool)
+
 	for _, line := range strings.Split(strings.TrimRight(logMsg, "\n"), "\n") {
+		data := map[string]any{"level": logLevel}
+		if stream {
+			data["stream"] = true
+		}
+
 		e.bus.Publish(event.Event{
 			Type:        event.StepLog,
 			Timestamp:   time.Now(),
 			ExecutionID: execCtx.ExecutionID,
 			StepID:      step.ID,
 			Message:     line,
-			Data:        map[string]any{"level": logLevel},
+			Data:        data,
 		})
 	}
 }
@@ -914,6 +995,22 @@ func (e *Executor) executeOnError(ctx context.Context, step parser.Step, execCtx
 
 		execCtx.SetStepResult(errStep.ID, &runtime.StepResult{Status: runtime.StatusSuccess, Output: output})
 	}
+}
+
+func stepErrorCode(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+
+	if errors.Is(err, context.Canceled) {
+		return "canceled"
+	}
+
+	return "action_failed"
 }
 
 func stepError(stepID string, err error) *runtime.StepError {

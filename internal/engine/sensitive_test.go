@@ -178,6 +178,50 @@ func (s *SensitiveTestSuite) TestMaskMap_NilMap() {
 	s.Nil(r.MaskMap(nil))
 }
 
+func (s *SensitiveTestSuite) TestMaskAny_Map() {
+	r := NewSensitiveRegistry([]string{"token"})
+	m := map[string]any{"token": "secret", "status": "ok"}
+
+	masked := r.MaskAny(m)
+
+	out, ok := masked.(map[string]any)
+	s.Require().True(ok)
+	s.Equal(RedactedValue, out["token"])
+	s.Equal("ok", out["status"])
+	s.Equal("secret", m["token"])
+}
+
+func (s *SensitiveTestSuite) TestMaskAny_Slice() {
+	r := NewSensitiveRegistry([]string{"token"})
+	v := []any{map[string]any{"token": "secret"}}
+
+	masked := r.MaskAny(v)
+
+	out, ok := masked.([]any)
+	s.Require().True(ok)
+	s.Equal(RedactedValue, out[0].(map[string]any)["token"])
+}
+
+func (s *SensitiveTestSuite) TestMaskAny_Scalar() {
+	r := NewSensitiveRegistry([]string{"token"})
+
+	s.Equal("hello", r.MaskAny("hello"))
+	s.Equal(42, r.MaskAny(42))
+}
+
+func (s *SensitiveTestSuite) TestMaskAny_Nil() {
+	r := NewSensitiveRegistry([]string{"token"})
+
+	s.Nil(r.MaskAny(nil))
+}
+
+func (s *SensitiveTestSuite) TestMaskAny_NoKeys() {
+	r := NewSensitiveRegistry(nil)
+	m := map[string]any{"token": "secret"}
+
+	s.Equal(m, r.MaskAny(m))
+}
+
 func (s *SensitiveTestSuite) TestMaskValue_ScalarUntouched() {
 	r := NewSensitiveRegistry([]string{"token"})
 

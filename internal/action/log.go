@@ -29,6 +29,29 @@ func (a *LogAction) Execute(ctx *ActionContext) (any, error) {
 		level = fmt.Sprintf("%v", l)
 	}
 
+	if isStream(ctx) {
+		ctx.EmitLog(message)
+
+		return map[string]any{"message": message, "level": level}, nil
+	}
+
+	logWithLevel(ctx, level, message)
+
+	return map[string]any{"message": message, "level": level}, nil
+}
+
+func isStream(ctx *ActionContext) bool {
+	s, ok := ctx.Config["stream"]
+	if !ok {
+		return false
+	}
+
+	b, ok := s.(bool)
+
+	return ok && b
+}
+
+func logWithLevel(ctx *ActionContext, level, message string) {
 	switch level {
 	case "debug":
 		ctx.Logger.Debug(message)
@@ -41,6 +64,4 @@ func (a *LogAction) Execute(ctx *ActionContext) (any, error) {
 	default:
 		ctx.Logger.Log(ctx, slog.LevelInfo, message)
 	}
-
-	return map[string]any{"message": message, "level": level}, nil
 }

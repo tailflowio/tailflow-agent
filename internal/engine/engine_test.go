@@ -20,7 +20,7 @@ func newTestExecutor() (*Executor, *event.Bus) {
 	reg := action.NewRegistry()
 	action.RegisterBuiltins(reg)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return NewExecutor(reg, bus, logger, nil), bus
+	return NewExecutor(reg, bus, logger, nil, nil, nil), bus
 }
 
 type EngineTestSuite struct {
@@ -1563,5 +1563,51 @@ func (s *EngineTestSuite) TestTestMode_PartialMatchSliceElementMismatch() {
 	result, err := exec.Execute(context.Background(), wf, nil, ExecuteOptions{TestCaseName: "slice-elem"})
 	s.Require().NoError(err)
 	s.Equal("failed", result.Status)
+}
+
+func (s *EngineTestSuite) TestTableActionEmitsPrintLogs() {
+	exec, bus := newTestExecutor()
+	defer bus.Close()
+
+	ch := bus.Subscribe(64)
+
+	wf := &parser.Workflow{
+		Version: "2.0",
+		Name:    "table-test",
+		Steps: []parser.Step{
+			{
+				ID:     "t1",
+				Action: "table",
+				Config: map[string]any{
+					"columns": []any{
+						map[string]any{"header": "Name", "field": "name"},
+					},
+					"items": []any{
+						map[string]any{"name": "Alice"},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := exec.Execute(context.Background(), wf, nil)
+	s.Require().NoError(err)
+	s.Equal("success", result.Status)
+
+	var logs []event.Event
+
+	for len(ch) > 0 {
+		ev := <-ch
+		if ev.Type == event.StepLog {
+			logs = append(logs, ev)
+		}
+	}
+
+	s.NotEmpty(logs)
+
+	for _, ev := range logs {
+		_, hasStream := ev.Data["stream"]
+		s.False(hasStream, "table logs should not be stream logs")
+	}
 }
 

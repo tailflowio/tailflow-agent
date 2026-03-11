@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	tfotel "github.com/tailflow/tailflow/internal/otel"
 )
 
 type HTTPAction struct{}
@@ -45,6 +47,7 @@ func (a *HTTPAction) Execute(ctx *ActionContext) (any, error) {
 	}
 
 	applyHTTPHeaders(req, ctx, bodyReader)
+	tfotel.InjectTraceContext(req)
 
 	client := &http.Client{Timeout: resolveHTTPTimeout(ctx)}
 
