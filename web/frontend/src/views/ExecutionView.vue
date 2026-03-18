@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick, onMounted, computed, watch } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useWorkflowApi, type Graph, type Execution } from '@/composables/useWorkflowApi'
@@ -7,8 +7,7 @@ import { useWorkflowApi, type Graph, type Execution } from '@/composables/useWor
 const { t } = useI18n()
 import { useSSE } from '@/composables/useSSE'
 import type { EventRow } from '@tailflow/shared'
-import { JsonView } from '@tailflow/shared'
-import WorkflowGraph from '@/components/WorkflowGraph.vue'
+import StepTimeline from '@/components/StepTimeline.vue'
 import EventTimeline from '@tailflow/shared/components/EventTimeline.vue'
 
 const route = useRoute()
@@ -23,12 +22,10 @@ const initialLoading = ref(true)
 
 const { events, connected, finished, stepStatuses, stepVolumes, stepIterations, stepOutputHistory, stepPipelineProgress, connect } = useSSE(executionId, {
   onDisconnect: async () => {
-    // SSE dropped without workflow.completed — re-fetch to check if execution finished
     try {
       const fresh = await api.getExecution(executionId) as Execution
       if (fresh.finished_at) {
         execution.value = fresh
-        // Sync step statuses from final data
         if (fresh.steps) {
           for (const [id, step] of Object.entries(fresh.steps)) {
             if (step.status) stepStatuses.value[id] = step.status
@@ -80,7 +77,6 @@ async function retryFetch() {
 onMounted(async () => {
   await fetchExecution()
 
-  // Retry once if the initial fetch failed (execution may not be persisted yet)
   if (!execution.value && !fetchError.value) {
     await new Promise(r => setTimeout(r, 500))
     await fetchExecution()
@@ -89,18 +85,14 @@ onMounted(async () => {
   initialLoading.value = false
 
   if (execution.value) {
-    // Always connect SSE: replays stored events for finished executions,
-    // streams live events for running ones
     connect()
   }
 })
 
-// Re-fetch execution when SSE stream finishes and sync step statuses
 watch(finished, (v) => {
   if (v) {
     api.getExecution(executionId).then(e => {
       execution.value = e as Execution
-      // Sync stepStatuses from final execution data to fix any missed SSE events
       if (e.steps) {
         for (const [id, step] of Object.entries(e.steps)) {
           if (step.status) {
@@ -122,8 +114,6 @@ const duration = computed(() => {
 })
 
 const orderedSteps = computed(() => {
-  // Use graph node order (matches workflow YAML order) so ALL steps appear
-  // even before they start, and the order is stable.
   const nodes = graph.value?.nodes ?? []
   const apiSteps = execution.value?.steps ?? {}
   return nodes.map(n => {
@@ -143,7 +133,6 @@ async function cancelExec() {
   cancelling.value = true
   try {
     await api.cancelExecution(executionId)
-    // Re-fetch to get updated status
     execution.value = await api.getExecution(executionId) as Execution
   } catch {} finally {
     cancelling.value = false
@@ -153,144 +142,15 @@ async function cancelExec() {
 function statusBadge(s: string) {
   if (s === 'success') return 'bg-emerald-400/15 text-emerald-400'
   if (s === 'failed') return 'bg-red-400/15 text-red-400'
-  if (s === 'cancelled') return 'bg-g-7/20 text-g-9'
+  if (s === 'cancelled') return 'bg-orange-400/15 text-orange-400'
   if (s === 'running') return 'bg-amber-400/15 text-amber-400'
   if (s === 'waiting') return 'bg-amber-400/15 text-amber-400'
+  if (s === 'pending') return 'bg-violet-400/15 text-violet-400'
   return 'bg-g-7/20 text-g-9'
 }
+
 function isStatusAnimated(s: string) {
   return s === 'running' || s === 'waiting'
-}
-function statusDot(s: string) {
-  if (s === 'success') return 'bg-emerald-400'
-  if (s === 'failed') return 'bg-red-400'
-  if (s === 'running' || s === 'waiting') return 'bg-amber-400 animate-pulse'
-  if (s === 'skipped' || s === 'cancelled') return 'bg-g-7'
-  return 'bg-g-7'
-}
-
-function stepStatus(stepId: string, result: any): string {
-  return stepStatuses.value[stepId] ?? result?.status ?? 'pending'
-}
-
-const dagAutoHeight = ref(400)
-const dagCollapsed = ref(localStorage.getItem('tailflow-exec-dag-collapsed') !== 'false')
-const resultsCollapsed = ref(localStorage.getItem('tailflow-exec-results-collapsed') !== 'false')
-
-function toggleResults() {
-  resultsCollapsed.value = !resultsCollapsed.value
-  if (resultsCollapsed.value) collapseAll()
-  localStorage.setItem('tailflow-exec-results-collapsed', String(resultsCollapsed.value))
-}
-
-function toggleDag() {
-  dagCollapsed.value = !dagCollapsed.value
-  localStorage.setItem('tailflow-exec-dag-collapsed', String(dagCollapsed.value))
-}
-
-const dagStepCount = computed(() => graph.value?.nodes?.length ?? 0)
-
-function onGraphReady(payload: { maxY: number }) {
-  dagAutoHeight.value = Math.max(300, payload.maxY + 120)
-}
-
-const expandedSteps = ref<Record<string, boolean>>({})
-const deferredSteps = ref<Record<string, boolean>>({})
-const expandedIterations = ref<Record<string, boolean>>({})
-const focusedStepId = ref<string | null>(null)
-
-function isStepExpanded(stepId: string): boolean {
-  return expandedSteps.value[stepId] ?? false
-}
-
-function isStepContentReady(stepId: string): boolean {
-  return deferredSteps.value[stepId] ?? false
-}
-
-function deferContent(stepId: string) {
-  // Double rAF: first rAF lets browser paint the spinner, second rAF triggers heavy render
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => { deferredSteps.value[stepId] = true })
-  })
-}
-
-function toggleStep(stepId: string) {
-  const opening = !isStepExpanded(stepId)
-  if (opening) {
-    expandedSteps.value[stepId] = true
-    deferredSteps.value[stepId] = false
-    deferContent(stepId)
-  } else {
-    // Hide heavy content first (instant), then collapse container after paint
-    deferredSteps.value[stepId] = false
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => { expandedSteps.value[stepId] = false })
-    })
-  }
-}
-
-function onDagStepClick(stepId: string) {
-  expandedSteps.value[stepId] = true
-  deferredSteps.value[stepId] = false
-  deferContent(stepId)
-  focusedStepId.value = stepId
-  nextTick(() => {
-    const el = document.getElementById('step-' + stepId)
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    }
-    setTimeout(() => { focusedStepId.value = null }, 1500)
-  })
-}
-
-function collapseAll() {
-  expandedIterations.value = {}
-  const collapsed: Record<string, boolean> = {}
-  for (const [stepId] of orderedSteps.value) {
-    collapsed[stepId] = false
-  }
-  expandedSteps.value = collapsed
-  deferredSteps.value = {}
-}
-
-function toggleIteration(key: string) {
-  expandedIterations.value[key] = !expandedIterations.value[key]
-}
-
-function isIterationExpanded(key: string): boolean {
-  return expandedIterations.value[key] ?? false
-}
-
-function formatIterationTime(timestamp: string): string {
-  const d = new Date(timestamp)
-  return d.toLocaleTimeString('fr-FR', { hour12: false, fractionalSecondDigits: 3 } as Intl.DateTimeFormatOptions)
-}
-
-function isPipelineIterExpanded(stepId: string, iteration: number): boolean {
-  const key = `${stepId}-pipe-${iteration}`
-  return expandedIterations.value[key] ?? true
-}
-
-function pipelineGrouped(stepId: string) {
-  const entries = stepPipelineProgress.value[stepId]
-  if (!entries || entries.length === 0) return []
-  const grouped: Record<number, typeof entries> = {}
-  for (const e of entries) {
-    if (!grouped[e.iteration]) grouped[e.iteration] = []
-    grouped[e.iteration].push(e)
-  }
-  return Object.entries(grouped).map(([iter, steps]) => ({
-    iteration: parseInt(iter),
-    totalIterations: steps[0].totalIterations,
-    totalSteps: steps[0].totalSteps,
-    steps,
-  }))
-}
-
-function pipelineDot(status: string) {
-  if (status === 'ok') return 'bg-emerald-400'
-  if (status === 'failed') return 'bg-red-400'
-  return 'bg-g-12 animate-pulse'
 }
 
 const eventRows = computed<EventRow[]>(() =>
@@ -307,13 +167,11 @@ const eventRows = computed<EventRow[]>(() =>
 </script>
 
 <template>
-  <!-- Loading state -->
   <div v-if="initialLoading && !execution" class="flex flex-col items-center justify-center py-32">
     <div class="w-6 h-6 border-2 border-g-5 border-t-g-9 rounded-full animate-spin" />
     <span class="mt-3 text-sm text-g-7">{{ t('executions.loading') }}</span>
   </div>
 
-  <!-- Error state -->
   <div v-else-if="fetchError && !execution" class="flex flex-col items-center justify-center py-32">
     <div class="w-12 h-12 rounded-full bg-red-400/10 flex items-center justify-center mb-4">
       <svg class="w-6 h-6 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
@@ -330,14 +188,12 @@ const eventRows = computed<EventRow[]>(() =>
     </button>
   </div>
 
-  <div v-else>
+  <div v-else class="space-y-6">
     <!-- Header -->
-    <div class="mb-6 space-y-3">
-      <!-- Breadcrumb -->
-      <div class="flex items-center gap-4">
+    <div>
+      <div class="flex items-center gap-4 mb-3">
         <button @click="router.push('/')" class="text-g-8 hover:text-g-12 text-sm transition-colors cursor-pointer">&larr; {{ t('executions.title') }}</button>
       </div>
-      <!-- Title + status -->
       <div class="flex items-start justify-between">
         <div>
           <h1 class="text-lg font-semibold text-g-14">{{ execution?.workflow_name || 'Execution' }}</h1>
@@ -347,205 +203,65 @@ const eventRows = computed<EventRow[]>(() =>
           </div>
         </div>
         <div class="flex items-center gap-2">
-          <span v-if="connected" class="flex items-center gap-1.5 text-[11px] text-emerald-400 font-medium mr-1">
-            <span class="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse" />
+          <span
+            v-if="connected && !finished"
+            class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-400/15 text-emerald-400"
+          >
+            <span class="relative flex h-1.5 w-1.5">
+              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span class="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-400"></span>
+            </span>
             {{ t('execution.live') }}
           </span>
           <span :class="['inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium', statusBadge(statusLabel)]">
             <span :class="['w-1.5 h-1.5 rounded-full bg-current', isStatusAnimated(statusLabel) ? 'pulse-dot' : 'opacity-50']" />
             {{ statusLabel }}
           </span>
-          <button
-            v-if="canCancel"
-            @click="cancelExec"
-            :disabled="cancelling"
-            class="ml-1 px-3 py-1 text-[12px] font-medium rounded-md border border-red-400/30 text-red-400 hover:bg-red-400/10 transition-colors disabled:opacity-50 cursor-pointer"
-          >
-            {{ cancelling ? t('execution.cancelling') : t('execution.cancel') }}
-          </button>
         </div>
       </div>
+    </div>
+
+    <!-- Cancel banner -->
+    <div
+      v-if="canCancel"
+      class="flex items-center justify-between px-4 py-3 rounded-lg border border-amber-400/20 bg-amber-400/5"
+    >
+      <div class="flex items-center gap-3">
+        <svg class="w-4 h-4 text-amber-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 6v6l4 2"/></svg>
+        <p class="text-sm text-g-11">Execution is currently running.</p>
+      </div>
+      <button
+        @click="cancelExec"
+        :disabled="cancelling"
+        class="shrink-0 ml-4 px-3 py-1.5 text-xs font-medium rounded-md bg-red-400/10 text-red-400 hover:bg-red-400/20 transition-colors disabled:opacity-50 cursor-pointer"
+      >
+        <span v-if="cancelling" class="flex items-center gap-1.5">
+          <svg class="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2.5" class="opacity-25"/><path d="M12 2a10 10 0 0110 10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" class="opacity-75"/></svg>
+          {{ t('execution.cancelling') }}
+        </span>
+        <span v-else>{{ t('execution.cancel') }}</span>
+      </button>
     </div>
 
     <!-- Error -->
     <div
       v-if="execution?.error"
-      class="mb-5 px-4 py-3 rounded-lg text-[13px] bg-red-400/5 text-red-400 border border-red-400/20 font-mono"
+      class="px-4 py-3 rounded-lg text-[13px] bg-red-400/5 text-red-400 border border-red-400/20 font-mono"
     >
       {{ execution.error }}
     </div>
 
-    <!-- DAG -->
-    <div class="bg-g-2 border border-g-5 rounded-lg mb-6 overflow-hidden lm-card">
-      <button
-        @click="toggleDag"
-        class="w-full px-4 py-2.5 flex items-center gap-2 text-left cursor-pointer hover:bg-g-3 transition-colors"
-      >
-        <span class="text-[10px] text-g-7">{{ dagCollapsed ? '▸' : '▾' }}</span>
-        <span class="text-sm font-medium text-g-12">{{ t('execution.graph') }}</span>
-        <span class="text-[11px] text-g-7 font-mono">{{ dagStepCount }} steps</span>
-        <span class="ml-auto text-[10px] text-g-7 font-mono uppercase tracking-wider">{{ dagCollapsed ? t('execution.expand') : t('execution.collapse') }}</span>
-      </button>
-      <div v-if="!dagCollapsed" :style="{ height: dagAutoHeight + 'px' }">
-        <WorkflowGraph
-          v-if="graph"
-          :graph="graph"
-          :step-statuses="stepStatuses"
-          :step-iterations="stepIterations"
-          @nodeClick="onDagStepClick"
-          @layout-ready="onGraphReady"
-        />
-        <div v-else class="flex items-center justify-center h-full">
-          <div class="w-5 h-5 border-2 border-g-7 border-t-g-12 rounded-full animate-spin" />
-        </div>
-      </div>
-    </div>
-
-    <!-- Step results with volume inspector -->
-    <div v-if="orderedSteps.length > 0" class="bg-g-2 border border-g-5 rounded-lg mb-6 overflow-hidden lm-card">
-      <button
-        @click="toggleResults"
-        class="w-full px-4 py-2.5 flex items-center gap-2 text-left cursor-pointer hover:bg-g-3 transition-colors"
-      >
-        <span class="text-[10px] text-g-7">{{ resultsCollapsed ? '▸' : '▾' }}</span>
-        <span class="text-sm font-medium text-g-12">{{ t('execution.results') }}</span>
-        <span class="text-[11px] text-g-7 font-mono">{{ orderedSteps.length }} steps</span>
-        <span class="ml-auto text-[10px] text-g-7 font-mono uppercase tracking-wider">{{ resultsCollapsed ? t('execution.expand') : t('execution.collapse') }}</span>
-      </button>
-      <div v-if="!resultsCollapsed">
-        <div
-          v-for="[stepId, result] in orderedSteps"
-          :key="stepId"
-          :id="'step-' + stepId"
-          :class="[
-            'px-4 py-3 border-b border-g-5 last:border-b-0',
-            focusedStepId === stepId
-              ? 'ring-1 ring-white/60 bg-g-3 transition-all duration-700'
-              : ''
-          ]"
-        >
-          <button
-            @click="toggleStep(stepId as string)"
-            class="flex items-center gap-2.5 mb-1 w-full text-left cursor-pointer group"
-          >
-            <span class="text-[14px] font-mono text-g-12">{{ stepId }}</span>
-            <span :class="['inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium', statusBadge(stepStatus(stepId as string, result))]">
-              <span :class="['w-1.5 h-1.5 rounded-full bg-current', isStatusAnimated(stepStatus(stepId as string, result)) ? 'pulse-dot' : 'opacity-50']" />
-              {{ stepStatus(stepId as string, result) }}
-            </span>
-            <span
-              v-if="stepIterations[stepId as string] && stepIterations[stepId as string] > 1"
-              class="text-[10px] font-mono font-semibold rounded-full px-1.5 leading-[18px] bg-amber-400/15 text-amber-400 border border-amber-400/25"
-            >
-              x{{ stepIterations[stepId as string] }}
-            </span>
-          </button>
-
-          <template v-if="isStepExpanded(stepId as string)">
-          <!-- Deferred loading -->
-          <div v-if="!isStepContentReady(stepId as string)" class="flex items-center justify-center gap-2 py-4">
-            <div class="w-3.5 h-3.5 border-2 border-g-5 border-t-g-9 rounded-full animate-spin" />
-            <span class="text-[12px] text-g-7">{{ t('execution.loading') }}</span>
-          </div>
-          <template v-else>
-          <!-- Waiting badge -->
-          <div
-            v-if="stepVolumes[stepId as string]?.waiting"
-            class="ml-[18px] mt-1 mb-2 inline-flex items-center gap-2 text-[11px] font-mono text-amber-400 bg-amber-400/10 border border-amber-400/20 rounded px-2 py-1"
-          >
-            <span class="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
-            {{ t('execution.waiting', { type: stepVolumes[stepId as string].waiting!.type }) }}
-          </div>
-
-          <!-- Input -->
-          <div v-if="stepVolumes[stepId as string]?.input" class="ml-[18px] mt-2">
-            <span class="text-[11px] font-mono text-g-9 uppercase tracking-wider">{{ t('execution.input') }}</span>
-            <div class="mt-1 bg-g-3 rounded px-3 py-2 overflow-x-auto max-h-[400px] overflow-y-auto">
-              <JsonView :data="stepVolumes[stepId as string].input" />
-            </div>
-          </div>
-
-          <!-- Output (single) — hidden when step failed -->
-          <div
-            v-if="stepStatus(stepId as string, result) !== 'failed' && (stepVolumes[stepId as string]?.output || result.output) && !(stepOutputHistory[stepId as string]?.length > 1)"
-            class="ml-[18px] mt-2"
-          >
-            <span class="text-[11px] font-mono text-g-9 uppercase tracking-wider">{{ t('execution.output') }}</span>
-            <div class="mt-1 bg-g-3 rounded px-3 py-2 overflow-x-auto max-h-[400px] overflow-y-auto">
-              <JsonView :data="stepVolumes[stepId as string]?.output ?? result.output" />
-            </div>
-          </div>
-
-          <!-- Output per-iteration history (multi-iteration) -->
-          <div v-if="stepOutputHistory[stepId as string]?.length > 1" class="ml-[18px] mt-2">
-            <span class="text-[11px] font-mono text-g-9 uppercase tracking-wider">{{ t('execution.output') }}</span>
-            <div
-              v-for="(entry, idx) in stepOutputHistory[stepId as string]"
-              :key="idx"
-              class="mb-1 mt-1"
-            >
-              <button
-                @click="toggleIteration(`${stepId}-out-${idx}`)"
-                class="text-[11px] font-mono text-g-9 hover:text-g-13 transition-colors flex items-center gap-2"
-              >
-                <span>{{ isIterationExpanded(`${stepId}-out-${idx}`) ? '▾' : '▸' }}</span>
-                <span class="text-[10px] font-semibold rounded-full px-1.5 leading-[18px] bg-amber-400/15 text-amber-400 border border-amber-400/25">
-                  x{{ entry.iteration }}
-                </span>
-                <span class="text-[10px] text-g-7">{{ formatIterationTime(entry.timestamp) }}</span>
-              </button>
-              <div
-                v-if="isIterationExpanded(`${stepId}-out-${idx}`)"
-                class="mt-1 bg-g-3 rounded px-3 py-2 overflow-x-auto"
-              >
-                <JsonView :data="entry.output" />
-              </div>
-            </div>
-          </div>
-
-          <!-- Pipeline progress -->
-          <div v-if="pipelineGrouped(stepId as string).length > 0" class="ml-[18px] mt-2">
-            <span class="text-[11px] font-mono text-amber-400 font-medium uppercase tracking-wider">{{ t('execution.pipeline') }}</span>
-            <div
-              v-for="group in pipelineGrouped(stepId as string)"
-              :key="group.iteration"
-              class="mt-1.5"
-            >
-              <button
-                @click="toggleIteration(`${stepId}-pipe-${group.iteration}`)"
-                class="text-[11px] font-mono text-g-9 hover:text-g-13 transition-colors flex items-center gap-2"
-              >
-                <span>{{ isPipelineIterExpanded(stepId as string, group.iteration) ? '▾' : '▸' }} iter {{ group.iteration }}/{{ group.totalIterations }}</span>
-                <span class="text-[10px] text-g-7">&mdash; {{ group.steps.length }}/{{ group.totalSteps }} actions</span>
-              </button>
-              <div
-                v-if="isPipelineIterExpanded(stepId as string, group.iteration)"
-                class="ml-3 mt-0.5"
-              >
-                <div
-                  v-for="(ps, psIdx) in group.steps"
-                  :key="psIdx"
-                  class="flex items-center gap-2 text-[11px] font-mono text-g-11 py-0.5"
-                >
-                  <span :class="['w-[6px] h-[6px] rounded-full inline-block shrink-0', pipelineDot(ps.status)]" />
-                  <span class="text-g-12">{{ ps.action }}</span>
-                  <span v-if="ps.durationMs !== undefined" class="text-g-7">{{ ps.durationMs }}ms</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div v-if="result.error" class="ml-[18px] mt-2">
-            <span class="text-[11px] font-mono text-red-400 uppercase tracking-wider">{{ t('execution.error') }}</span>
-            <div class="mt-1 bg-red-400/5 border border-red-400/20 rounded px-3 py-2 overflow-x-auto max-h-[400px] overflow-y-auto">
-              <JsonView :data="typeof result.error === 'object' ? result.error.message : result.error" />
-            </div>
-          </div>
-          </template>
-          </template>
-        </div>
-      </div>
-    </div>
+    <!-- Step Timeline -->
+    <StepTimeline
+      v-if="orderedSteps.length > 0"
+      :steps="orderedSteps"
+      :step-statuses="stepStatuses"
+      :step-volumes="stepVolumes"
+      :step-iterations="stepIterations"
+      :step-output-history="stepOutputHistory"
+      :step-pipeline-progress="stepPipelineProgress"
+      :events="events"
+    />
 
     <!-- Event Log -->
     <EventTimeline :events="eventRows" />
