@@ -1,0 +1,76 @@
+version: "2.0"
+name: customer-onboarding
+description: "Onboarding workflow with persistence, recovery, and grouping"
+recovery: true
+
+params:
+  - name: customer_id
+    type: string
+    required: true
+  - name: email
+    type: string
+    required: true
+  - name: plan
+    type: string
+    default: "free"
+
+trigger:
+  http:
+    method: POST
+    path: /api/onboard
+    idempotency_key: "{{ trigger.body.customer_id }}"
+
+steps:
+  - id: tag-customer
+    action: group
+    config:
+      key: "customer-{{ params.customer_id }}"
+
+  - id: validate
+    action: js
+    depends_on: [tag-customer]
+    config:
+      code: |
+        if (!params.email.includes('@')) throw new Error('invalid email');
+        return { valid: true };
+
+  - id: send-welcome-email
+    action: http
+    depends_on: [validate]
+    on_recovery: skip
+    config:
+      url: "https://api.email.com/send"
+      method: POST
+      body:
+        to: "{{ params.email }}"
+        template: welcome
+
+  - id: create-account
+    action: http
+    depends_on: [validate]
+    on_recovery: retry
+    config:
+      url: "https://api.accounts.com/users"
+      method: PUT
+      body:
+        id: "{{ params.customer_id }}"
+        email: "{{ params.email }}"
+        plan: "{{ params.plan }}"
+
+  - id: setup-billing
+    action: http
+    depends_on: [create-account]
+    on_recovery: fail
+    config:
+      url: "https://api.billing.com/setup"
+      method: POST
+      body:
+        customer_id: "{{ params.customer_id }}"
+        plan: "{{ params.plan }}"
+
+  - id: activate
+    action: http
+    depends_on: [send-welcome-email, setup-billing]
+    config:
+      url: "https://api.accounts.com/users/{{ params.customer_id }}/activate"
+      method: POST

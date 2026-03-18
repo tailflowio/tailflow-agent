@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tailflow/tailflow/internal/engine"
 	"github.com/tailflow/tailflow/internal/event"
+	"github.com/tailflow/tailflow/internal/export"
 	"github.com/tailflow/tailflow/internal/parser"
 	"github.com/tailflow/tailflow/internal/runtime"
 	"github.com/tailflow/tailflow/internal/store"
@@ -362,6 +363,11 @@ func (s *Server) handlePublicTrigger(w http.ResponseWriter, r *http.Request) {
 //nolint:contextcheck // execution context derives from s.ctx, intentionally outlives request
 func (s *Server) executeTriggerWorkflow(w http.ResponseWriter, r *http.Request, wf *parser.Workflow) {
 	triggerData, params := s.buildTriggerData(r)
+
+	if s.handleIdempotencyCheck(w, r, wf, triggerData, params) {
+		return
+	}
+
 	executionID, opts, stopCapture := s.prepareTriggerExecution(wf, triggerData, params)
 
 	execCtx, cancel := context.WithCancel(s.ctx)
@@ -378,6 +384,50 @@ func (s *Server) executeTriggerWorkflow(w http.ResponseWriter, r *http.Request, 
 	}
 
 	s.runTriggerSync(w, wf, params, opts, execCtx, executionID, stopCapture)
+}
+
+func (s *Server) handleIdempotencyCheck(
+	w http.ResponseWriter, r *http.Request,
+	wf *parser.Workflow, triggerData, params map[string]any,
+) bool {
+	if wf.Trigger == nil || wf.Trigger.HTTP == nil || wf.Trigger.HTTP.IdempotencyKey == "" {
+		return false
+	}
+
+	if s.config.ExportURL == "" {
+		return false
+	}
+
+	eval := runtime.NewExprEvaluator()
+	ctx := map[string]any{
+		"trigger": triggerData,
+		"params":  params,
+	}
+
+	resolvedKey, evalErr := eval.ResolveTemplate(wf.Trigger.HTTP.IdempotencyKey, ctx)
+	if evalErr != nil || resolvedKey == "" {
+		return false
+	}
+
+	claimClient := export.NewClaimClient(s.config.ExportURL, s.config.APIKey)
+
+	claimResult, claimErr := claimClient.ClaimExecution(r.Context(), uuid.New().String(), wf.Name, resolvedKey)
+	if claimErr != nil {
+		s.config.Logger.Warn("idempotency claim failed, proceeding with execution", "error", claimErr)
+		return false
+	}
+
+	if claimResult.Claimed {
+		return false
+	}
+
+	s.writeJSON(r.Context(), w, http.StatusOK, map[string]any{
+		"execution_id": claimResult.ExistingExecutionID,
+		"status":       claimResult.ExistingStatus,
+		"deduplicated": true,
+	})
+
+	return true
 }
 
 func (s *Server) buildTriggerData(r *http.Request) (map[string]any, map[string]any) {
@@ -584,11 +634,12 @@ func buildGraphNode(step parser.Step) workflow.GraphNode {
 	}
 
 	node := workflow.GraphNode{
-		ID:     step.ID,
-		Label:  label,
-		Action: step.Action,
-		Type:   "step",
-		When:   step.When,
+		ID:         step.ID,
+		Label:      label,
+		Action:     step.Action,
+		Type:       "step",
+		When:       step.When,
+		OnRecovery: step.OnRecovery,
 	}
 
 	if step.Action == "loop" {
@@ -823,7 +874,7 @@ func (s *Server) applyStepEvent(executionID string, ev event.Event) {
 		})
 	case event.WorkflowCompleted:
 		s.applyWorkflowCompleted(executionID, ev)
-	case event.Metrics, event.WorkflowStarted, event.StepLog, event.StepGoto:
+	case event.Metrics, event.WorkflowStarted, event.StepLog, event.StepGoto, event.ExecutionState, event.ExecutionGroup:
 	}
 }
 

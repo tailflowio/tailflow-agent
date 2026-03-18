@@ -25,16 +25,18 @@ type StepResult struct {
 }
 
 type ExecutionContext struct {
-	mu           sync.RWMutex
-	ExecutionID  string
-	WorkflowName string
-	Params       map[string]any
-	Env          map[string]string
-	Steps        map[string]*StepResult
-	Variables    map[string]any  // user-defined variables (via "set" action)
-	TriggerData  map[string]any  // trigger context (method, path, headers, body, query)
-	Services     *ActionServices // server-side services (nil in CLI mode)
-	TestCaseName string          // non-empty when running in test mode
+	mu             sync.RWMutex
+	ExecutionID    string
+	WorkflowName   string
+	Params         map[string]any
+	Env            map[string]string
+	Steps          map[string]*StepResult
+	Variables      map[string]any
+	TriggerData    map[string]any
+	Services       *ActionServices
+	TestCaseName   string
+	Resumed        bool
+	IdempotencyKey string
 }
 
 func NewExecutionContext(executionID, workflowName string, params map[string]any, env map[string]string) *ExecutionContext {
@@ -76,6 +78,21 @@ func (c *ExecutionContext) GetStepResult(stepID string) (*StepResult, bool) {
 	cp := *r
 
 	return &cp, true
+}
+
+func (c *ExecutionContext) StepsCopy() map[string]StepResult {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	result := make(map[string]StepResult, len(c.Steps))
+
+	for id, sr := range c.Steps {
+		if sr != nil {
+			result[id] = *sr
+		}
+	}
+
+	return result
 }
 
 func (c *ExecutionContext) ClearStepResult(stepID string) {

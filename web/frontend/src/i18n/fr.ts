@@ -51,6 +51,7 @@ export default {
   stepDetail: {
     config: 'Configuration',
     dependencies: 'Dependances',
+    onRecovery: 'Sur reprise',
     errorPolicy: "Politique d'erreur",
     retry: 'Retry',
     delay: 'delai',

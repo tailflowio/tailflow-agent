@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/suite"
 )
@@ -214,4 +215,43 @@ func (s *ExecutionContextTestSuite) TestHasFailedSteps_MixedWithOneFailed() {
 	ctx.SetStepResult("step2", &StepResult{Status: StatusFailed})
 	ctx.SetStepResult("step3", &StepResult{Status: StatusSkipped})
 	s.True(ctx.HasFailedSteps())
+}
+
+func (s *ExecutionContextTestSuite) TestNewExecutionContext_DefaultRecoveryFields() {
+	ctx := NewExecutionContext("exec-1", "test-wf", nil, nil)
+	s.False(ctx.Resumed)
+	s.Empty(ctx.IdempotencyKey)
+}
+
+func (s *ExecutionContextTestSuite) TestExecutionContext_SetRecoveryFields() {
+	ctx := NewExecutionContext("exec-1", "test-wf", nil, nil)
+	ctx.Resumed = true
+	ctx.IdempotencyKey = "user-42"
+	s.True(ctx.Resumed)
+	s.Equal("user-42", ctx.IdempotencyKey)
+}
+
+func (s *ExecutionContextTestSuite) TestStepsCopy_ReturnsDeepCopy() {
+	now := time.Now()
+	ctx := NewExecutionContext("exec-1", "wf", nil, nil)
+	ctx.SetStepResult("step1", &StepResult{Status: StatusSuccess, StartedAt: &now})
+	ctx.SetStepResult("step2", &StepResult{Status: StatusFailed})
+
+	cp := ctx.StepsCopy()
+
+	s.Len(cp, 2)
+	s.Equal(StatusSuccess, cp["step1"].Status)
+	s.Equal(StatusFailed, cp["step2"].Status)
+
+	cp["step1"] = StepResult{Status: "mutated"}
+	original, _ := ctx.GetStepResult("step1")
+	s.Equal(StatusSuccess, original.Status)
+}
+
+func (s *ExecutionContextTestSuite) TestStepsCopy_EmptySteps() {
+	ctx := NewExecutionContext("exec-1", "wf", nil, nil)
+
+	cp := ctx.StepsCopy()
+
+	s.Empty(cp)
 }

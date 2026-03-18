@@ -32,6 +32,8 @@ const (
 	StepOutput        = sharedevent.StepOutput
 	StepGoto          = sharedevent.StepGoto
 	Metrics           = sharedevent.Metrics
+	ExecutionState    = sharedevent.ExecutionState
+	ExecutionGroup    = sharedevent.ExecutionGroup
 )
 
 func NewEvent(typ EventType, executionID, stepID, message string) Event {

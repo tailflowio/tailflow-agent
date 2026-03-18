@@ -153,21 +153,16 @@ async function cancelExec() {
 function statusBadge(s: string) {
   if (s === 'success') return 'bg-emerald-400/15 text-emerald-400'
   if (s === 'failed') return 'bg-red-400/15 text-red-400'
-  if (s === 'cancelled') return 'bg-g-7/20 text-g-9'
+  if (s === 'cancelled') return 'bg-orange-400/15 text-orange-400'
   if (s === 'running') return 'bg-amber-400/15 text-amber-400'
   if (s === 'waiting') return 'bg-amber-400/15 text-amber-400'
+  if (s === 'pending') return 'bg-violet-400/15 text-violet-400'
   return 'bg-g-7/20 text-g-9'
 }
 function isStatusAnimated(s: string) {
   return s === 'running' || s === 'waiting'
 }
-function statusDot(s: string) {
-  if (s === 'success') return 'bg-emerald-400'
-  if (s === 'failed') return 'bg-red-400'
-  if (s === 'running' || s === 'waiting') return 'bg-amber-400 animate-pulse'
-  if (s === 'skipped' || s === 'cancelled') return 'bg-g-7'
-  return 'bg-g-7'
-}
+
 
 function stepStatus(stepId: string, result: any): string {
   return stepStatuses.value[stepId] ?? result?.status ?? 'pending'
@@ -347,23 +342,43 @@ const eventRows = computed<EventRow[]>(() =>
           </div>
         </div>
         <div class="flex items-center gap-2">
-          <span v-if="connected" class="flex items-center gap-1.5 text-[11px] text-emerald-400 font-medium mr-1">
-            <span class="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse" />
+          <span
+            v-if="connected && !finished"
+            class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-400/15 text-emerald-400"
+          >
+            <span class="relative flex h-1.5 w-1.5">
+              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span class="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-400"></span>
+            </span>
             {{ t('execution.live') }}
           </span>
           <span :class="['inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium', statusBadge(statusLabel)]">
             <span :class="['w-1.5 h-1.5 rounded-full bg-current', isStatusAnimated(statusLabel) ? 'pulse-dot' : 'opacity-50']" />
             {{ statusLabel }}
           </span>
-          <button
-            v-if="canCancel"
-            @click="cancelExec"
-            :disabled="cancelling"
-            class="ml-1 px-3 py-1 text-[12px] font-medium rounded-md border border-red-400/30 text-red-400 hover:bg-red-400/10 transition-colors disabled:opacity-50 cursor-pointer"
-          >
-            {{ cancelling ? t('execution.cancelling') : t('execution.cancel') }}
-          </button>
         </div>
+      </div>
+
+      <!-- Cancel banner -->
+      <div
+        v-if="canCancel"
+        class="flex items-center justify-between px-4 py-3 rounded-lg border border-amber-400/20 bg-amber-400/5"
+      >
+        <div class="flex items-center gap-3">
+          <svg class="w-4 h-4 text-amber-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 6v6l4 2"/></svg>
+          <p class="text-sm text-g-11">{{ t('execution.runningDesc', 'Execution is currently running.') }}</p>
+        </div>
+        <button
+          @click="cancelExec"
+          :disabled="cancelling"
+          class="shrink-0 ml-4 px-3 py-1.5 text-xs font-medium rounded-md bg-red-400/10 text-red-400 hover:bg-red-400/20 transition-colors disabled:opacity-50 cursor-pointer"
+        >
+          <span v-if="cancelling" class="flex items-center gap-1.5">
+            <svg class="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2.5" class="opacity-25"/><path d="M12 2a10 10 0 0110 10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" class="opacity-75"/></svg>
+            {{ t('execution.cancelling') }}
+          </span>
+          <span v-else>{{ t('execution.cancel') }}</span>
+        </button>
       </div>
     </div>
 

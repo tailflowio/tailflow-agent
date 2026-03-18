@@ -23,6 +23,7 @@ export interface GraphNode {
   action?: string
   pipeline?: PipelineAction[]
   when?: string
+  on_recovery?: string
 }
 
 export interface GraphEdge {
@@ -88,6 +89,8 @@ export interface ProcessMetrics {
   net_rx_bytes: number
   net_tx_bytes: number
   uptime_s: number
+  available?: boolean
+  heap_mb?: number
 }
 
 export interface ListExecutionsParams {

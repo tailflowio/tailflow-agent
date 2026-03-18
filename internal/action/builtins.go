@@ -51,6 +51,7 @@ func RegisterBuiltins(reg *Registry) {
 	reg.Register("kv.get", NewKVGetAction)
 	reg.Register("kv.set", NewKVSetAction)
 	reg.Register("kv.delete", NewKVDeleteAction)
+	reg.Register("group", NewGroupAction)
 
 	// Unsafe actions — excluded from SaaS builds
 	for _, r := range unsafeRegistrations {

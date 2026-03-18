@@ -2,7 +2,7 @@ module github.com/tailflow/tailflow
 
 go 1.26.0
 
-require github.com/tailflowio/tailflow-shared v1.0.0
+require github.com/tailflowio/tailflow-shared v0.4.0
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2

@@ -1611,3 +1611,364 @@ func (s *EngineTestSuite) TestTableActionEmitsPrintLogs() {
 	}
 }
 
+func (s *EngineTestSuite) TestExecute_RecoverySkipsCompletedSteps() {
+	exec, bus := newTestExecutor()
+	defer bus.Close()
+
+	var executedSteps []string
+	var count atomic.Int32
+
+	ch := bus.Subscribe(100)
+	go func() {
+		for ev := range ch {
+			if ev.Type == event.StepStarted {
+				executedSteps = append(executedSteps, ev.StepID)
+				count.Add(1)
+			}
+		}
+	}()
+
+	wf := &parser.Workflow{
+		Version: "2.0",
+		Name:    "test-recovery",
+		Steps: []parser.Step{
+			{ID: "step1", Action: "log", Config: map[string]any{"message": "hello"}},
+			{ID: "step2", Action: "log", DependsOn: []string{"step1"}, Config: map[string]any{"message": "world"}},
+			{ID: "step3", Action: "log", DependsOn: []string{"step2"}, Config: map[string]any{"message": "!"}},
+		},
+	}
+
+	now := time.Now()
+	recoveredSteps := map[string]*runtime.StepResult{
+		"step1": {
+			Status:     runtime.StatusSuccess,
+			StartedAt:  &now,
+			FinishedAt: &now,
+			Output:     map[string]any{"message": "hello"},
+		},
+	}
+
+	result, err := exec.Execute(context.Background(), wf, nil, ExecuteOptions{
+		Resumed:        true,
+		RecoveredSteps: recoveredSteps,
+	})
+	s.Require().NoError(err)
+	s.Equal(runtime.StatusSuccess, result.Status)
+
+	s.Eventually(func() bool {
+		return count.Load() >= 2
+	}, 2*time.Second, 10*time.Millisecond)
+
+	for _, stepID := range executedSteps {
+		s.NotEqual("step1", stepID, "step1 should have been skipped")
+	}
+
+	s.Contains(executedSteps, "step2")
+	s.Contains(executedSteps, "step3")
+}
+
+func (s *EngineTestSuite) TestExecute_RecoveryOnRecoverySkip() {
+	exec, bus := newTestExecutor()
+	defer bus.Close()
+
+	var executedSteps []string
+	var count atomic.Int32
+
+	ch := bus.Subscribe(100)
+	go func() {
+		for ev := range ch {
+			if ev.Type == event.StepStarted {
+				executedSteps = append(executedSteps, ev.StepID)
+				count.Add(1)
+			}
+		}
+	}()
+
+	wf := &parser.Workflow{
+		Version: "2.0",
+		Name:    "test-recovery-skip",
+		Steps: []parser.Step{
+			{ID: "send-email", Action: "log", OnRecovery: "skip", Config: map[string]any{"message": "email"}},
+			{ID: "next-step", Action: "log", DependsOn: []string{"send-email"}, Config: map[string]any{"message": "next"}},
+		},
+	}
+
+	now := time.Now()
+	recoveredSteps := map[string]*runtime.StepResult{
+		"send-email": {
+			Status:    runtime.StatusRunning,
+			StartedAt: &now,
+		},
+	}
+
+	result, err := exec.Execute(context.Background(), wf, nil, ExecuteOptions{
+		Resumed:        true,
+		RecoveredSteps: recoveredSteps,
+	})
+	s.Require().NoError(err)
+	s.Equal(runtime.StatusSuccess, result.Status)
+
+	s.Eventually(func() bool {
+		return count.Load() >= 1
+	}, 2*time.Second, 10*time.Millisecond)
+
+	for _, stepID := range executedSteps {
+		s.NotEqual("send-email", stepID, "send-email should have been skipped (on_recovery=skip)")
+	}
+
+	s.Contains(executedSteps, "next-step")
+}
+
+func (s *EngineTestSuite) TestExecute_RecoveryOnRecoveryFail() {
+	exec, bus := newTestExecutor()
+	defer bus.Close()
+
+	wf := &parser.Workflow{
+		Version: "2.0",
+		Name:    "test-recovery-fail",
+		Steps: []parser.Step{
+			{ID: "payment", Action: "log", OnRecovery: "fail", Config: map[string]any{"message": "pay"}},
+			{ID: "next", Action: "log", DependsOn: []string{"payment"}, Config: map[string]any{"message": "next"}},
+		},
+	}
+
+	now := time.Now()
+	recoveredSteps := map[string]*runtime.StepResult{
+		"payment": {
+			Status:    runtime.StatusRunning,
+			StartedAt: &now,
+		},
+	}
+
+	result, _ := exec.Execute(context.Background(), wf, nil, ExecuteOptions{
+		Resumed:        true,
+		RecoveredSteps: recoveredSteps,
+	})
+	s.NotEqual(runtime.StatusSuccess, result.Status)
+}
+
+func (s *EngineTestSuite) TestExecute_RecoveryOnRecoveryRetryDefault() {
+	exec, bus := newTestExecutor()
+	defer bus.Close()
+
+	var executedSteps []string
+	var count atomic.Int32
+
+	ch := bus.Subscribe(100)
+	go func() {
+		for ev := range ch {
+			if ev.Type == event.StepStarted {
+				executedSteps = append(executedSteps, ev.StepID)
+				count.Add(1)
+			}
+		}
+	}()
+
+	wf := &parser.Workflow{
+		Version: "2.0",
+		Name:    "test-recovery-retry",
+		Steps: []parser.Step{
+			{ID: "create-account", Action: "log", Config: map[string]any{"message": "create"}},
+			{ID: "next", Action: "log", DependsOn: []string{"create-account"}, Config: map[string]any{"message": "next"}},
+		},
+	}
+
+	now := time.Now()
+	recoveredSteps := map[string]*runtime.StepResult{
+		"create-account": {
+			Status:    runtime.StatusRunning,
+			StartedAt: &now,
+		},
+	}
+
+	result, err := exec.Execute(context.Background(), wf, nil, ExecuteOptions{
+		Resumed:        true,
+		RecoveredSteps: recoveredSteps,
+	})
+	s.Require().NoError(err)
+	s.Equal(runtime.StatusSuccess, result.Status)
+
+	s.Eventually(func() bool {
+		return count.Load() >= 2
+	}, 2*time.Second, 10*time.Millisecond)
+
+	s.Contains(executedSteps, "create-account")
+}
+
+func (s *EngineTestSuite) TestExecute_GroupActionEmitsGroupEvent() {
+	exec, bus := newTestExecutor()
+	defer bus.Close()
+
+	var groupEvents []event.Event
+	var count atomic.Int32
+
+	ch := bus.Subscribe(100)
+	go func() {
+		for ev := range ch {
+			if ev.Type == event.ExecutionGroup {
+				groupEvents = append(groupEvents, ev)
+				count.Add(1)
+			}
+		}
+	}()
+
+	wf := &parser.Workflow{
+		Version: "2.0",
+		Name:    "test-group-action",
+		Params: []parser.Param{
+			{Name: "customer_id", Type: "string"},
+		},
+		Steps: []parser.Step{
+			{ID: "tag-customer", Action: "group", Config: map[string]any{"key": "customer-{{ params.customer_id }}"}},
+			{ID: "step1", Action: "log", DependsOn: []string{"tag-customer"}, Config: map[string]any{"message": "hello"}},
+		},
+	}
+
+	result, err := exec.Execute(context.Background(), wf, map[string]any{
+		"customer_id": "user-42",
+	})
+	s.Require().NoError(err)
+	s.Equal(runtime.StatusSuccess, result.Status)
+
+	s.Eventually(func() bool {
+		return count.Load() >= 1
+	}, 2*time.Second, 10*time.Millisecond)
+
+	s.Require().NotEmpty(groupEvents)
+	s.Equal("customer-user-42", groupEvents[0].Data["group_key"])
+	s.Equal("tag-customer", groupEvents[0].StepID)
+}
+
+func (s *EngineTestSuite) TestExecute_ResolvesIdempotencyKey() {
+	exec, bus := newTestExecutor()
+	defer bus.Close()
+
+	var capturedKey string
+	var found atomic.Int32
+
+	ch := bus.Subscribe(100)
+	go func() {
+		for ev := range ch {
+			if ev.Type != event.ExecutionState {
+				continue
+			}
+
+			key, _ := ev.Data["idempotency_key"].(string)
+			capturedKey = key
+			found.Add(1)
+		}
+	}()
+
+	wf := &parser.Workflow{
+		Version: "2.0",
+		Name:    "test-idemp",
+		Trigger: &parser.Trigger{
+			HTTP: &parser.HTTPTrigger{
+				Method:         "POST",
+				Path:           "/test",
+				IdempotencyKey: "{{ params.customer_id }}",
+			},
+		},
+		Params: []parser.Param{
+			{Name: "customer_id", Type: "string"},
+		},
+		Steps: []parser.Step{
+			{ID: "step1", Action: "log", Config: map[string]any{"message": "hello"}},
+		},
+	}
+
+	_, err := exec.Execute(context.Background(), wf, map[string]any{
+		"customer_id": "user-42",
+	})
+	s.Require().NoError(err)
+
+	s.Eventually(func() bool {
+		return found.Load() >= 1
+	}, 2*time.Second, 10*time.Millisecond)
+
+	s.Equal("user-42", capturedKey)
+}
+
+func (s *EngineTestSuite) TestExecute_NoIdempotencyKeyWhenNotConfigured() {
+	exec, bus := newTestExecutor()
+	defer bus.Close()
+
+	var stateEvents []event.Event
+	var count atomic.Int32
+
+	ch := bus.Subscribe(100)
+	go func() {
+		for ev := range ch {
+			if ev.Type == event.ExecutionState {
+				stateEvents = append(stateEvents, ev)
+				count.Add(1)
+			}
+		}
+	}()
+
+	wf := &parser.Workflow{
+		Version: "2.0",
+		Name:    "test-no-idemp",
+		Steps: []parser.Step{
+			{ID: "step1", Action: "log", Config: map[string]any{"message": "hello"}},
+		},
+	}
+
+	_, err := exec.Execute(context.Background(), wf, nil)
+	s.Require().NoError(err)
+
+	s.Eventually(func() bool {
+		return count.Load() >= 1
+	}, 2*time.Second, 10*time.Millisecond)
+
+	s.NotEmpty(stateEvents)
+	s.Empty(stateEvents[0].Data["idempotency_key"])
+}
+
+func (s *EngineTestSuite) TestExecute_RecoveryNonRunningStepIgnored() {
+	exec, bus := newTestExecutor()
+	defer bus.Close()
+
+	var executedSteps []string
+	var count atomic.Int32
+
+	ch := bus.Subscribe(100)
+	go func() {
+		for ev := range ch {
+			if ev.Type == event.StepStarted {
+				executedSteps = append(executedSteps, ev.StepID)
+				count.Add(1)
+			}
+		}
+	}()
+
+	wf := &parser.Workflow{
+		Version: "2.0",
+		Name:    "test-recovery-failed-step",
+		Steps: []parser.Step{
+			{ID: "step1", Action: "log", Config: map[string]any{"message": "hello"}},
+		},
+	}
+
+	now := time.Now()
+	recoveredSteps := map[string]*runtime.StepResult{
+		"step1": {
+			Status:    runtime.StatusFailed,
+			StartedAt: &now,
+		},
+	}
+
+	result, err := exec.Execute(context.Background(), wf, nil, ExecuteOptions{
+		Resumed:        true,
+		RecoveredSteps: recoveredSteps,
+	})
+	s.Require().NoError(err)
+	s.Equal(runtime.StatusSuccess, result.Status)
+
+	s.Eventually(func() bool {
+		return count.Load() >= 1
+	}, 2*time.Second, 10*time.Millisecond)
+
+	s.Contains(executedSteps, "step1")
+}
+
