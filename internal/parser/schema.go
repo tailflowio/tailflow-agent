@@ -14,6 +14,7 @@ type Workflow struct {
 	Env         map[string]string `json:"env,omitempty"         yaml:"env,omitempty"`
 	Sensitive   []string          `json:"sensitive,omitempty"   yaml:"sensitive,omitempty"`
 	Trigger     *Trigger          `json:"trigger,omitempty"     yaml:"trigger,omitempty"`
+	Recovery    bool              `json:"recovery,omitempty"    yaml:"recovery,omitempty"`
 	OnError     []Step            `json:"on_error,omitempty"    yaml:"on_error,omitempty"`
 	Steps       []Step            `json:"steps"                 yaml:"steps"`
 }
@@ -47,6 +48,7 @@ type Step struct {
 	Timeout     string         `json:"timeout,omitempty"      yaml:"timeout,omitempty"`
 	Goto        *GotoConfig    `json:"goto,omitempty"         yaml:"goto,omitempty"`
 	ErrorPolicy string         `json:"error_policy,omitempty" yaml:"error_policy,omitempty"`
+	OnRecovery  string         `json:"on_recovery,omitempty"  yaml:"on_recovery,omitempty"`
 	Testing     []TestCase     `json:"testing,omitempty"      yaml:"testing,omitempty"`
 }
 
@@ -97,9 +99,10 @@ type ScheduleTrigger struct {
 
 // HTTPTrigger exposes a workflow as an HTTP endpoint.
 type HTTPTrigger struct {
-	Method string `json:"method"          yaml:"method"`
-	Path   string `json:"path"            yaml:"path"`
-	Async  bool   `json:"async,omitempty" yaml:"async,omitempty"`
+	Method         string `json:"method"                    yaml:"method"`
+	Path           string `json:"path"                      yaml:"path"`
+	Async          bool   `json:"async,omitempty"           yaml:"async,omitempty"`
+	IdempotencyKey string `json:"idempotency_key,omitempty" yaml:"idempotency_key,omitempty"`
 }
 
 // WebhookTrigger listens for incoming webhooks.

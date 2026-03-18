@@ -1083,10 +1083,76 @@ func (s *RabbitMQShovelActionTestSuite) TestRealShovelDest_PublishWithDeferredCo
 }
 
 func (s *RabbitMQShovelActionTestSuite) TestShovelDialFn_Default_DialFails() {
-	// Call the default shovelDialFn (not overridden) with an unreachable host.
-	// This covers the error path of the production dialer.
 	_, err := shovelDialFn("amqp://localhost:59999")
 	s.Require().Error(err)
+}
+
+type mockAMQPConnection struct {
+	channelFn func() (*amqp.Channel, error)
+	closeFn   func() error
+}
+
+func (m *mockAMQPConnection) Channel() (*amqp.Channel, error) {
+	if m.channelFn != nil {
+		return m.channelFn()
+	}
+
+	return nil, nil
+}
+
+func (m *mockAMQPConnection) Close() error {
+	if m.closeFn != nil {
+		return m.closeFn()
+	}
+
+	return nil
+}
+
+func (s *RabbitMQShovelActionTestSuite) TestWrapShovelConn_ChannelSuccess() {
+	conn := &mockAMQPConnection{
+		channelFn: func() (*amqp.Channel, error) {
+			return nil, nil
+		},
+		closeFn: func() error { return nil },
+	}
+
+	wrapped := wrapShovelConn(conn)
+	s.NotNil(wrapped)
+
+	ch, err := wrapped.Channel()
+	s.NoError(err)
+	s.Nil(ch)
+}
+
+func (s *RabbitMQShovelActionTestSuite) TestWrapShovelConn_ChannelError() {
+	conn := &mockAMQPConnection{
+		channelFn: func() (*amqp.Channel, error) {
+			return nil, errors.New("channel failed")
+		},
+	}
+
+	wrapped := wrapShovelConn(conn)
+
+	_, err := wrapped.Channel()
+	s.Require().Error(err)
+	s.Contains(err.Error(), "channel failed")
+}
+
+func (s *RabbitMQShovelActionTestSuite) TestWrapShovelConn_Close() {
+	closed := false
+	conn := &mockAMQPConnection{
+		closeFn: func() error {
+			closed = true
+
+			return nil
+		},
+	}
+
+	wrapped := wrapShovelConn(conn)
+
+	err := wrapped.Close()
+	s.NoError(err)
+	s.True(closed)
 }
 
 func (s *RabbitMQShovelActionTestSuite) TestRealShovelConn_Channel_Success() {

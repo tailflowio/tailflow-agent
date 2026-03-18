@@ -279,7 +279,7 @@ function ago(d: string) {
           </svg>
           <div class="relative">
             <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.cpu') }}</p>
-            <p :class="['text-2xl font-semibold font-mono tabular-nums', cpuColor(sysMetrics.cpu_percent)]">{{ sysMetrics.cpu_percent.toFixed(1) }}%</p>
+            <p :class="['text-2xl font-semibold font-mono tabular-nums', cpuColor(sysMetrics.cpu_percent)]">{{ sysMetrics.cpu_percent?.toFixed(1) ?? '0' }}%</p>
           </div>
         </div>
         <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden anim-enter delay-1">
@@ -334,7 +334,7 @@ function ago(d: string) {
           </svg>
           <div class="relative">
             <p class="text-xs text-g-9 mb-1.5">Heap</p>
-            <p class="text-2xl font-semibold text-g-14 font-mono tabular-nums">{{ sysMetrics.heap_mb.toFixed(1) }} MB</p>
+            <p class="text-2xl font-semibold text-g-14 font-mono tabular-nums">{{ sysMetrics.heap_mb?.toFixed(1) ?? '0' }} MB</p>
           </div>
         </div>
         <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card anim-enter delay-2">

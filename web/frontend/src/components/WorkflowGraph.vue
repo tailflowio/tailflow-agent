@@ -49,7 +49,8 @@ function layoutGraph(g: Graph): { nodes: Node[]; edges: Edge[] } {
     const pipeExtra = (n.pipeline && n.pipeline.length > 0)
       ? 12 + n.pipeline.length * 26
       : 0
-    const h = baseH + condExtra + pipeExtra
+    const recoveryExtra = (n.on_recovery && n.on_recovery !== 'retry') ? 24 : 0
+    const h = baseH + condExtra + pipeExtra + recoveryExtra
     dagreGraph.setNode(n.id, { width: 320, height: h })
   })
   gEdges.forEach((e) => {
@@ -107,6 +108,7 @@ function layoutGraph(g: Graph): { nodes: Node[]; edges: Edge[] } {
         execCount: props.stepExecCounts?.[n.id] || 0,
         when: n.when,
         hasConditionalOutputs: hasCondOutputs,
+        onRecovery: n.on_recovery,
       },
     }
   })

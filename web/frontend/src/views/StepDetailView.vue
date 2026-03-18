@@ -44,8 +44,10 @@ const pastExecs = computed(() => history.value.filter(h => h.status !== 'running
 function dot(s: string) {
   if (s === 'success') return 'bg-emerald-400'
   if (s === 'failed') return 'bg-red-400'
+  if (s === 'cancelled') return 'bg-orange-400'
   if (s === 'running') return 'bg-g-12 animate-pulse'
   if (s === 'waiting') return 'bg-amber-400 animate-pulse'
+  if (s === 'pending') return 'bg-violet-400'
   if (s === 'skipped') return 'bg-g-6'
   return 'bg-g-5'
 }
@@ -53,8 +55,10 @@ function dot(s: string) {
 function badge(s: string) {
   if (s === 'success') return 'bg-emerald-400/15 text-emerald-400'
   if (s === 'failed') return 'bg-red-400/15 text-red-400'
+  if (s === 'cancelled') return 'bg-orange-400/15 text-orange-400'
   if (s === 'running') return 'bg-amber-400/15 text-amber-400'
   if (s === 'waiting') return 'bg-amber-400/15 text-amber-400'
+  if (s === 'pending') return 'bg-violet-400/15 text-violet-400'
   return 'bg-g-5 text-g-9'
 }
 
@@ -159,6 +163,15 @@ const configHtml = computed(() => step.value?.config ? yamlHtml(step.value.confi
                 {{ dep }}
               </span>
             </div>
+          </template>
+
+          <template v-if="step.on_recovery && step.on_recovery !== 'retry'">
+            <span class="text-g-8 text-[12px]">{{ t('stepDetail.onRecovery') }}</span>
+            <span class="font-mono text-[12px] px-2.5 py-1 rounded-md w-fit"
+              :class="step.on_recovery === 'skip' ? 'text-amber-400 bg-amber-400/10 border border-amber-400/20' : 'text-red-400 bg-red-400/10 border border-red-400/20'"
+            >
+              {{ step.on_recovery }}
+            </span>
           </template>
 
           <template v-if="step.error_policy">

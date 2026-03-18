@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/suite"
+	sdkotel "go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -217,4 +218,22 @@ func (s *SetupTestSuite) TestParseEndpoint_NoScheme() {
 
 	s.Equal("otel.example.com", host)
 	s.False(insecure)
+}
+
+func (s *SetupTestSuite) TestSetup_DebugErrorHandlerIsInvoked() {
+	cfg := Config{
+		Endpoint:    "http://localhost:4318",
+		ServiceName: "test-svc",
+		Debug:       true,
+	}
+
+	res, err := Setup(s.ctx, cfg)
+	s.Require().NoError(err)
+
+	sdkotel.Handle(errors.New("synthetic otel error"))
+
+	cancelCtx, cancel := context.WithCancel(s.ctx)
+	cancel()
+
+	_ = res.Shutdown(cancelCtx)
 }

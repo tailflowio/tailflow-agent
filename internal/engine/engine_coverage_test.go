@@ -439,3 +439,9 @@ func (s *EngineCoverageTestSuite) TestStepErrorCode_Canceled() {
 	s.Require().NotNil(sr.Error)
 	s.Equal("cancelled", sr.Error.Code)
 }
+
+func (s *EngineCoverageTestSuite) TestStepErrorCode_NilError() {
+	code := stepErrorCode(nil)
+	s.Empty(code)
+}
+

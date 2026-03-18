@@ -2182,3 +2182,168 @@ func (s *HandlersTestSuite) TestProcessEvent_DuplicateWorkflowCompleted() {
 	events = srv.config.ExecutionStore.GetEvents(execID)
 	s.Len(events, 1)
 }
+
+func newTestServerIdempotent(t *testing.T, saasURL string) *Server {
+	t.Helper()
+
+	yaml := `version: "2.0"
+name: "idempotent-workflow"
+description: "HTTP workflow with idempotency"
+trigger:
+  http:
+    method: POST
+    path: /submit
+    idempotency_key: "{{ trigger.body.order_id }}"
+params:
+  - name: order_id
+    type: string
+steps:
+  - id: process
+    action: log
+    config:
+      message: "processing"
+`
+	wf, err := parser.ParseBytes([]byte(yaml))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bus := event.NewBus()
+	t.Cleanup(bus.Close)
+
+	reg := action.NewRegistry()
+	action.RegisterBuiltins(reg)
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	exec := engine.NewExecutor(reg, bus, logger, nil, nil, nil)
+
+	return New(Config{
+		Port:           0,
+		Executor:       exec,
+		Workflow:       wf,
+		ExecutionStore: store.NewExecutionStore(10),
+		EventBus:       bus,
+		Logger:         logger,
+		ExportURL:      saasURL,
+		APIKey:         "test-key",
+	})
+}
+
+func (s *HandlersTestSuite) TestPublicTrigger_IdempotencyDeduplicated() {
+	mockSaaS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"claimed":false,"execution_id":"existing-exec","status":"success"}`))
+	}))
+	defer mockSaaS.Close()
+
+	srv := newTestServerIdempotent(s.T(), mockSaaS.URL)
+
+	req := httptest.NewRequest("POST", "/api/public/submit", strings.NewReader(`{"order_id":"ord-123"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	s.Equal(http.StatusOK, w.Code)
+
+	var resp map[string]any
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	s.Require().NoError(err)
+	s.Equal(true, resp["deduplicated"])
+	s.Equal("existing-exec", resp["execution_id"])
+	s.Equal("success", resp["status"])
+}
+
+func (s *HandlersTestSuite) TestPublicTrigger_IdempotencyClaimed() {
+	mockSaaS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"claimed":true}`))
+	}))
+	defer mockSaaS.Close()
+
+	srv := newTestServerIdempotent(s.T(), mockSaaS.URL)
+
+	req := httptest.NewRequest("POST", "/api/public/submit", strings.NewReader(`{"order_id":"ord-456"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	s.Equal(http.StatusOK, w.Code)
+
+	var resp map[string]any
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	s.Require().NoError(err)
+	s.Nil(resp["deduplicated"])
+	s.NotEmpty(resp["execution_id"])
+}
+
+func (s *HandlersTestSuite) TestPublicTrigger_NoIdempotencyKeyNoExportURL() {
+	srv := newTestServerHTTPTrigger(s.T())
+
+	req := httptest.NewRequest("POST", "/api/public/submit", strings.NewReader(`{"data":"test"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	s.Equal(http.StatusOK, w.Code)
+
+	var resp map[string]any
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	s.Require().NoError(err)
+	s.Nil(resp["deduplicated"])
+}
+
+func (s *HandlersTestSuite) TestPublicTrigger_IdempotencyNoExportURL() {
+	srv := newTestServerIdempotent(s.T(), "")
+	srv.config.ExportURL = ""
+
+	req := httptest.NewRequest("POST", "/api/public/submit", strings.NewReader(`{"order_id":"ord-789"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	s.Equal(http.StatusOK, w.Code)
+
+	var resp map[string]any
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	s.Require().NoError(err)
+	s.Nil(resp["deduplicated"])
+}
+
+func (s *HandlersTestSuite) TestPublicTrigger_IdempotencyResolveError() {
+	mockSaaS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"claimed":true}`))
+	}))
+	defer mockSaaS.Close()
+
+	srv := newTestServerIdempotent(s.T(), mockSaaS.URL)
+	srv.config.Workflow.Trigger.HTTP.IdempotencyKey = "{{ invalid_expression( }}"
+
+	req := httptest.NewRequest("POST", "/api/public/submit", strings.NewReader(`{"order_id":"ord-789"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	s.Equal(http.StatusOK, w.Code)
+
+	var resp map[string]any
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	s.Require().NoError(err)
+	s.Nil(resp["deduplicated"])
+}
+
+func (s *HandlersTestSuite) TestPublicTrigger_IdempotencyClaimError() {
+	srv := newTestServerIdempotent(s.T(), "http://127.0.0.1:1")
+
+	req := httptest.NewRequest("POST", "/api/public/submit", strings.NewReader(`{"order_id":"ord-789"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	s.Equal(http.StatusOK, w.Code)
+
+	var resp map[string]any
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	s.Require().NoError(err)
+	s.Nil(resp["deduplicated"])
+}

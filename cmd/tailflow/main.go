@@ -773,7 +773,7 @@ func (r *cliRenderer) handleEvent(ev event.Event) {
 	case event.StepWaiting:
 		title := r.stepTitle(ev.StepID)
 		r.printLinef("  %s  %s %s\n", r.c("33", "⏳"), title, ev.Message)
-	case event.WorkflowCompleted, event.StepInput, event.StepOutput, event.Metrics:
+	case event.WorkflowCompleted, event.StepInput, event.StepOutput, event.Metrics, event.ExecutionState, event.ExecutionGroup:
 		return
 	}
 }
@@ -1096,12 +1096,14 @@ func shutdownOTel(result *tfotel.Result) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := result.ForceFlush(ctx); err != nil {
-		log.Printf("[otel] flush error: %v", err)
+	flushErr := result.ForceFlush(ctx)
+	if flushErr != nil {
+		log.Printf("[otel] flush error: %v", flushErr)
 	}
 
-	if err := result.Shutdown(ctx); err != nil {
-		log.Printf("[otel] shutdown error: %v", err)
+	shutdownErr := result.Shutdown(ctx)
+	if shutdownErr != nil {
+		log.Printf("[otel] shutdown error: %v", shutdownErr)
 	}
 }
 
@@ -1142,13 +1144,20 @@ func (m *multiHandler) Enabled(ctx context.Context, level slog.Level) bool {
 }
 
 func (m *multiHandler) Handle(ctx context.Context, r slog.Record) error {
+	var firstErr error
+
 	for _, h := range m.handlers {
-		if h.Enabled(ctx, r.Level) {
-			_ = h.Handle(ctx, r.Clone())
+		if !h.Enabled(ctx, r.Level) {
+			continue
+		}
+
+		handleErr := h.Handle(ctx, r.Clone())
+		if handleErr != nil && firstErr == nil {
+			firstErr = handleErr
 		}
 	}
 
-	return nil
+	return firstErr
 }
 
 func (m *multiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {

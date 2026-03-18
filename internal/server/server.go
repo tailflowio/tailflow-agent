@@ -103,6 +103,7 @@ func (s *Server) Run(ctx context.Context) error {
 	s.ctx = ctx
 	s.metrics.Start(ctx)
 	s.startExporter(ctx)
+	s.recoverExecutions(ctx)
 	s.startMetricsRefresh(ctx)
 
 	cronSched, err := s.startCronScheduler() //nolint:contextcheck
@@ -178,6 +179,54 @@ func (s *Server) startExporter(ctx context.Context) {
 		Revision:            s.config.Workflow.Revision,
 	})
 	s.exporter.Start(ctx)
+}
+
+func (s *Server) recoverExecutions(ctx context.Context) {
+	if s.config.ExportURL == "" || !s.config.Workflow.Recovery {
+		return
+	}
+
+	s.config.Logger.Info("recovery: checking for recoverable executions", "agent", s.config.ExporterName)
+
+	recoveryClient := export.NewRecoveryClient(s.config.ExportURL, s.config.APIKey)
+
+	recovered, err := recoveryClient.RecoverExecutions(ctx, s.config.ExporterName)
+	if err != nil {
+		s.config.Logger.Error("recovery: failed to fetch executions", "error", err)
+		return
+	}
+
+	s.config.Logger.Info("recovery: found executions", "count", len(recovered))
+
+	for _, rec := range recovered {
+		if rec.WorkflowName != s.config.Workflow.Name {
+			s.config.Logger.Warn("recovery: workflow not found",
+				"workflow", rec.WorkflowName,
+				"execution", rec.ExecutionID,
+			)
+
+			continue
+		}
+
+		s.config.Logger.Info("recovery: resuming execution",
+			"execution", rec.ExecutionID,
+			"workflow", rec.WorkflowName,
+			"steps_recovered", len(rec.Steps),
+		)
+
+		for stepID, sr := range rec.Steps {
+			s.config.Logger.Info("recovery: step state",
+				"step", stepID,
+				"status", sr.Status,
+			)
+		}
+
+		s.runWorkflowAsync(rec.Params, asyncRunOpts{ //nolint:contextcheck
+			ExecutionID:    rec.ExecutionID,
+			Resumed:        true,
+			RecoveredSteps: rec.Steps,
+		})
+	}
 }
 
 func (s *Server) startMetricsRefresh(ctx context.Context) {
@@ -288,6 +337,10 @@ func (s *Server) shutdownServices(cronSched *CronScheduler, rmqConsumer *RabbitM
 
 	s.cancelScheduledTimers()
 
+	if s.exporter != nil {
+		s.exporter.Shutdown()
+	}
+
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 
@@ -296,13 +349,26 @@ func (s *Server) shutdownServices(cronSched *CronScheduler, rmqConsumer *RabbitM
 
 // asyncRunOpts holds optional settings for runWorkflowAsync.
 type asyncRunOpts struct {
-	TriggerData map[string]any
-	OnComplete  func(executionID string, success bool)
+	TriggerData    map[string]any
+	OnComplete     func(executionID string, success bool)
+	ExecutionID    string
+	Resumed        bool
+	RecoveredSteps map[string]*runtime.StepResult
 }
 
 func (s *Server) runWorkflowAsync(params map[string]any, opts ...asyncRunOpts) string {
 	wf := s.config.Workflow
-	executionID := uuid.New().String()
+
+	var opt asyncRunOpts
+
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+
+	executionID := opt.ExecutionID
+	if executionID == "" {
+		executionID = uuid.New().String()
+	}
 
 	exec := &store.Execution{
 		ID:           executionID,
@@ -316,11 +382,6 @@ func (s *Server) runWorkflowAsync(params map[string]any, opts ...asyncRunOpts) s
 	stopCapture := s.captureEvents(executionID)
 	services := s.buildActionServices()
 
-	var opt asyncRunOpts
-	if len(opts) > 0 {
-		opt = opts[0]
-	}
-
 	execCtx, cancel := context.WithCancel(s.ctx)
 	s.registerCancel(executionID, cancel)
 
@@ -328,14 +389,20 @@ func (s *Server) runWorkflowAsync(params map[string]any, opts ...asyncRunOpts) s
 		defer s.unregisterCancel(executionID)
 
 		result, err := s.config.Executor.Execute(execCtx, wf, params, engine.ExecuteOptions{
-			ExecutionID: executionID,
-			Services:    services,
-			TriggerData: opt.TriggerData,
+			ExecutionID:    executionID,
+			Services:       services,
+			TriggerData:    opt.TriggerData,
+			Resumed:        opt.Resumed,
+			RecoveredSteps: opt.RecoveredSteps,
 		})
 
 		stopCapture()
 		s.finalizeExecution(executionID, result, err, execCtx)
-		s.ensureWorkflowCompleted(executionID, result, err, execCtx)
+
+		shutdownWithRecovery := execCtx.Err() != nil && wf.Recovery
+		if !shutdownWithRecovery {
+			s.ensureWorkflowCompleted(executionID, result, err, execCtx)
+		}
 
 		if opt.OnComplete != nil {
 			success := err == nil && result != nil && result.Status == runtime.StatusSuccess

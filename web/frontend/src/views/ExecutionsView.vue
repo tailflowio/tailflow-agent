@@ -105,14 +105,7 @@ onMounted(() => {
 
 onUnmounted(() => observer?.disconnect())
 
-function dot(s: string) {
-  if (s === 'success') return 'bg-emerald-400'
-  if (s === 'failed') return 'bg-red-400'
-  if (s === 'cancelled') return 'bg-g-9'
-  if (s === 'running') return 'bg-g-12 animate-pulse'
-  if (s === 'waiting') return 'bg-amber-400 animate-pulse'
-  return 'bg-g-8'
-}
+
 function stepDot(s: string) {
   if (s === 'success') return 'bg-emerald-400'
   if (s === 'failed') return 'bg-red-400'
@@ -124,9 +117,10 @@ function stepDot(s: string) {
 function badge(s: string) {
   if (s === 'success') return 'bg-emerald-400/15 text-emerald-400'
   if (s === 'failed') return 'bg-red-400/15 text-red-400'
-  if (s === 'cancelled') return 'bg-g-7/20 text-g-9'
+  if (s === 'cancelled') return 'bg-orange-400/15 text-orange-400'
   if (s === 'running') return 'bg-amber-400/15 text-amber-400'
   if (s === 'waiting') return 'bg-amber-400/15 text-amber-400'
+  if (s === 'pending') return 'bg-violet-400/15 text-violet-400'
   return 'bg-g-7/20 text-g-9'
 }
 function isAnimated(s: string) {

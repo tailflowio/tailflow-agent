@@ -201,7 +201,6 @@ func (e *Exporter) flushBatch(flushCtx context.Context, batch *[]event.Event) {
 		_, err := e.post(flushCtx, "/api/v1/agent/ingest", payload)
 		if err != nil {
 			e.cfg.Logger.Warn("export ingest failed", "error", err, "batch_size", len(*batch))
-			// Drop the failed chunk to prevent infinite accumulation.
 			*batch = (*batch)[end:]
 
 			return
@@ -302,7 +301,7 @@ func (e *Exporter) batchLoop(ctx context.Context, ch <-chan event.Event) {
 				e.cfg.Logger.Warn("export buffer full, dropping oldest events", "dropped", drop)
 			}
 		case <-ticker.C:
-			e.flushBatch(ctx, &batch)
+			e.flushBatch(context.Background(), &batch) //nolint:contextcheck
 		case <-e.intervalChange:
 			e.mu.Lock()
 			ticker.Reset(e.flushInterval)
@@ -415,7 +414,7 @@ func (e *Exporter) trackExecution(ev event.Event) {
 		e.mu.Unlock()
 	case event.StepStarted, event.StepCompleted, event.StepFailed, event.StepSkipped,
 		event.StepLog, event.StepWaiting, event.StepInput, event.StepOutput,
-		event.StepGoto, event.Metrics:
+		event.StepGoto, event.Metrics, event.ExecutionState, event.ExecutionGroup:
 	}
 }
 
