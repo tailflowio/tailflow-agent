@@ -87,6 +87,10 @@ func validateSteps(w *Workflow) error {
 		if s.ErrorPolicy != "" && s.ErrorPolicy != "stop" && s.ErrorPolicy != "continue" && s.ErrorPolicy != "ignore" {
 			return fmt.Errorf("validation: step %q has invalid error_policy %q", s.ID, s.ErrorPolicy)
 		}
+
+		if s.OnRecovery != "" && s.OnRecovery != "retry" && s.OnRecovery != "skip" && s.OnRecovery != "fail" {
+			return fmt.Errorf("validation: step %q: on_recovery must be retry, skip, or fail", s.ID)
+		}
 	}
 
 	for _, s := range w.Steps {

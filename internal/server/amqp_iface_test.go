@@ -134,3 +134,8 @@ func (s *AMQPIfaceTestSuite) TestRealAMQPDial_Error() {
 	s.Nil(conn)
 	s.Contains(err.Error(), "dial failed")
 }
+
+func (s *AMQPIfaceTestSuite) TestAmqpRawDial_DefaultDialFails() {
+	_, err := amqpRawDial("amqp://localhost:59999")
+	s.Require().Error(err)
+}

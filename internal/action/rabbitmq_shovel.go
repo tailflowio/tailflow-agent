@@ -41,23 +41,27 @@ type realShovelConn struct {
 func (r *realShovelConn) Channel() (shovelRawChan, error) { return r.channelFn() }
 func (r *realShovelConn) Close() error                    { return r.closeFn() }
 
+type shovelAMQPConn interface {
+	Channel() (*amqp.Channel, error)
+	Close() error
+}
+
 var shovelDialFn = func(url string) (shovelConnector, error) {
 	c, err := amqp.Dial(url)
 	if err != nil {
 		return nil, err
 	}
 
+	return wrapShovelConn(c), nil
+}
+
+func wrapShovelConn(c shovelAMQPConn) *realShovelConn {
 	return &realShovelConn{
 		channelFn: func() (shovelRawChan, error) {
-			ch, err := c.Channel()
-			if err != nil {
-				return nil, err
-			}
-
-			return ch, nil
+			return c.Channel()
 		},
 		closeFn: c.Close,
-	}, nil
+	}
 }
 
 type realShovelDest struct{ ch shovelRawChan }

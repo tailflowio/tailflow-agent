@@ -13,6 +13,7 @@ const props = defineProps<{
     execCount?: number
     when?: string
     hasConditionalOutputs?: boolean
+    onRecovery?: string
   }
 }>()
 
@@ -99,6 +100,16 @@ function countBg(s: string) {
         :class="['ml-auto text-[11px] font-mono font-semibold rounded-full px-1.5 min-w-[22px] text-center leading-[20px]', countBg(data.status)]"
       >
         {{ data.activeCount }}
+      </span>
+    </div>
+    <div v-if="data.onRecovery && data.onRecovery !== 'retry'" class="mt-1.5 pl-[26px]">
+      <span
+        :class="[
+          'text-[9px] font-mono font-medium px-1.5 py-0.5 rounded',
+          data.onRecovery === 'skip' ? 'bg-amber-400/10 text-amber-400 border border-amber-400/20' : 'bg-red-400/10 text-red-400 border border-red-400/20'
+        ]"
+      >
+        {{ data.onRecovery }} on recovery
       </span>
     </div>
     <div v-if="data.status === 'waiting' && elapsed" class="flex items-center gap-2 mt-1.5 pl-[26px]">

@@ -61,10 +61,12 @@ type ExecuteResult struct {
 }
 
 type ExecuteOptions struct {
-	ExecutionID  string // Pre-generated execution ID (if empty, one is generated)
-	TriggerData  map[string]any
-	Services     *runtime.ActionServices // Server-side services (nil in CLI mode)
-	TestCaseName string                  // test mode: inject mocks for this case
+	ExecutionID    string
+	TriggerData    map[string]any
+	Services       *runtime.ActionServices
+	TestCaseName   string
+	Resumed        bool
+	RecoveredSteps map[string]*runtime.StepResult
 }
 
 func (e *Executor) Execute(
@@ -85,6 +87,14 @@ func (e *Executor) Execute(
 
 	execCtx := e.buildExecutionContext(executionID, wf.Name, resolvedParams, resolvedEnv, opts)
 
+	if len(opts) > 0 && opts[0].Resumed {
+		execCtx.Resumed = true
+
+		for stepID, sr := range opts[0].RecoveredSteps {
+			execCtx.SetStepResult(stepID, sr)
+		}
+	}
+
 	if len(opts) > 0 && opts[0].TestCaseName != "" {
 		execCtx.TestCaseName = opts[0].TestCaseName
 	}
@@ -99,6 +109,8 @@ func (e *Executor) Execute(
 
 	e.bus.Publish(event.NewEvent(event.WorkflowStarted, executionID, "", fmt.Sprintf("workflow %q started", wf.Name)))
 
+	e.emitInitialExecutionState(wf, execCtx)
+
 	dag, err := BuildDAG(wf.Steps)
 	if err != nil {
 		finishWorkflow("failed", err)
@@ -112,11 +124,90 @@ func (e *Executor) Execute(
 		e.executeOnError(ctx, parser.Step{OnError: wf.OnError}, execCtx)
 	}
 
+	if ctx.Err() != nil && wf.Recovery {
+		result := &ExecuteResult{
+			ExecutionID: executionID,
+			Status:      runtime.StatusCancelled,
+			Steps:       copyStepResults(execCtx.Steps),
+			Error:       execErr,
+			StartedAt:   startedAt,
+			FinishedAt:  time.Now(),
+		}
+		finishWorkflow(result.Status, result.Error)
+		return result, nil
+	}
+
 	result := e.buildExecuteResult(ctx, wf.Name, execCtx, execErr, executionID, startedAt)
 	finishWorkflow(result.Status, result.Error)
 	e.businessMetrics.RecordWorkflowCompleted(ctx, wf.Name, result.Status, tfotel.DurationMs(startedAt))
 
+	e.emitExecutionState(wf, execCtx, result)
+
 	return result, nil
+}
+
+func (e *Executor) emitExecutionState(wf *parser.Workflow, execCtx *runtime.ExecutionContext, result *ExecuteResult) {
+	var idempotencyKey string
+
+	if wf.Trigger != nil && wf.Trigger.HTTP != nil && wf.Trigger.HTTP.IdempotencyKey != "" {
+		resolved, evalErr := e.eval.ResolveTemplate(wf.Trigger.HTTP.IdempotencyKey, execCtx.ToMap())
+		if evalErr == nil {
+			idempotencyKey = resolved
+			execCtx.IdempotencyKey = resolved
+		}
+	}
+
+	stepsSnapshot := make(map[string]any, len(execCtx.Steps))
+
+	for stepID, sr := range execCtx.StepsCopy() {
+		stepsSnapshot[stepID] = map[string]any{
+			"status":      sr.Status,
+			"started_at":  sr.StartedAt,
+			"finished_at": sr.FinishedAt,
+		}
+	}
+
+	e.bus.Publish(event.Event{
+		Type:        event.ExecutionState,
+		Timestamp:   time.Now(),
+		ExecutionID: execCtx.ExecutionID,
+		Data: map[string]any{
+			"workflow_name":   wf.Name,
+			"status":          result.Status,
+			"steps":           stepsSnapshot,
+			"idempotency_key": idempotencyKey,
+			"params":          execCtx.Params,
+		},
+	})
+}
+
+func (e *Executor) emitInitialExecutionState(wf *parser.Workflow, execCtx *runtime.ExecutionContext) {
+	var idempotencyKey string
+
+	if wf.Trigger != nil && wf.Trigger.HTTP != nil && wf.Trigger.HTTP.IdempotencyKey != "" {
+		resolved, evalErr := e.eval.ResolveTemplate(wf.Trigger.HTTP.IdempotencyKey, execCtx.ToMap())
+		if evalErr == nil {
+			idempotencyKey = resolved
+			execCtx.IdempotencyKey = resolved
+		}
+	}
+
+	data := map[string]any{
+		"workflow_name":   wf.Name,
+		"status":          "running",
+		"idempotency_key": idempotencyKey,
+		"params":          execCtx.Params,
+	}
+	if wf.Recovery {
+		data["recovery"] = true
+	}
+
+	e.bus.Publish(event.Event{
+		Type:        event.ExecutionState,
+		Timestamp:   time.Now(),
+		ExecutionID: execCtx.ExecutionID,
+		Data:        data,
+	})
 }
 
 func resolveExecutionID(opts []ExecuteOptions) string {
@@ -424,9 +515,68 @@ func (e *Executor) enqueueChildren(children []*DAGNode, ds *dagState) {
 	}
 }
 
+func (e *Executor) handleRecovery(execCtx *runtime.ExecutionContext, step *parser.Step) (skip bool, err error) {
+	if !execCtx.Resumed {
+		return false, nil
+	}
+
+	sr, ok := execCtx.GetStepResult(step.ID)
+	if !ok {
+		return false, nil
+	}
+
+	if sr.Status == runtime.StatusSuccess || sr.Status == runtime.StatusSkipped {
+		return true, nil
+	}
+
+	if sr.Status != runtime.StatusRunning {
+		return false, nil
+	}
+
+	strategy := step.OnRecovery
+	if strategy == "" {
+		strategy = "retry"
+	}
+
+	now := time.Now()
+
+	switch strategy {
+	case "skip":
+		execCtx.SetStepResult(step.ID, &runtime.StepResult{
+			Status:     runtime.StatusSuccess,
+			StartedAt:  sr.StartedAt,
+			FinishedAt: &now,
+		})
+
+		return true, nil
+	case "fail":
+		execCtx.SetStepResult(step.ID, &runtime.StepResult{
+			Status:     runtime.StatusFailed,
+			StartedAt:  sr.StartedAt,
+			FinishedAt: &now,
+			Error: &runtime.StepError{
+				Message: "step was running at crash time and on_recovery=fail",
+				Code:    "recovery_failed",
+				StepID:  step.ID,
+			},
+		})
+
+		return true, fmt.Errorf("step %q: recovery failed, manual intervention required", step.ID)
+	default:
+		execCtx.ClearStepResult(step.ID)
+
+		return false, nil
+	}
+}
+
 func (e *Executor) executeNode(ctx context.Context, node *DAGNode, execCtx *runtime.ExecutionContext) error {
 	step := node.Step
 	logger := e.logger.With("step", step.ID)
+
+	skip, recoveryErr := e.handleRecovery(execCtx, &node.Step)
+	if skip {
+		return recoveryErr
+	}
 
 	skipped, err := e.evaluateWhenCondition(step, execCtx, logger)
 	if skipped || err != nil {
@@ -667,6 +817,18 @@ func (e *Executor) newPrintEmitter(stepID string, execCtx *runtime.ExecutionCont
 	}
 }
 
+func (e *Executor) newGroupEmitter(stepID string, execCtx *runtime.ExecutionContext) func(string) {
+	return func(key string) {
+		e.bus.Publish(event.Event{
+			Type:        event.ExecutionGroup,
+			Timestamp:   time.Now(),
+			ExecutionID: execCtx.ExecutionID,
+			StepID:      stepID,
+			Data:        map[string]any{"group_key": key},
+		})
+	}
+}
+
 func (e *Executor) createActionContext(
 	ctx context.Context, step parser.Step, resolvedConfig map[string]any,
 	execCtx *runtime.ExecutionContext, logger *slog.Logger, emitLog func(string),
@@ -680,6 +842,7 @@ func (e *Executor) createActionContext(
 		Services:  execCtx.Services,
 		EmitLog:   emitLog,
 		EmitPrint: e.newPrintEmitter(step.ID, execCtx),
+		EmitGroup: e.newGroupEmitter(step.ID, execCtx),
 		RunAction: e.newRunAction(ctx, step, execCtx, logger, emitLog),
 	}
 }
@@ -711,6 +874,7 @@ func (e *Executor) newRunAction(
 			Services:  execCtx.Services,
 			EmitLog:   emitLog,
 			EmitPrint: e.newPrintEmitter(step.ID, execCtx),
+			EmitGroup: e.newGroupEmitter(step.ID, execCtx),
 		}
 
 		validateErr := subAct.Validate(subCtx)

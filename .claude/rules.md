@@ -151,7 +151,7 @@ make lint && make test
 ### Tests
 - ❌ NOT using testify/suite → ALWAYS use suite pattern
 - ❌ NOT mocking `*slog.Logger` → ALWAYS mock it like any other dependency
-- ❌ Using `time.Sleep()` → use `GOEXPERIMENT=synctest`
+- ❌ Using `time.Sleep()` → use `synctest` (native in Go 1.26, no GOEXPERIMENT needed)
 - ❌ Ignoring mock expectations errors
 - ❌ Reusing mocks between tests → recreate in `SetupTest()`
 - ❌ Tests without assertions → every test must verify something

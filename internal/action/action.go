@@ -19,11 +19,9 @@ type ActionContext struct {
 	StepID    string
 	Logger    *slog.Logger
 	Services  *runtime.ActionServices
-	EmitLog   func(msg string) // optional: emit a live log line during execution
-	EmitPrint func(msg string) // optional: emit a log line printed immediately (non-stream)
-
-	// RunAction creates, resolves, and executes an action with extra template variables.
-	// loopVars are merged into the template context under the "loop" key.
+	EmitLog   func(msg string)
+	EmitPrint func(msg string)
+	EmitGroup func(key string)
 	RunAction func(actionName string, rawConfig map[string]any, loopVars map[string]any) (any, error)
 }
 

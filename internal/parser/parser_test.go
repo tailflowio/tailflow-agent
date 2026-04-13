@@ -578,6 +578,122 @@ func (s *ParserTestSuite) TestValidate_TestingValidExpectStatuses() {
 	}
 }
 
+func (s *ParserTestSuite) TestParseBytes_GroupAction() {
+	yaml := `
+version: "2.0"
+name: test-group-action
+params:
+  - name: customer_id
+    type: string
+    required: true
+steps:
+  - id: tag-customer
+    action: group
+    config:
+      key: "customer-{{ params.customer_id }}"
+  - id: step1
+    action: log
+    depends_on: [tag-customer]
+    config:
+      message: hello
+`
+	wf, err := ParseBytes([]byte(yaml))
+	s.Require().NoError(err)
+	s.Equal("group", wf.Steps[0].Action)
+	s.Equal("customer-{{ params.customer_id }}", wf.Steps[0].Config["key"])
+}
+
+func (s *ParserTestSuite) TestParseBytes_OnRecoveryValues() {
+	yaml := `
+version: "2.0"
+name: test-on-recovery
+steps:
+  - id: step-retry
+    action: http
+    on_recovery: retry
+    config:
+      url: http://example.com
+  - id: step-skip
+    action: http
+    on_recovery: skip
+    depends_on: [step-retry]
+    config:
+      url: http://example.com
+  - id: step-fail
+    action: http
+    on_recovery: fail
+    depends_on: [step-skip]
+    config:
+      url: http://example.com
+  - id: step-default
+    action: log
+    depends_on: [step-fail]
+    config:
+      message: hello
+`
+	wf, err := ParseBytes([]byte(yaml))
+	s.Require().NoError(err)
+	s.Equal("retry", wf.Steps[0].OnRecovery)
+	s.Equal("skip", wf.Steps[1].OnRecovery)
+	s.Equal("fail", wf.Steps[2].OnRecovery)
+	s.Empty(wf.Steps[3].OnRecovery)
+}
+
+func (s *ParserTestSuite) TestParseBytes_OnRecoveryInvalidValue() {
+	yaml := `
+version: "2.0"
+name: test-invalid-recovery
+steps:
+  - id: step1
+    action: http
+    on_recovery: explode
+    config:
+      url: http://example.com
+`
+	_, err := ParseBytes([]byte(yaml))
+	s.Error(err)
+	s.Contains(err.Error(), "on_recovery")
+}
+
+func (s *ParserTestSuite) TestParseBytes_IdempotencyKey() {
+	yaml := `
+version: "2.0"
+name: test-idempotency
+trigger:
+  http:
+    method: POST
+    path: /api/test
+    idempotency_key: "{{ trigger.body.customer_id }}"
+steps:
+  - id: step1
+    action: log
+    config:
+      message: hello
+`
+	wf, err := ParseBytes([]byte(yaml))
+	s.Require().NoError(err)
+	s.Equal("{{ trigger.body.customer_id }}", wf.Trigger.HTTP.IdempotencyKey)
+}
+
+func (s *ParserTestSuite) TestParseBytes_IdempotencyKeyOptional() {
+	yaml := `
+version: "2.0"
+name: test-no-idempotency
+trigger:
+  http:
+    method: POST
+    path: /api/test
+steps:
+  - id: step1
+    action: log
+    config:
+      message: hello
+`
+	wf, err := ParseBytes([]byte(yaml))
+	s.Require().NoError(err)
+	s.Empty(wf.Trigger.HTTP.IdempotencyKey)
+}
+
 func (s *ParserTestSuite) TestValidate_TestingValidCases() {
 	w := &Workflow{
 		Version: "2.0", Name: "test",

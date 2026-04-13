@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"sync/atomic"
 	"testing"
@@ -822,4 +823,71 @@ func (s *ServerTestSuite) TestEnsureWorkflowCompleted_PublishesEvent() {
 	case <-time.After(time.Second):
 		s.Fail("timeout waiting for published event")
 	}
+}
+
+func (s *ServerTestSuite) TestRecoverExecutions_ResumesIncompleteExecutions() {
+	mockSaaS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		now := time.Now().Format(time.RFC3339)
+		_, _ = fmt.Fprintf(w, `[{"execution_id":"exec-recovered","workflow_name":"test-workflow","status":"running","params":{"env":"staging"},"steps":{"greet":{"status":"success","started_at":"%s","finished_at":"%s"}}}]`, now, now)
+	}))
+	defer mockSaaS.Close()
+
+	srv := newTestServer(s.T())
+	srv.config.ExportURL = mockSaaS.URL
+	srv.config.ExporterName = "test-agent"
+	srv.ctx = context.Background()
+
+	var started atomic.Int32
+
+	ch := srv.config.EventBus.Subscribe(100)
+	go func() {
+		for ev := range ch {
+			if ev.Type == event.WorkflowStarted && ev.ExecutionID == "exec-recovered" {
+				started.Add(1)
+			}
+		}
+	}()
+
+	srv.recoverExecutions(context.Background())
+
+	s.Eventually(func() bool {
+		return started.Load() >= 1
+	}, 2*time.Second, 10*time.Millisecond)
+}
+
+func (s *ServerTestSuite) TestRecoverExecutions_SkipsUnknownWorkflow() {
+	mockSaaS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"execution_id":"exec-unknown","workflow_name":"unknown-workflow","status":"running"}]`))
+	}))
+	defer mockSaaS.Close()
+
+	srv := newTestServer(s.T())
+	srv.config.ExportURL = mockSaaS.URL
+	srv.config.ExporterName = "test-agent"
+	srv.ctx = context.Background()
+
+	srv.recoverExecutions(context.Background())
+
+	execs := srv.config.ExecutionStore.List()
+	for _, exec := range execs {
+		s.NotEqual("exec-unknown", exec.ID)
+	}
+}
+
+func (s *ServerTestSuite) TestRecoverExecutions_NoopWhenNoExportURL() {
+	srv := newTestServer(s.T())
+	srv.config.ExportURL = ""
+	srv.ctx = context.Background()
+
+	srv.recoverExecutions(context.Background())
+
+	s.Empty(srv.config.ExecutionStore.List())
+}
+
+func (s *ServerTestSuite) TestNewRedisKVStoreFn_DefaultDialFails() {
+	_, err := newRedisKVStoreFn(context.Background(), "redis://localhost:59999")
+	s.Require().Error(err)
 }

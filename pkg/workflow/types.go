@@ -57,12 +57,13 @@ type PipelineAction struct {
 
 // GraphNode represents a node in the DAG visualization.
 type GraphNode struct {
-	ID       string           `json:"id"`
-	Label    string           `json:"label"`
-	Action   string           `json:"action"`             // action type (e.g. "http", "loop", "set")
-	Type     string           `json:"type"`               // "step", "trigger"
-	Pipeline []PipelineAction `json:"pipeline,omitempty"` // loop pipeline sub-actions
-	When     string           `json:"when,omitempty"`     // condition expression for conditional steps
+	ID         string           `json:"id"`
+	Label      string           `json:"label"`
+	Action     string           `json:"action"`                // action type (e.g. "http", "loop", "set")
+	Type       string           `json:"type"`                  // "step", "trigger"
+	Pipeline   []PipelineAction `json:"pipeline,omitempty"`    // loop pipeline sub-actions
+	When       string           `json:"when,omitempty"`        // condition expression for conditional steps
+	OnRecovery string           `json:"on_recovery,omitempty"` // recovery strategy: retry, skip, fail
 }
 
 // GraphEdge represents an edge in the DAG visualization.
