@@ -22,6 +22,7 @@ import (
 	"github.com/tailflow/tailflow/internal/engine"
 	"github.com/tailflow/tailflow/internal/event"
 	"github.com/tailflow/tailflow/internal/export"
+	"github.com/tailflow/tailflow/internal/export/saas"
 	tfotel "github.com/tailflow/tailflow/internal/otel"
 	"github.com/tailflow/tailflow/internal/parser"
 	"github.com/tailflow/tailflow/internal/runtime"
@@ -1278,7 +1279,7 @@ func serveCmd(exporterURL, exporterKey, exporterName, otelEndpoint, otelServiceN
 
 type runResources struct {
 	bus          *event.Bus
-	exporter     *export.Exporter
+	exporter     export.EventExporter
 	exportCancel context.CancelFunc
 	tickDone     chan struct{}
 	wg           sync.WaitGroup
@@ -1436,15 +1437,13 @@ func setupRunResources(
 
 func setupExporter(
 	exportURL, apiKey, exporterName string, bus *event.Bus, wf *parser.Workflow,
-) (*export.Exporter, context.CancelFunc) {
+) (export.EventExporter, context.CancelFunc) {
 	if exportURL == "" {
-		return nil, func() {}
+		return export.NewNoopExporter(), func() {}
 	}
 
-	triggerType := resolveTriggerType(wf)
-
 	exportLogger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	exporter := export.New(export.Config{
+	exporter := saas.NewExporter(saas.Config{
 		ExportURL:           exportURL,
 		APIKey:              apiKey,
 		AgentName:           exporterName,
@@ -1453,7 +1452,7 @@ func setupExporter(
 		WorkflowName:        wf.Name,
 		WorkflowDescription: wf.Description,
 		WorkflowTags:        wf.Tags,
-		TriggerType:         triggerType,
+		TriggerType:         resolveTriggerType(wf),
 		StepsCount:          len(wf.Steps),
 		Version:             version,
 		Revision:            wf.Revision,
@@ -1856,6 +1855,8 @@ func executeServe(
 
 	execStore := store.NewExecutionStore(maxExecs)
 
+	exporter, claimer, recoverer := buildExportPorts(exportURL, apiKey, exporterName, bus, wf, logger)
+
 	srv := server.New(server.Config{
 		Port:           port,
 		Executor:       exec,
@@ -1865,16 +1866,47 @@ func executeServe(
 		ExecutionStore: execStore,
 		EventBus:       bus,
 		Logger:         logger,
-		ExportURL:      exportURL,
-		APIKey:         apiKey,
 		ExporterName:   exporterName,
 		Version:        version,
+		Exporter:       exporter,
+		Claimer:        claimer,
+		Recoverer:      recoverer,
 	})
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	return srv.Run(ctx)
+}
+
+// buildExportPorts wires the SaaS impls (or noops when no ExportURL) for the
+// server's export.* dependency interfaces. The server takes ownership of the
+// returned ports — it calls Start/Shutdown on the exporter as part of its own
+// lifecycle, so callers do not manage a separate cancel here.
+func buildExportPorts(
+	exportURL, apiKey, exporterName string,
+	bus *event.Bus, wf *parser.Workflow, logger *slog.Logger,
+) (export.EventExporter, export.IdempotencyClaimer, export.ExecutionRecoverer) {
+	if exportURL == "" {
+		return export.NewNoopExporter(), export.NewNoopClaimer(), export.NewNoopRecoverer()
+	}
+
+	exporter := saas.NewExporter(saas.Config{
+		ExportURL:           exportURL,
+		APIKey:              apiKey,
+		AgentName:           exporterName,
+		EventBus:            bus,
+		Logger:              logger,
+		WorkflowName:        wf.Name,
+		WorkflowDescription: wf.Description,
+		WorkflowTags:        wf.Tags,
+		TriggerType:         resolveTriggerType(wf),
+		StepsCount:          len(wf.Steps),
+		Version:             version,
+		Revision:            wf.Revision,
+	})
+
+	return exporter, saas.NewClaimClient(exportURL, apiKey), saas.NewRecoveryClient(exportURL, apiKey)
 }
 
 func cliAllowedActions(all []string) []string {

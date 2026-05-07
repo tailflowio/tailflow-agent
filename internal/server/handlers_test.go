@@ -18,6 +18,8 @@ import (
 	"github.com/tailflow/tailflow/internal/action"
 	"github.com/tailflow/tailflow/internal/engine"
 	"github.com/tailflow/tailflow/internal/event"
+	"github.com/tailflow/tailflow/internal/export"
+	"github.com/tailflow/tailflow/internal/export/saas"
 	"github.com/tailflow/tailflow/internal/parser"
 	"github.com/tailflow/tailflow/internal/runtime"
 	"github.com/tailflow/tailflow/internal/store"
@@ -2217,6 +2219,11 @@ steps:
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	exec := engine.NewExecutor(reg, bus, logger, nil, nil, nil)
 
+	var claimer export.IdempotencyClaimer = export.NewNoopClaimer()
+	if saasURL != "" {
+		claimer = saas.NewClaimClient(saasURL, "test-key")
+	}
+
 	return New(Config{
 		Port:           0,
 		Executor:       exec,
@@ -2224,8 +2231,7 @@ steps:
 		ExecutionStore: store.NewExecutionStore(10),
 		EventBus:       bus,
 		Logger:         logger,
-		ExportURL:      saasURL,
-		APIKey:         "test-key",
+		Claimer:        claimer,
 	})
 }
 
@@ -2294,7 +2300,6 @@ func (s *HandlersTestSuite) TestPublicTrigger_NoIdempotencyKeyNoExportURL() {
 
 func (s *HandlersTestSuite) TestPublicTrigger_IdempotencyNoExportURL() {
 	srv := newTestServerIdempotent(s.T(), "")
-	srv.config.ExportURL = ""
 
 	req := httptest.NewRequest("POST", "/api/public/submit", strings.NewReader(`{"order_id":"ord-789"}`))
 	req.Header.Set("Content-Type", "application/json")

@@ -1,4 +1,4 @@
-package export
+package saas
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/tailflow/tailflow/internal/export"
 	"github.com/tailflow/tailflow/internal/runtime"
 )
 
@@ -19,16 +20,6 @@ type rawStep struct {
 	ErrorCode    string  `json:"error_code,omitempty"`
 	StartedAt    *string `json:"started_at,omitempty"`
 	FinishedAt   *string `json:"finished_at,omitempty"`
-}
-
-type RecoveredExecution struct {
-	ExecutionID  string                         `json:"execution_id"`
-	WorkflowName string                         `json:"workflow_name"`
-	Status       string                         `json:"status"`
-	RawParams    string                         `json:"params,omitempty"`
-	RawSteps     json.RawMessage                `json:"steps,omitempty"`
-	Params       map[string]any                 `json:"-"`
-	Steps        map[string]*runtime.StepResult `json:"-"`
 }
 
 type RecoveryClient struct {
@@ -45,7 +36,7 @@ func NewRecoveryClient(baseURL, apiKey string) *RecoveryClient {
 	}
 }
 
-func (rc *RecoveryClient) RecoverExecutions(ctx context.Context, agentID string) ([]RecoveredExecution, error) {
+func (rc *RecoveryClient) RecoverExecutions(ctx context.Context, agentID string) ([]export.RecoveredExecution, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rc.baseURL+"/api/v1/agent/recovery?agent_id="+url.QueryEscape(agentID), nil)
 	if err != nil {
 		return nil, fmt.Errorf("recovery: build request: %w", err)
@@ -64,7 +55,7 @@ func (rc *RecoveryClient) RecoverExecutions(ctx context.Context, agentID string)
 		return nil, fmt.Errorf("recovery: unexpected status %d", resp.StatusCode)
 	}
 
-	var execs []RecoveredExecution
+	var execs []export.RecoveredExecution
 
 	err = json.NewDecoder(resp.Body).Decode(&execs)
 	if err != nil {

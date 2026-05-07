@@ -1,4 +1,4 @@
-package export
+package saas
 
 import (
 	"bytes"
@@ -55,7 +55,7 @@ type Exporter struct {
 	wg                sync.WaitGroup
 }
 
-func New(cfg Config) *Exporter {
+func NewExporter(cfg Config) *Exporter {
 	if cfg.FlushInterval == 0 {
 		cfg.FlushInterval = 1 * time.Second
 	}

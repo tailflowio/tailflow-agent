@@ -16,7 +16,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/tailflow/tailflow/internal/engine"
 	"github.com/tailflow/tailflow/internal/event"
-	"github.com/tailflow/tailflow/internal/export"
 	"github.com/tailflow/tailflow/internal/parser"
 	"github.com/tailflow/tailflow/internal/runtime"
 	"github.com/tailflow/tailflow/internal/store"
@@ -551,10 +550,6 @@ func (s *Server) handleIdempotencyCheck(
 		return false
 	}
 
-	if s.config.ExportURL == "" {
-		return false
-	}
-
 	eval := runtime.NewExprEvaluator()
 	ctx := map[string]any{
 		"trigger": triggerData,
@@ -566,9 +561,7 @@ func (s *Server) handleIdempotencyCheck(
 		return false
 	}
 
-	claimClient := export.NewClaimClient(s.config.ExportURL, s.config.APIKey)
-
-	claimResult, claimErr := claimClient.ClaimExecution(r.Context(), uuid.New().String(), wf.Name, resolvedKey)
+	claimResult, claimErr := s.config.Claimer.ClaimExecution(r.Context(), uuid.New().String(), wf.Name, resolvedKey)
 	if claimErr != nil {
 		s.config.Logger.Warn("idempotency claim failed, proceeding with execution", "error", claimErr)
 		return false
