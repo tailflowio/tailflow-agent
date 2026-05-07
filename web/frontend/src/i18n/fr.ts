@@ -5,7 +5,8 @@ export default {
   nav: {
     overview: "Vue d'ensemble",
     workflow: 'Workflow',
-    executions: 'Executions',
+    executions: 'Historique',
+    liveRuns: 'Live runs',
     run: 'Executer',
     lightMode: 'Mode clair',
     darkMode: 'Mode sombre',

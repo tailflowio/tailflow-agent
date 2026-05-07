@@ -1,5 +1,4 @@
 import { createApp } from 'vue'
-import { createPinia } from 'pinia'
 import { createRouter, createWebHistory } from 'vue-router'
 import { i18n } from './i18n'
 import App from './App.vue'
@@ -14,11 +13,6 @@ const router = createRouter({
       component: () => import('./views/DashboardView.vue'),
     },
     {
-      path: '/workflow',
-      name: 'workflow',
-      component: () => import('./views/WorkflowView.vue'),
-    },
-    {
       path: '/executions',
       name: 'executions',
       component: () => import('./views/ExecutionsView.vue'),
@@ -29,19 +23,19 @@ const router = createRouter({
       component: () => import('./views/ExecutionView.vue'),
     },
     {
-      path: '/steps',
-      redirect: '/workflow',
+      path: '/docs',
+      name: 'docs',
+      component: () => import('./views/DocsView.vue'),
     },
     {
-      path: '/steps/:id',
-      name: 'step-detail',
-      component: () => import('./views/StepDetailView.vue'),
+      path: '/editor',
+      name: 'editor',
+      component: () => import('./views/EditorView.vue'),
     },
   ],
 })
 
 const app = createApp(App)
-app.use(createPinia())
 app.use(router)
 app.use(i18n as any)
 app.mount('#app')

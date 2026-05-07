@@ -596,8 +596,23 @@ func (r *cliRenderer) redrawActive() {
 		lines++
 	}
 
-	if r.streamLog != "" {
-		fmt.Printf("  %s   %s\n", r.c("36", "│"), r.c("90", r.streamLog))
+	activeHasStreamLog := false
+
+	for _, id := range r.activeSteps {
+		st := r.steps[id]
+		if st != nil && st.lastLog == r.streamLog {
+			activeHasStreamLog = true
+			break
+		}
+	}
+
+	if r.streamLog != "" && !activeHasStreamLog {
+		display := r.streamLog
+		if len(display) > 120 {
+			display = display[:117] + "..."
+		}
+
+		fmt.Printf("  %s   %s\n", r.c("36", "│"), r.c("90", display))
 
 		lines++
 	}
@@ -819,6 +834,8 @@ func (r *cliRenderer) handleStepCompleted(ev event.Event) {
 		return
 	}
 
+	r.streamLog = ""
+
 	title := r.stepTitle(ev.StepID)
 	dur := r.formatDuration(ev.StepID)
 
@@ -841,6 +858,8 @@ func (r *cliRenderer) handleStepFailed(ev event.Event) {
 
 		return
 	}
+
+	r.streamLog = ""
 
 	title := r.stepTitle(ev.StepID)
 	dur := r.formatDuration(ev.StepID)
@@ -1228,6 +1247,7 @@ func serveCmd(exporterURL, exporterKey, exporterName, otelEndpoint, otelServiceN
 		port       int
 		maxExecs   int
 		selfHosted bool
+		editor     bool
 	)
 
 	cmd := &cobra.Command{
@@ -1245,12 +1265,13 @@ func serveCmd(exporterURL, exporterKey, exporterName, otelEndpoint, otelServiceN
 
 			otelCfg := resolveOTelConfig(otelEndpoint, otelServiceName)
 
-			return executeServe(args[0], port, maxExecs, selfHosted, url, key, name, otelCfg)
+			return executeServe(args[0], port, maxExecs, selfHosted, editor, url, key, name, otelCfg)
 		},
 	}
 	cmd.Flags().IntVarP(&port, "port", "P", 8080, "Server port")
 	cmd.Flags().IntVar(&maxExecs, "max-executions", 100, "Max executions to keep in memory")
 	cmd.Flags().BoolVar(&selfHosted, "selfhosted", false, "Enable all actions (exec, js, file.*) for self-hosted deployments")
+	cmd.Flags().BoolVar(&editor, "editor", false, "Enable workflow editor: persist YAML changes via PUT /api/workflow/raw")
 
 	return cmd
 }
@@ -1799,7 +1820,7 @@ func executeValidate(path string, noColor bool) error {
 }
 
 func executeServe(
-	path string, port int, maxExecs int, selfHosted bool,
+	path string, port int, maxExecs int, selfHosted, editor bool,
 	exportURL, apiKey, exporterName string, otelCfg tfotel.Config,
 ) error {
 	otelResult, err := tfotel.Setup(context.Background(), otelCfg)
@@ -1840,6 +1861,7 @@ func executeServe(
 		Executor:       exec,
 		Workflow:       wf,
 		FilePath:       path,
+		EditorEnabled:  editor,
 		ExecutionStore: execStore,
 		EventBus:       bus,
 		Logger:         logger,

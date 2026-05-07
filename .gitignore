@@ -31,3 +31,12 @@ personal_examples/
 
 # Claude Code local settings
 .claude/settings.local.json
+
+.docs/*
+
+# Session notes (Claude Code memory)
+web/frontend/MEMORY.md
+web/frontend/docs/
+
+# Claude Flow scratch
+.claude-flow/

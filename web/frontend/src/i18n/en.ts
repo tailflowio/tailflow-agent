@@ -3,9 +3,10 @@ import { sharedEn } from '@tailflow/shared'
 export default {
   ...sharedEn,
   nav: {
-    overview: 'Overview',
+    overview: 'Dashboard',
     workflow: 'Workflow',
-    executions: 'Executions',
+    executions: 'History',
+    liveRuns: 'Live runs',
     run: 'Run',
     lightMode: 'Light mode',
     darkMode: 'Dark mode',

@@ -1,35 +1,38 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { RouterView, RouterLink, useRoute, useRouter } from 'vue-router'
+import { ref, onMounted, onUnmounted } from 'vue'
+import { RouterView, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useTheme } from '@/composables/useTheme'
+// theme reactive ref is initialized via useTheme()
 import { useRunTrigger } from '@/composables/useRunTrigger'
 import { useWorkflowApi } from '@/composables/useWorkflowApi'
+import { useShortcuts } from '@/composables/useShortcuts'
+import AppSidebar from '@/components/AppSidebar.vue'
+import AppTopBar from '@/components/AppTopBar.vue'
+import CommandPalette from '@/components/CommandPalette.vue'
+import ShortcutsHint from '@/components/ShortcutsHint.vue'
+import StepInspector from '@/components/StepInspector.vue'
+import SettingsPanel from '@/components/SettingsPanel.vue'
 import ParamForm from '@/components/ParamForm.vue'
+import { useStepInspector } from '@/composables/useStepInspector'
 
-const route = useRoute()
 const router = useRouter()
 const { t, locale } = useI18n()
-const { theme, toggle } = useTheme()
+const { toggle: toggleTheme } = useTheme()
 const { showRunDialog, workflowReady, workflowName, workflowParams } = useRunTrigger()
+const api = useWorkflowApi()
 
-const currentLocale = computed(() => locale.value)
+const paletteOpen = ref(false)
+const inspector = useStepInspector()
+const running = ref(false)
+
+useShortcuts({ paletteOpen, inspectorOpen: inspector.open })
 
 function toggleLocale() {
   const next = locale.value === 'en' ? 'fr' : 'en'
   locale.value = next
   localStorage.setItem('locale', next)
 }
-const api = useWorkflowApi()
-const running = ref(false)
-const appVersion = ref('')
-
-onMounted(async () => {
-  try {
-    const data = await fetch('/api/version').then(r => r.json())
-    appVersion.value = data.version || ''
-  } catch { /* ignore */ }
-})
 
 async function run(params: Record<string, unknown>) {
   running.value = true
@@ -44,134 +47,51 @@ async function run(params: Record<string, unknown>) {
   }
 }
 
-function isActive(path: string) {
-  if (path === '/') return route.path === '/'
-  return route.path.startsWith(path)
-}
-
-const navItems = [
-  { path: '/', key: 'nav.overview', icon: 'overview' },
-  { path: '/workflow', key: 'nav.workflow', icon: 'workflow' },
-  { path: '/executions', key: 'nav.executions', icon: 'executions' },
-]
-
 function handleKeydown(e: KeyboardEvent) {
   if ((e.metaKey || e.ctrlKey) && e.key === 'e') {
     e.preventDefault()
-    if (workflowReady.value) {
-      showRunDialog.value = true
-    }
+    if (workflowReady.value) showRunDialog.value = true
   }
 }
 
-onMounted(() => window.addEventListener('keydown', handleKeydown))
-onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
+function handleToggleTheme() { toggleTheme() }
+
+function dispatchShortcuts() {
+  window.dispatchEvent(new CustomEvent('toggle-shortcuts'))
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', handleKeydown)
+  window.addEventListener('toggle-theme', handleToggleTheme)
+})
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown)
+  window.removeEventListener('toggle-theme', handleToggleTheme)
+})
 </script>
 
 <template>
-  <div class="flex h-screen overflow-hidden">
-    <!-- Sidebar -->
-    <aside class="w-56 flex-shrink-0 bg-g-2 border-r border-g-5 flex flex-col">
-      <!-- Logo -->
-      <div class="p-5 border-b border-g-5">
-        <div class="flex items-center gap-2">
-          <RouterLink to="/" class="text-base font-semibold text-g-14 tracking-tight">Tailflow</RouterLink>
-          <span v-if="appVersion" class="text-[10px] font-mono px-1.5 py-0.5 bg-g-4 text-g-9 rounded">{{ appVersion }}</span>
-        </div>
-        <p v-if="workflowName" class="text-xs text-g-9 mt-0.5 truncate">{{ workflowName }}</p>
-      </div>
+  <div class="h-screen w-screen flex bg-g-1 text-g-13 overflow-hidden" :style="{ '--inspector-w': inspector.open.value ? '520px' : '0px' }">
+    <AppSidebar />
+    <div class="flex-1 flex flex-col min-w-0">
+      <AppTopBar
+        :workflow-name="workflowName"
+        @open-palette="paletteOpen = true"
+        @open-shortcuts="dispatchShortcuts"
+        @toggle-theme="toggleTheme"
+        @toggle-locale="toggleLocale"
+      />
+      <main class="flex-1 min-h-0 overflow-y-auto bg-g-1" :style="{ paddingRight: inspector.open.value ? '520px' : '0', transition: 'padding-right 180ms ease' }">
+        <RouterView v-slot="{ Component, route }">
+          <component :is="Component" :key="route.fullPath" />
+        </RouterView>
+      </main>
+    </div>
 
-      <!-- Nav items -->
-      <nav class="flex-1 py-3 px-3 space-y-0.5">
-        <RouterLink
-          v-for="item in navItems"
-          :key="item.path"
-          :to="item.path"
-          :class="[
-            'flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors',
-            isActive(item.path)
-              ? 'bg-g-4 text-g-14'
-              : 'text-g-11 hover:text-g-14 hover:bg-g-3'
-          ]"
-        >
-          <!-- Overview icon -->
-          <svg v-if="item.icon === 'overview'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
-          </svg>
-          <!-- Workflow icon (connected nodes) -->
-          <svg v-else-if="item.icon === 'workflow'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="4" r="2" />
-            <circle cx="6" cy="14" r="2" />
-            <circle cx="18" cy="14" r="2" />
-            <path d="M12 6v4m-4.5 2L12 10m4.5 2L12 10" />
-            <circle cx="12" cy="20" r="2" />
-            <path d="M6 16l6 2m6-2l-6 2" />
-          </svg>
-          <!-- Executions icon -->
-          <svg v-else-if="item.icon === 'executions'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
-          </svg>
-          {{ t(item.key) }}
-        </RouterLink>
-      </nav>
-
-      <!-- Bottom section -->
-      <div class="p-3 border-t border-g-5 space-y-2">
-        <!-- Theme toggle -->
-        <div class="flex items-center justify-between px-2 py-1.5">
-          <span class="text-xs text-g-9">{{ theme === 'dark' ? t('nav.darkMode') : t('nav.lightMode') }}</span>
-          <button
-            @click="toggle"
-            class="relative w-9 h-5 rounded-full transition-colors duration-300 focus:outline-none"
-            :class="theme === 'light' ? 'bg-g-6' : 'bg-g-9'"
-            :title="theme === 'dark' ? t('nav.lightMode') : t('nav.darkMode')"
-          >
-            <span
-              class="absolute top-0.5 left-0.5 w-4 h-4 rounded-full transition-all duration-300 flex items-center justify-center"
-              :class="theme === 'light' ? 'translate-x-4 bg-white' : 'translate-x-0 bg-g-15'"
-            >
-              <svg v-if="theme === 'light'" class="w-2.5 h-2.5 text-g-10" fill="currentColor" viewBox="0 0 20 20">
-                <path fill-rule="evenodd" d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z" clip-rule="evenodd" />
-              </svg>
-              <svg v-else class="w-2.5 h-2.5 text-g-6" fill="currentColor" viewBox="0 0 20 20">
-                <path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z" />
-              </svg>
-            </span>
-          </button>
-        </div>
-
-        <!-- Locale toggle -->
-        <div class="flex items-center justify-between px-2 py-1.5">
-          <span class="text-xs text-g-9">{{ t('nav.language') }}</span>
-          <button
-            @click="toggleLocale"
-            class="text-[12px] font-mono font-medium text-g-11 hover:text-g-14 px-2 py-0.5 rounded-md bg-g-4 hover:bg-g-5 transition-colors"
-          >
-            {{ currentLocale === 'en' ? 'FR' : 'EN' }}
-          </button>
-        </div>
-
-        <!-- Run button -->
-        <button
-          v-if="workflowReady"
-          @click="showRunDialog = true"
-          class="w-full flex items-center gap-2 px-3.5 py-2.5 rounded-lg text-[13px] font-semibold bg-g-14 text-g-1 hover:bg-g-12 active:scale-[0.98] transition-all duration-150"
-        >
-          <svg class="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
-          </svg>
-          {{ t('nav.run') }}
-          <span class="ml-auto text-[12px] font-mono font-normal tracking-wide opacity-80">&#8984;E</span>
-        </button>
-      </div>
-    </aside>
-
-    <!-- Main content -->
-    <main class="flex-1 overflow-y-auto bg-g-1">
-      <div class="max-w-7xl mx-auto p-6">
-        <RouterView />
-      </div>
-    </main>
+    <CommandPalette :open="paletteOpen" @close="paletteOpen = false" />
+    <ShortcutsHint />
+    <SettingsPanel />
+    <StepInspector :open="inspector.open.value" :step-id="inspector.stepId.value" @close="inspector.close()" />
 
     <!-- Run Dialog -->
     <Teleport to="body">

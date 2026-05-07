@@ -18,10 +18,13 @@ func (s *Server) setupRoutes() {
 
 func (s *Server) setupAPIRoutes() {
 	s.mux.HandleFunc("GET /api/workflow", s.handleGetWorkflow)
+	s.mux.HandleFunc("GET /api/workflow/raw", s.handleGetWorkflowRaw)
+	s.mux.HandleFunc("PUT /api/workflow/raw", s.handlePutWorkflowRaw)
 	s.mux.HandleFunc("GET /api/workflow/graph", s.handleGetWorkflowGraph)
 	s.mux.HandleFunc("GET /api/workflow/activity", s.handleGetWorkflowActivity)
 	s.mux.HandleFunc("POST /api/workflow/validate", s.handleValidateWorkflow)
 	s.mux.HandleFunc("POST /api/workflow/run", s.handleRunWorkflow)
+	s.mux.HandleFunc("GET /api/workflow/steps/metrics", s.handleGetAllStepMetrics)
 	s.mux.HandleFunc("GET /api/workflow/steps/{id}", s.handleGetStepDetail)
 
 	s.mux.HandleFunc("GET /api/version", s.handleGetVersion)
@@ -30,6 +33,7 @@ func (s *Server) setupAPIRoutes() {
 	s.mux.HandleFunc("GET /api/executions", s.handleListExecutions)
 	s.mux.HandleFunc("GET /api/executions/{id}", s.handleGetExecution)
 	s.mux.HandleFunc("POST /api/executions/{id}/cancel", s.handleCancelExecution)
+	s.mux.HandleFunc("GET /api/executions/{id}/events/list", s.handleListEvents)
 	s.mux.HandleFunc("GET /api/executions/{id}/events", s.handleSSE)
 	s.mux.HandleFunc("GET /api/events", s.handleGlobalSSE)
 

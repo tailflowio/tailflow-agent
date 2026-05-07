@@ -15,8 +15,14 @@ type Workflow struct {
 	Sensitive   []string          `json:"sensitive,omitempty"   yaml:"sensitive,omitempty"`
 	Trigger     *Trigger          `json:"trigger,omitempty"     yaml:"trigger,omitempty"`
 	Recovery    bool              `json:"recovery,omitempty"    yaml:"recovery,omitempty"`
+	Stages      []Stage           `json:"stages"                yaml:"stages"`
 	OnError     []Step            `json:"on_error,omitempty"    yaml:"on_error,omitempty"`
 	Steps       []Step            `json:"steps"                 yaml:"steps"`
+}
+
+type Stage struct {
+	Name        string `json:"name"                  yaml:"name"`
+	Description string `json:"description,omitempty" yaml:"description,omitempty"`
 }
 
 // Param defines an input parameter for a workflow.
@@ -39,6 +45,7 @@ type GotoConfig struct {
 type Step struct {
 	ID          string         `json:"id"                     yaml:"id"`
 	Action      string         `json:"action"                 yaml:"action"`
+	Stage       string         `json:"stage,omitempty"        yaml:"stage,omitempty"`
 	Title       string         `json:"title,omitempty"        yaml:"title,omitempty"`
 	DependsOn   []string       `json:"depends_on,omitempty"   yaml:"depends_on,omitempty"`
 	When        string         `json:"when,omitempty"         yaml:"when,omitempty"`

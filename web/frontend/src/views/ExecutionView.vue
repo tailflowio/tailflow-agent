@@ -7,12 +7,18 @@ import { useWorkflowApi, type Graph, type Execution } from '@/composables/useWor
 const { t } = useI18n()
 import { useSSE } from '@/composables/useSSE'
 import type { EventRow } from '@tailflow/shared'
-import StepTimeline from '@/components/StepTimeline.vue'
-import EventTimeline from '@tailflow/shared/components/EventTimeline.vue'
+import LogsDock from '@/components/LogsDock.vue'
+import ActiveRunsStrip from '@/components/ActiveRunsStrip.vue'
+import WorkflowDAGCustom from '@/components/WorkflowDAGCustom.vue'
+import { useStepInspector } from '@/composables/useStepInspector'
+import StatusBadge from '@/components/primitives/StatusBadge.vue'
+import Icon from '@/components/primitives/Icon.vue'
+import { fmtAgo } from '@/composables/useFormat'
 
 const route = useRoute()
-const router = useRouter()
+useRouter()
 const api = useWorkflowApi()
+const inspector = useStepInspector()
 
 const executionId = route.params.id as string
 const execution = ref<Execution | null>(null)
@@ -20,7 +26,7 @@ const graph = ref<Graph | null>(null)
 const fetchError = ref(false)
 const initialLoading = ref(true)
 
-const { events, connected, finished, stepStatuses, stepVolumes, stepIterations, stepOutputHistory, stepPipelineProgress, connect } = useSSE(executionId, {
+const { events, connected, finished, stepStatuses, stepVolumes, stepIterations, connect } = useSSE(executionId, {
   onDisconnect: async () => {
     try {
       const fresh = await api.getExecution(executionId) as Execution
@@ -85,23 +91,29 @@ onMounted(async () => {
   initialLoading.value = false
 
   if (execution.value) {
+    if (execution.value.finished_at) {
+      fetchEventPage(false)
+    }
+
     connect()
   }
 })
 
 watch(finished, (v) => {
-  if (v) {
-    api.getExecution(executionId).then(e => {
-      execution.value = e as Execution
-      if (e.steps) {
-        for (const [id, step] of Object.entries(e.steps)) {
-          if (step.status) {
-            stepStatuses.value[id] = step.status
-          }
-        }
+  if (!v) return
+  fetchEventPage(false)
+
+  // Recovery path: refresh execution from API. The SSE bus is drop-on-full
+  // (bus.go:73) so a slow SSE subscriber may have missed events; the API
+  // snapshot is updated by a separate subscriber and acts as the safety net.
+  api.getExecution(executionId).then(e => {
+    execution.value = e as Execution
+    if (e.steps) {
+      for (const [id, step] of Object.entries(e.steps)) {
+        if (step.status) stepStatuses.value[id] = step.status
       }
-    }).catch(() => {})
-  }
+    }
+  }).catch(() => {})
 })
 
 const statusLabel = computed(() => execution.value?.status || 'pending')
@@ -139,31 +151,107 @@ async function cancelExec() {
   }
 }
 
-function statusBadge(s: string) {
-  if (s === 'success') return 'bg-emerald-400/15 text-emerald-400'
-  if (s === 'failed') return 'bg-red-400/15 text-red-400'
-  if (s === 'cancelled') return 'bg-orange-400/15 text-orange-400'
-  if (s === 'running') return 'bg-amber-400/15 text-amber-400'
-  if (s === 'waiting') return 'bg-amber-400/15 text-amber-400'
-  if (s === 'pending') return 'bg-violet-400/15 text-violet-400'
-  return 'bg-g-7/20 text-g-9'
-}
+const paginatedEvents = ref<EventRow[]>([])
+const paginatedTotal = ref(0)
+const paginatedHasMore = ref(false)
+const paginatedLoading = ref(false)
+const isFinished = computed(() => !!execution.value?.finished_at)
 
-function isStatusAnimated(s: string) {
-  return s === 'running' || s === 'waiting'
-}
+const stepStageMap = computed(() => {
+  const map: Record<string, string> = {}
+  const stages = graph.value?.stages
+  if (!stages) return map
+  for (const stage of stages) {
+    for (const stepId of stage.steps) {
+      map[stepId] = stage.name
+    }
+  }
+  return map
+})
 
-const eventRows = computed<EventRow[]>(() =>
-  events.value.map(ev => ({
-    event_type: ev.type,
-    step_id: ev.step_id || '',
+function mapEvent(ev: any): EventRow {
+  const stepId = ev.step_id || ''
+  return {
+    event_type: ev.type || ev.event_type || '',
+    step_id: stepId,
     message: ev.message || '',
-    data: ev.data ? JSON.stringify(ev.data) : '',
-    event_timestamp: ev.timestamp,
-    execution_id: ev.execution_id,
+    data: ev.data ? (typeof ev.data === 'string' ? ev.data : JSON.stringify(ev.data)) : '',
+    event_timestamp: ev.timestamp || ev.event_timestamp || '',
+    execution_id: ev.execution_id || '',
     seq: ev.seq,
-  }))
-)
+    stage: stepStageMap.value[stepId] || '',
+  }
+}
+
+// Live event rows are maintained incrementally to avoid re-mapping the full
+// array on every SSE batch. Only newly-arrived events are mapped.
+const liveEventRows = ref<EventRow[]>([])
+
+watch(() => events.value.length, (newLen, oldLen = 0) => {
+  if (newLen === 0) {
+    liveEventRows.value = []
+    return
+  }
+  if (newLen < oldLen) {
+    // SSE reconnect or reset → rebuild from scratch
+    liveEventRows.value = events.value.map(mapEvent)
+    return
+  }
+  // Append only new events
+  const additions: EventRow[] = []
+  for (let i = oldLen; i < newLen; i++) {
+    additions.push(mapEvent(events.value[i]))
+  }
+  if (additions.length) liveEventRows.value.push(...additions)
+}, { immediate: true })
+
+// When the graph (and therefore the stage map) loads after events have started
+// arriving, re-map so previously-loaded rows pick up their stage.
+watch(stepStageMap, () => {
+  if (events.value.length === 0) return
+  liveEventRows.value = events.value.map(mapEvent)
+})
+
+const eventRows = computed<EventRow[]>(() => {
+  if (isFinished.value) return paginatedEvents.value
+  return liveEventRows.value
+})
+
+const eventTotal = computed(() => {
+  if (isFinished.value) return paginatedTotal.value
+  return events.value.length
+})
+
+const eventHasMore = computed(() => {
+  if (isFinished.value) return paginatedHasMore.value
+  return false
+})
+
+async function fetchEventPage(append = false) {
+  paginatedLoading.value = true
+  try {
+    const offset = append ? paginatedEvents.value.length : 0
+    const resp = await api.listExecutionEvents(executionId, offset, 50)
+    const rows = (resp.events ?? []).map(mapEvent)
+    if (append) {
+      paginatedEvents.value.push(...rows)
+    } else {
+      paginatedEvents.value = rows
+    }
+    paginatedTotal.value = resp.total
+    paginatedHasMore.value = resp.hasMore
+  } catch {} finally {
+    paginatedLoading.value = false
+  }
+}
+
+function onLoadMore() {
+  fetchEventPage(true)
+}
+
+function copyShareUrl() {
+  try { navigator.clipboard?.writeText(window.location.href) } catch {}
+}
 </script>
 
 <template>
@@ -188,82 +276,128 @@ const eventRows = computed<EventRow[]>(() =>
     </button>
   </div>
 
-  <div v-else class="space-y-6">
+  <div v-else class="flex flex-col h-full">
+    <!-- Active runs strip -->
+    <ActiveRunsStrip :current-run-id="executionId" />
+
     <!-- Header -->
-    <div>
-      <div class="flex items-center gap-4 mb-3">
-        <button @click="router.push('/')" class="text-g-8 hover:text-g-12 text-sm transition-colors cursor-pointer">&larr; {{ t('executions.title') }}</button>
-      </div>
-      <div class="flex items-start justify-between">
-        <div>
-          <h1 class="text-lg font-semibold text-g-14">{{ execution?.workflow_name || 'Execution' }}</h1>
-          <div class="flex items-center gap-3 mt-1">
-            <span class="text-[12px] font-mono text-g-7">{{ executionId.slice(0, 8) }}</span>
-            <span class="text-[12px] text-g-9 font-mono">{{ duration }}</span>
+    <div class="px-6 pt-5 pb-3 border-b border-g-5 shrink-0">
+      <div class="flex items-start justify-between gap-4">
+        <div class="min-w-0">
+          <div class="flex items-center gap-3 mb-1 flex-wrap">
+            <h1 class="text-[16px] font-semibold text-g-14">{{ execution?.workflow_name || 'Execution' }}</h1>
+            <span class="font-mono text-[12px] text-g-8">{{ executionId }}</span>
+            <StatusBadge :status="statusLabel" />
+            <span
+              v-if="connected && !isFinished && statusLabel === 'running'"
+              class="text-[11px] font-mono text-emerald-400 flex items-center gap-1.5"
+            >
+              <span class="relative flex h-2 w-2">
+                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-400"></span>
+              </span>
+              live
+            </span>
+            <span
+              v-if="statusLabel === 'waiting'"
+              class="text-[11px] font-mono text-violet-400 flex items-center gap-1.5"
+            >
+              <span class="w-2 h-2 rounded-full bg-violet-400" />
+              waiting
+            </span>
+          </div>
+          <div class="flex items-center gap-3 text-[11px] font-mono text-g-9 flex-wrap">
+            <span>started {{ fmtAgo(execution?.started_at || 0) }}</span>
+            <span class="text-g-7">·</span>
+            <span>elapsed <span class="text-g-12 tabular-nums">{{ duration }}</span></span>
+            <template v-if="execution?.params && Object.keys(execution.params).length > 0">
+              <template v-for="(v, k) in execution.params" :key="k">
+                <span class="text-g-7">·</span>
+                <span>{{ k }}=<span class="text-g-11">{{ v }}</span></span>
+              </template>
+            </template>
           </div>
         </div>
-        <div class="flex items-center gap-2">
-          <span
-            v-if="connected && !finished"
-            class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-400/15 text-emerald-400"
+        <div class="flex items-center gap-2 shrink-0">
+          <button
+            class="h-8 px-2.5 rounded text-[12px] font-medium bg-g-3 border border-g-5 text-g-11 hover:bg-g-4 flex items-center gap-1.5"
+            @click="copyShareUrl"
+            title="Copy URL"
           >
-            <span class="relative flex h-1.5 w-1.5">
-              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span class="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-400"></span>
-            </span>
-            {{ t('execution.live') }}
-          </span>
-          <span :class="['inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium', statusBadge(statusLabel)]">
-            <span :class="['w-1.5 h-1.5 rounded-full bg-current', isStatusAnimated(statusLabel) ? 'pulse-dot' : 'opacity-50']" />
-            {{ statusLabel }}
-          </span>
+            <Icon name="copy" class-name="w-3.5 h-3.5" />
+            Share
+          </button>
+          <button
+            v-if="canCancel"
+            @click="cancelExec"
+            :disabled="cancelling"
+            class="h-8 px-2.5 rounded text-[12px] font-medium bg-red-400/10 text-red-400 hover:bg-red-400/20 disabled:opacity-50"
+          >
+            {{ cancelling ? t('execution.cancelling') : t('execution.cancel') }}
+          </button>
         </div>
       </div>
-    </div>
 
-    <!-- Cancel banner -->
-    <div
-      v-if="canCancel"
-      class="flex items-center justify-between px-4 py-3 rounded-lg border border-amber-400/20 bg-amber-400/5"
-    >
-      <div class="flex items-center gap-3">
-        <svg class="w-4 h-4 text-amber-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 6v6l4 2"/></svg>
-        <p class="text-sm text-g-11">Execution is currently running.</p>
+      <!-- Progress strip -->
+      <div v-if="orderedSteps.length > 0" class="mt-3 flex items-center gap-4">
+        <div class="flex items-center gap-1.5">
+          <div
+            v-for="[id, s] in orderedSteps"
+            :key="id"
+            :title="`${id} · ${s.status}`"
+            :class="[
+              'w-7 h-1.5 rounded-sm',
+              s.status === 'success' ? 'bg-emerald-400' :
+              s.status === 'running' ? 'bg-amber-400 animate-pulse' :
+              s.status === 'waiting' ? 'bg-violet-400 animate-pulse' :
+              s.status === 'failed' ? 'bg-red-400' :
+              s.status === 'cancelled' ? 'bg-orange-400' :
+              s.status === 'skipped' ? 'bg-g-7' : 'bg-g-5'
+            ]"
+          />
+        </div>
+        <span class="text-[11px] font-mono text-g-9">{{ orderedSteps.filter(([, s]) => s.status === 'success').length }}/{{ orderedSteps.length }} steps</span>
       </div>
-      <button
-        @click="cancelExec"
-        :disabled="cancelling"
-        class="shrink-0 ml-4 px-3 py-1.5 text-xs font-medium rounded-md bg-red-400/10 text-red-400 hover:bg-red-400/20 transition-colors disabled:opacity-50 cursor-pointer"
+
+      <!-- Error detail -->
+      <div
+        v-if="execution?.error"
+        class="mt-3 px-3 py-2 rounded text-[12px] bg-red-400/5 text-red-400 border border-red-400/20 font-mono"
       >
-        <span v-if="cancelling" class="flex items-center gap-1.5">
-          <svg class="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2.5" class="opacity-25"/><path d="M12 2a10 10 0 0110 10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" class="opacity-75"/></svg>
-          {{ t('execution.cancelling') }}
-        </span>
-        <span v-else>{{ t('execution.cancel') }}</span>
-      </button>
+        {{ execution.error }}
+      </div>
     </div>
 
-    <!-- Error -->
-    <div
-      v-if="execution?.error"
-      class="px-4 py-3 rounded-lg text-[13px] bg-red-400/5 text-red-400 border border-red-400/20 font-mono"
-    >
-      {{ execution.error }}
+    <!-- Body: live DAG (top) + LogsDock (bottom) — full-width grid like the design -->
+    <div class="flex-1 min-h-0 grid grid-rows-[minmax(360px,1fr)_minmax(480px,40%)]">
+      <!-- Live DAG with animated edges -->
+      <div v-if="graph" class="bg-g-1 border-b border-g-5 relative overflow-hidden">
+        <div class="absolute inset-0 p-4">
+          <WorkflowDAGCustom
+            :graph="graph"
+            :step-statuses="stepStatuses"
+            :step-iterations="stepIterations"
+            :selected-id="inspector.stepId.value"
+            :show-stages="true"
+            :fill-height="true"
+            @node-click="(id: string) => inspector.inspect(id)"
+          />
+        </div>
+      </div>
+
+      <!-- Event Log dock (Events / Logs / I/O tabs + streaming indicator) -->
+      <LogsDock
+        :events="eventRows"
+        :total="eventTotal"
+        :has-more="eventHasMore"
+        :loading="paginatedLoading"
+        :server-side="isFinished"
+        :connected="connected"
+        :finished="isFinished"
+        :fill-height="true"
+        class="!rounded-none !border-0"
+        @load-more="onLoadMore"
+      />
     </div>
-
-    <!-- Step Timeline -->
-    <StepTimeline
-      v-if="orderedSteps.length > 0"
-      :steps="orderedSteps"
-      :step-statuses="stepStatuses"
-      :step-volumes="stepVolumes"
-      :step-iterations="stepIterations"
-      :step-output-history="stepOutputHistory"
-      :step-pipeline-progress="stepPipelineProgress"
-      :events="events"
-    />
-
-    <!-- Event Log -->
-    <EventTimeline :events="eventRows" />
   </div>
 </template>

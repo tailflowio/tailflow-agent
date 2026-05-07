@@ -33,6 +33,7 @@ type Config struct {
 	Executor       *engine.Executor
 	Workflow       *parser.Workflow
 	FilePath       string
+	EditorEnabled  bool
 	ExecutionStore store.ExecutionStore
 	EventBus       *event.Bus
 	Logger         *slog.Logger

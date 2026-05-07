@@ -24,6 +24,13 @@ export interface GraphNode {
   pipeline?: PipelineAction[]
   when?: string
   on_recovery?: string
+  depth: number
+  parent_id?: string
+  is_last: boolean
+  goto_target?: string
+  goto_max?: number
+  in_loop?: boolean
+  is_loop_start?: boolean
 }
 
 export interface GraphEdge {
@@ -33,9 +40,16 @@ export interface GraphEdge {
   label?: string
 }
 
+export interface StageInfo {
+  name: string
+  description?: string
+  steps: string[]
+}
+
 export interface Graph {
   nodes: GraphNode[]
   edges: GraphEdge[]
+  stages?: StageInfo[]
 }
 
 export interface Execution {
@@ -173,6 +187,16 @@ export function useWorkflowApi() {
     return fetchJSON<{ cancelled: boolean }>(`${API_BASE}/executions/${id}/cancel`, { method: 'POST' })
   }
 
+  function getAllStepMetrics() {
+    return fetchJSON<Record<string, { total_executions: number; success_count: number; failure_count: number; avg_duration_ms: number; history: string[] }>>(`${API_BASE}/workflow/steps/metrics`)
+  }
+
+  function listExecutionEvents(id: string, offset = 0, limit = 50) {
+    return fetchJSON<{ events: any[]; total: number; offset: number; limit: number; hasMore: boolean }>(
+      `${API_BASE}/executions/${id}/events/list?offset=${offset}&limit=${limit}`
+    )
+  }
+
   function getWorkflowActivity() {
     return fetchJSON<{ steps: Record<string, { running: string[]; waiting: string[] }> }>(
       `${API_BASE}/workflow/activity`
@@ -198,6 +222,8 @@ export function useWorkflowApi() {
     listExecutions,
     getExecution,
     cancelExecution,
+    listExecutionEvents,
+    getAllStepMetrics,
     getStepDetail,
     getMetrics,
   }

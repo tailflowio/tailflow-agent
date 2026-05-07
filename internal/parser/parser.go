@@ -51,6 +51,7 @@ func Validate(w *Workflow) error {
 	}
 
 	for _, fn := range []func(*Workflow) error{
+		validateStages,
 		validateSteps,
 		validateParams,
 		validateTrigger,
@@ -60,6 +61,38 @@ func Validate(w *Workflow) error {
 		err := fn(w)
 		if err != nil {
 			return err
+		}
+	}
+
+	return nil
+}
+
+func validateStages(w *Workflow) error {
+	if len(w.Stages) == 0 {
+		return errors.New("validation: at least one stage is required")
+	}
+
+	stageNames := make(map[string]bool, len(w.Stages))
+
+	for i, s := range w.Stages {
+		if s.Name == "" {
+			return fmt.Errorf("validation: stage[%d] must have a name", i)
+		}
+
+		if stageNames[s.Name] {
+			return fmt.Errorf("validation: duplicate stage name %q", s.Name)
+		}
+
+		stageNames[s.Name] = true
+	}
+
+	for _, s := range w.Steps {
+		if s.Stage == "" {
+			return fmt.Errorf("validation: step %q must have a stage", s.ID)
+		}
+
+		if !stageNames[s.Stage] {
+			return fmt.Errorf("validation: step %q references unknown stage %q", s.ID, s.Stage)
 		}
 	}
 

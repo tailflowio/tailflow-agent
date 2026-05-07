@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"slices"
 	"sort"
 	"strconv"
@@ -23,7 +25,11 @@ import (
 )
 
 func (s *Server) handleGetVersion(w http.ResponseWriter, r *http.Request) {
-	s.writeJSON(r.Context(), w, http.StatusOK, map[string]string{"version": s.config.Version})
+	s.writeJSON(r.Context(), w, http.StatusOK, map[string]any{
+		"version":         s.config.Version,
+		"editor_enabled":  s.config.EditorEnabled,
+		"workflow_file":   s.config.FilePath,
+	})
 }
 
 func (s *Server) handleGetMetrics(w http.ResponseWriter, r *http.Request) {
@@ -46,6 +52,59 @@ func (s *Server) handleGetWorkflow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(r.Context(), w, http.StatusOK, wf)
+}
+
+func (s *Server) handleGetWorkflowRaw(w http.ResponseWriter, r *http.Request) {
+	if s.config.FilePath == "" {
+		s.writeError(r.Context(), w, http.StatusNotFound, "no workflow file path")
+		return
+	}
+	data, err := os.ReadFile(s.config.FilePath)
+	if err != nil {
+		s.writeError(r.Context(), w, http.StatusInternalServerError, "read failed: "+err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write(data)
+}
+
+func (s *Server) handlePutWorkflowRaw(w http.ResponseWriter, r *http.Request) {
+	if !s.config.EditorEnabled {
+		s.writeError(r.Context(), w, http.StatusForbidden, "editor disabled — restart with --editor")
+		return
+	}
+	if s.config.FilePath == "" {
+		s.writeError(r.Context(), w, http.StatusNotFound, "no workflow file path")
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		s.writeError(r.Context(), w, http.StatusBadRequest, "read body: "+err.Error())
+		return
+	}
+	defer func() { _ = r.Body.Close() }()
+	if len(body) == 0 {
+		s.writeError(r.Context(), w, http.StatusBadRequest, "empty body")
+		return
+	}
+
+	wf, parseErr := parser.ParseBytes(body)
+	if parseErr != nil {
+		s.writeJSON(r.Context(), w, http.StatusBadRequest, api.ValidateResponse{Valid: false, Errors: []string{parseErr.Error()}})
+		return
+	}
+	if validateErr := parser.Validate(wf); validateErr != nil {
+		s.writeJSON(r.Context(), w, http.StatusBadRequest, api.ValidateResponse{Valid: false, Errors: []string{validateErr.Error()}})
+		return
+	}
+
+	if writeErr := os.WriteFile(s.config.FilePath, body, 0o644); writeErr != nil {
+		s.writeError(r.Context(), w, http.StatusInternalServerError, "write failed: "+writeErr.Error())
+		return
+	}
+
+	s.config.Workflow = wf
+	s.writeJSON(r.Context(), w, http.StatusOK, api.ValidateResponse{Valid: true})
 }
 
 func (s *Server) handleGetWorkflowGraph(w http.ResponseWriter, r *http.Request) {
@@ -124,6 +183,56 @@ func (s *Server) handleGetWorkflowActivity(w http.ResponseWriter, r *http.Reques
 		"steps":       activity,
 		"exec_counts": s.config.ExecutionStore.StepExecCounts(),
 	})
+}
+
+func (s *Server) handleGetAllStepMetrics(w http.ResponseWriter, r *http.Request) {
+	allMetrics := s.config.ExecutionStore.GetAllStepMetrics()
+	execs := s.config.ExecutionStore.List()
+
+	type stepStats struct {
+		TotalExecutions int     `json:"total_executions"`
+		SuccessCount    int     `json:"success_count"`
+		FailureCount    int     `json:"failure_count"`
+		AvgDurationMs   int64   `json:"avg_duration_ms"`
+		History         []string `json:"history"`
+	}
+
+	result := make(map[string]*stepStats, len(allMetrics))
+
+	for stepID, m := range allMetrics {
+		result[stepID] = &stepStats{
+			TotalExecutions: m.TotalExecutions,
+			SuccessCount:    m.SuccessCount,
+			FailureCount:    m.FailureCount,
+			AvgDurationMs:   m.AvgDurationMs,
+			History:         []string{},
+		}
+	}
+
+	maxHistory := 20
+	start := 0
+	if len(execs) > maxHistory {
+		start = len(execs) - maxHistory
+	}
+
+	for i := start; i < len(execs); i++ {
+		exec := execs[i]
+		if exec.Steps == nil {
+			continue
+		}
+
+		for stepID, sr := range exec.Steps {
+			st := result[stepID]
+			if st == nil {
+				st = &stepStats{History: []string{}}
+				result[stepID] = st
+			}
+
+			st.History = append(st.History, sr.Status)
+		}
+	}
+
+	s.writeJSON(r.Context(), w, http.StatusOK, result)
 }
 
 func (s *Server) handleGetStepDetail(w http.ResponseWriter, r *http.Request) {
@@ -315,6 +424,54 @@ func (s *Server) handleGetExecution(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(r.Context(), w, http.StatusOK, exec)
+}
+
+func (s *Server) handleListEvents(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	offsetStr := r.URL.Query().Get("offset")
+	limitStr := r.URL.Query().Get("limit")
+
+	offset, _ := strconv.Atoi(offsetStr)
+	limit, _ := strconv.Atoi(limitStr)
+
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+
+	if offset < 0 {
+		offset = 0
+	}
+
+	allEvents := s.config.ExecutionStore.GetEvents(id)
+	total := len(allEvents)
+
+	// Paginate from the end (newest first)
+	start := total - offset - limit
+	end := total - offset
+
+	if start < 0 {
+		start = 0
+	}
+
+	if end < 0 {
+		end = 0
+	}
+
+	page := allEvents[start:end]
+
+	// Reverse the page so newest is first
+	for i, j := 0, len(page)-1; i < j; i, j = i+1, j-1 {
+		page[i], page[j] = page[j], page[i]
+	}
+
+	s.writeJSON(r.Context(), w, http.StatusOK, map[string]any{
+		"events":  page,
+		"total":   total,
+		"offset":  offset,
+		"limit":   limit,
+		"hasMore": offset+limit < total,
+	})
 }
 
 func (s *Server) handleCancelExecution(w http.ResponseWriter, r *http.Request) {
@@ -613,18 +770,647 @@ func (s *Server) handleWaitWebhook(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(r.Context(), w, http.StatusOK, map[string]any{"delivered": true})
 }
 
-func buildGraph(wf *parser.Workflow, _ *engine.DAG) workflow.Graph {
+func buildGraph(wf *parser.Workflow, dag *engine.DAG) workflow.Graph {
 	graph := workflow.Graph{
 		Nodes: []workflow.GraphNode{},
 		Edges: []workflow.GraphEdge{},
 	}
 
-	for _, step := range wf.Steps {
-		graph.Nodes = append(graph.Nodes, buildGraphNode(step))
-		graph.Edges = append(graph.Edges, buildStepEdges(step)...)
+	stepIndex := make(map[string]parser.Step, len(wf.Steps))
+	for _, s := range wf.Steps {
+		stepIndex[s.ID] = s
 	}
 
+	loopTargets := make(map[string]bool)
+	for _, s := range wf.Steps {
+		if s.Goto != nil {
+			loopTargets[s.Goto.Target] = true
+		}
+	}
+
+	loopBodies := buildLoopBodies(wf, dag)
+
+	visited := make(map[string]bool)
+	var walk func(node *engine.DAGNode, depth int, parentID string, isLast bool)
+	walk = func(node *engine.DAGNode, depth int, parentID string, isLast bool) {
+		if visited[node.Step.ID] {
+			return
+		}
+
+		visited[node.Step.ID] = true
+
+		step := stepIndex[node.Step.ID]
+		gn := buildGraphNode(step)
+		gn.Depth = depth
+		gn.ParentID = parentID
+		gn.IsLast = isLast
+		gn.InLoop = loopBodies[step.ID]
+		gn.IsLoopStart = loopTargets[step.ID]
+
+		if step.Goto != nil {
+			gn.GotoTarget = step.Goto.Target
+			gn.GotoMax = step.Goto.MaxIterations
+		}
+
+		graph.Nodes = append(graph.Nodes, gn)
+		graph.Edges = append(graph.Edges, buildStepEdges(step)...)
+
+		for i, child := range node.Children {
+			last := i == len(node.Children)-1
+			walk(child, depth+1, node.Step.ID, last)
+		}
+	}
+
+	for i, root := range dag.Roots {
+		last := i == len(dag.Roots)-1
+		walk(root, 0, "", last)
+	}
+
+	// Sort nodes by YAML declaration order so the progress strip and any other
+	// linear consumer see steps in the order the author wrote them. The DFS
+	// above is needed to compute depth/parentID/IsLast for tree rendering, but
+	// it leaves nodes in traversal order (e.g. a second root with shared
+	// descendants ends up at the tail of the slice).
+	yamlOrder := make(map[string]int, len(wf.Steps))
+	for i, s := range wf.Steps {
+		yamlOrder[s.ID] = i
+	}
+
+	sort.SliceStable(graph.Nodes, func(i, j int) bool {
+		return yamlOrder[graph.Nodes[i].ID] < yamlOrder[graph.Nodes[j].ID]
+	})
+
+	graph.Tree = buildTreeLines(wf, dag)
+	graph.Stages = buildStageInfos(wf)
+
 	return graph
+}
+
+func buildStageInfos(wf *parser.Workflow) []workflow.StageInfo {
+	stages := make([]workflow.StageInfo, 0, len(wf.Stages))
+
+	for _, s := range wf.Stages {
+		si := workflow.StageInfo{
+			Name:        s.Name,
+			Description: s.Description,
+			Steps:       []string{},
+		}
+
+		for _, step := range wf.Steps {
+			if step.Stage == s.Name {
+				si.Steps = append(si.Steps, step.ID)
+			}
+		}
+
+		stages = append(stages, si)
+	}
+
+	return stages
+}
+
+func buildTreeLines(wf *parser.Workflow, dag *engine.DAG) []workflow.TreeLine {
+	r := &treeBuilder{
+		steps: make(map[string]*treeStep, len(wf.Steps)),
+	}
+
+	stepIndex := make(map[string]parser.Step, len(wf.Steps))
+	for _, s := range wf.Steps {
+		stepIndex[s.ID] = s
+	}
+
+	visited := make(map[string]bool)
+	var dfs func(node *engine.DAGNode, depth int, parentID string, isLast bool)
+	dfs = func(node *engine.DAGNode, depth int, parentID string, isLast bool) {
+		if visited[node.Step.ID] {
+			return
+		}
+		visited[node.Step.ID] = true
+
+		s := stepIndex[node.Step.ID]
+		title := s.Title
+		if title == "" {
+			title = s.ID
+		}
+
+		ts := &treeStep{
+			id: s.ID, title: title, action: s.Action,
+			depth: depth, parentID: parentID, isLast: isLast,
+			when: s.When,
+		}
+		if s.Goto != nil {
+			ts.gotoTarget = s.Goto.Target
+			ts.gotoMax = s.Goto.MaxIterations
+		}
+		if s.Action == "loop" {
+			ts.pipeline = extractLoopPipeline(s.Config)
+		}
+
+		r.steps[s.ID] = ts
+		r.order = append(r.order, s.ID)
+
+		for i, child := range node.Children {
+			dfs(child, depth+1, node.Step.ID, i == len(node.Children)-1)
+		}
+	}
+
+	for i, root := range dag.Roots {
+		dfs(root, 0, "", i == len(dag.Roots)-1)
+	}
+
+	r.resolveConvergent(dag)
+	r.buildLoops()
+	r.markLoopBodies()
+
+	return r.render()
+}
+
+type treeStep struct {
+	id, title, action, parentID string
+	depth                       int
+	isLast                      bool
+	gotoTarget                  string
+	gotoMax                     int
+	pipeline                    []workflow.PipelineAction
+	mergeMarker                 string
+	when                        string
+	inLoop                      bool
+}
+
+type loopDisplay struct {
+	startIdx, endIdx int
+}
+
+type treeBuilder struct {
+	steps map[string]*treeStep
+	order []string
+	loops []loopDisplay
+}
+
+func (r *treeBuilder) resolveConvergent(dag *engine.DAG) {
+	processed := make(map[string]bool)
+
+	for changed := true; changed; {
+		changed = false
+
+		for _, id := range r.order {
+			if processed[id] {
+				continue
+			}
+
+			node := dag.Nodes[id]
+			if node == nil || len(node.Parents) <= 1 {
+				continue
+			}
+
+			parentIDs := make([]string, 0, len(node.Parents))
+			sharedParent := ""
+			allSiblings := true
+
+			for i, p := range node.Parents {
+				pid := p.Step.ID
+				st := r.steps[pid]
+				if st == nil {
+					allSiblings = false
+					break
+				}
+				if i == 0 {
+					sharedParent = st.parentID
+				} else if st.parentID != sharedParent {
+					allSiblings = false
+					break
+				}
+				parentIDs = append(parentIDs, pid)
+			}
+
+			if !allSiblings {
+				processed[id] = true
+				continue
+			}
+
+			orderIdx := make(map[string]int, len(r.order))
+			for i, oid := range r.order {
+				orderIdx[oid] = i
+			}
+			sort.Slice(parentIDs, func(a, b int) bool {
+				return orderIdx[parentIDs[a]] < orderIdx[parentIDs[b]]
+			})
+
+			descSet := map[string]bool{id: true}
+			var collect func(string)
+			collect = func(nid string) {
+				dn := dag.Nodes[nid]
+				if dn == nil {
+					return
+				}
+				for _, c := range dn.Children {
+					if !descSet[c.Step.ID] {
+						descSet[c.Step.ID] = true
+						collect(c.Step.ID)
+					}
+				}
+			}
+			collect(id)
+
+			var subtree, remaining []string
+			for _, oid := range r.order {
+				if descSet[oid] {
+					subtree = append(subtree, oid)
+				} else {
+					remaining = append(remaining, oid)
+				}
+			}
+
+			lastParentID := parentIDs[len(parentIDs)-1]
+			lastParentIdx := -1
+			for i, oid := range remaining {
+				if oid == lastParentID {
+					lastParentIdx = i
+					break
+				}
+			}
+			if lastParentIdx == -1 {
+				processed[id] = true
+				continue
+			}
+
+			lastParentDepth := r.steps[lastParentID].depth
+			insertIdx := lastParentIdx + 1
+			for insertIdx < len(remaining) && r.steps[remaining[insertIdx]].depth > lastParentDepth {
+				insertIdx++
+			}
+
+			for i := insertIdx - 1; i > lastParentIdx; i-- {
+				if r.steps[remaining[i]].parentID == lastParentID {
+					r.steps[remaining[i]].isLast = false
+					break
+				}
+			}
+
+			newOrder := make([]string, 0, len(r.order))
+			newOrder = append(newOrder, remaining[:insertIdx]...)
+			newOrder = append(newOrder, subtree...)
+			newOrder = append(newOrder, remaining[insertIdx:]...)
+			r.order = newOrder
+
+			childSt := r.steps[id]
+			childSt.parentID = lastParentID
+			childSt.isLast = true
+
+			for i, pid := range parentIDs {
+				pst := r.steps[pid]
+				switch {
+				case i == 0:
+					pst.mergeMarker = "┐"
+				case i == len(parentIDs)-1:
+					pst.mergeMarker = "┘"
+				default:
+					pst.mergeMarker = "┤"
+				}
+			}
+
+			processed[id] = true
+			changed = true
+			break
+		}
+	}
+}
+
+func (r *treeBuilder) buildLoops() {
+	r.loops = nil
+	for i, id := range r.order {
+		st := r.steps[id]
+		if st.gotoTarget == "" {
+			continue
+		}
+		startIdx := -1
+		for j, oid := range r.order {
+			if oid == st.gotoTarget {
+				startIdx = j
+				break
+			}
+		}
+		if startIdx >= 0 {
+			r.loops = append(r.loops, loopDisplay{startIdx: startIdx, endIdx: i})
+		}
+	}
+}
+
+func (r *treeBuilder) markLoopBodies() {
+	for _, ld := range r.loops {
+		for i := ld.startIdx; i <= ld.endIdx; i++ {
+			r.steps[r.order[i]].inLoop = true
+		}
+	}
+}
+
+func (r *treeBuilder) bracketChar(idx int, isAnnotation bool) string {
+	if len(r.loops) == 0 {
+		return ""
+	}
+	for _, ld := range r.loops {
+		if idx == ld.startIdx {
+			return "╭ "
+		}
+		if idx == ld.endIdx {
+			if isAnnotation {
+				return "╰ "
+			}
+			return "│ "
+		}
+		if idx > ld.startIdx && idx < ld.endIdx {
+			return "│ "
+		}
+	}
+	return "  "
+}
+
+func (r *treeBuilder) treePrefix(id string) string {
+	st := r.steps[id]
+	if st.depth == 0 {
+		return ""
+	}
+
+	own := "├── "
+	if st.isLast {
+		own = "└── "
+	}
+
+	var parts []string
+	cur := st.parentID
+	for d := st.depth - 1; d > 0; d-- {
+		parent := r.steps[cur]
+		if parent.isLast {
+			parts = append(parts, "    ")
+		} else {
+			parts = append(parts, "│   ")
+		}
+		cur = parent.parentID
+	}
+
+	for i, j := 0, len(parts)-1; i < j; i, j = i+1, j-1 {
+		parts[i], parts[j] = parts[j], parts[i]
+	}
+
+	return strings.Join(parts, "") + own
+}
+
+func (r *treeBuilder) render() []workflow.TreeLine {
+	var lines []workflow.TreeLine
+
+	for idx, id := range r.order {
+		st := r.steps[id]
+		bracket := r.bracketChar(idx, false)
+		prefix := r.treePrefix(id)
+
+		merge := ""
+		if st.mergeMarker != "" {
+			merge = " ──" + st.mergeMarker
+		}
+
+		lines = append(lines, workflow.TreeLine{
+			StepID:     st.id,
+			Prefix:     bracket + prefix,
+			Name:       st.id,
+			Label:      st.title,
+			Action:     st.action,
+			Merge:      merge,
+			Type:       "step",
+			Depth:      st.depth,
+			InLoop:     st.inLoop,
+			When:       st.when,
+			GotoTarget: st.gotoTarget,
+			GotoMax:    st.gotoMax,
+		})
+
+		for i, pa := range st.pipeline {
+			connector := "├─ "
+			if i == len(st.pipeline)-1 {
+				connector = "└─ "
+			}
+
+			cont := r.treeContinuation(id)
+			paBracket := r.bracketChar(idx, false)
+			paLabel := pa.Action
+			if pa.Title != "" {
+				paLabel = pa.Title
+			}
+
+			lines = append(lines, workflow.TreeLine{
+				StepID: st.id,
+				Prefix: paBracket + cont + connector,
+				Name:   fmt.Sprintf("%d. %s", i+1, pa.Action),
+				Label:  paLabel,
+				Type:   "pipeline",
+			})
+		}
+
+		if st.gotoTarget != "" {
+			closeBracket := r.bracketChar(idx, true)
+			gotoLabel := "↻ goto " + st.gotoTarget
+			if st.gotoMax > 0 {
+				gotoLabel += fmt.Sprintf(" (max %d)", st.gotoMax)
+			}
+
+			lines = append(lines, workflow.TreeLine{
+				Prefix: closeBracket,
+				Name:   gotoLabel,
+				Type:   "goto",
+			})
+		}
+	}
+
+	return lines
+}
+
+func (r *treeBuilder) treeContinuation(id string) string {
+	st := r.steps[id]
+
+	own := "│   "
+	if st.isLast {
+		own = "    "
+	}
+
+	if st.depth == 0 {
+		return own
+	}
+
+	var parts []string
+	cur := st.parentID
+	for d := st.depth - 1; d > 0; d-- {
+		parent := r.steps[cur]
+		if parent.isLast {
+			parts = append(parts, "    ")
+		} else {
+			parts = append(parts, "│   ")
+		}
+		cur = parent.parentID
+	}
+
+	for i, j := 0, len(parts)-1; i < j; i, j = i+1, j-1 {
+		parts[i], parts[j] = parts[j], parts[i]
+	}
+
+	return strings.Join(parts, "") + own
+}
+
+func resolveConvergentNodes(graph *workflow.Graph, dag *engine.DAG) {
+	nodeIdx := make(map[string]int, len(graph.Nodes))
+	for i, n := range graph.Nodes {
+		nodeIdx[n.ID] = i
+	}
+
+	processed := make(map[string]bool)
+
+	for changed := true; changed; {
+		changed = false
+
+		for _, gn := range graph.Nodes {
+			if processed[gn.ID] {
+				continue
+			}
+
+			dagNode := dag.Nodes[gn.ID]
+			if dagNode == nil || len(dagNode.Parents) <= 1 {
+				continue
+			}
+
+			parentIDs := make([]string, 0, len(dagNode.Parents))
+			sharedParent := ""
+			allSiblings := true
+
+			for i, p := range dagNode.Parents {
+				pid := p.Step.ID
+				pidx, exists := nodeIdx[pid]
+
+				if !exists {
+					allSiblings = false
+					break
+				}
+
+				if i == 0 {
+					sharedParent = graph.Nodes[pidx].ParentID
+				} else if graph.Nodes[pidx].ParentID != sharedParent {
+					allSiblings = false
+					break
+				}
+
+				parentIDs = append(parentIDs, pid)
+			}
+
+			if !allSiblings {
+				processed[gn.ID] = true
+				continue
+			}
+
+			sort.Slice(parentIDs, func(a, b int) bool {
+				return nodeIdx[parentIDs[a]] < nodeIdx[parentIDs[b]]
+			})
+
+			lastParentID := parentIDs[len(parentIDs)-1]
+			lastParentIdx, ok := nodeIdx[lastParentID]
+			if !ok {
+				processed[gn.ID] = true
+				continue
+			}
+
+			lastParentDepth := graph.Nodes[lastParentIdx].Depth
+
+			descSet := map[string]bool{gn.ID: true}
+			var collectDesc func(string)
+			collectDesc = func(nid string) {
+				dn := dag.Nodes[nid]
+				if dn == nil {
+					return
+				}
+				for _, c := range dn.Children {
+					if !descSet[c.Step.ID] {
+						descSet[c.Step.ID] = true
+						collectDesc(c.Step.ID)
+					}
+				}
+			}
+			collectDesc(gn.ID)
+
+			var subtree, remaining []workflow.GraphNode
+			for _, n := range graph.Nodes {
+				if descSet[n.ID] {
+					subtree = append(subtree, n)
+				} else {
+					remaining = append(remaining, n)
+				}
+			}
+
+			insertIdx := -1
+			for i, n := range remaining {
+				if n.ID == lastParentID {
+					insertIdx = i + 1
+					break
+				}
+			}
+
+			if insertIdx == -1 {
+				processed[gn.ID] = true
+				continue
+			}
+
+			for insertIdx < len(remaining) && remaining[insertIdx].Depth > lastParentDepth {
+				insertIdx++
+			}
+
+			newNodes := make([]workflow.GraphNode, 0, len(graph.Nodes))
+			newNodes = append(newNodes, remaining[:insertIdx]...)
+			newNodes = append(newNodes, subtree...)
+			newNodes = append(newNodes, remaining[insertIdx:]...)
+			graph.Nodes = newNodes
+
+			for i, n := range graph.Nodes {
+				if n.ID == gn.ID {
+					graph.Nodes[i].ParentID = lastParentID
+					graph.Nodes[i].IsLast = true
+				}
+			}
+
+			nodeIdx = make(map[string]int, len(graph.Nodes))
+			for i, n := range graph.Nodes {
+				nodeIdx[n.ID] = i
+			}
+
+			changed = true
+
+			break
+		}
+	}
+}
+
+func buildLoopBodies(wf *parser.Workflow, dag *engine.DAG) map[string]bool {
+	bodies := make(map[string]bool)
+
+	for _, s := range wf.Steps {
+		if s.Goto == nil {
+			continue
+		}
+
+		current := s.Goto.Target
+		visited := make(map[string]bool)
+
+		for current != "" && !visited[current] {
+			visited[current] = true
+			bodies[current] = true
+
+			if current == s.ID {
+				break
+			}
+
+			node := dag.Nodes[current]
+			if node != nil && len(node.Children) == 1 {
+				current = node.Children[0].Step.ID
+			} else {
+				break
+			}
+		}
+	}
+
+	return bodies
 }
 
 func buildGraphNode(step parser.Step) workflow.GraphNode {
@@ -775,7 +1561,10 @@ func (s *Server) buildActionServices() *runtime.ActionServices {
 }
 
 func (s *Server) captureEvents(executionID string) func() {
-	ch := s.config.EventBus.Subscribe(10_000)
+	// Blocking subscription: the store is the source of truth for the API,
+	// so we can't afford dropped events. The buffer is generous (10k) to
+	// absorb bursts without back-pressuring the engine in practice.
+	ch := s.config.EventBus.SubscribeBlocking(10_000)
 	done := make(chan struct{})
 
 	go func() {

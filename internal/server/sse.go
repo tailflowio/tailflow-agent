@@ -168,29 +168,18 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	}
 
 	skipped := 0
-	lt := &loopTracker{}
 
 	sseEventLoop(w, r, flusher, ch, true, func(ev event.Event) bool {
 		if ev.ExecutionID != executionID {
 			return false
 		}
 
-		lt.Track(ev)
-
-		// Loop body events (iteration > 1) are never stored, so they must
-		// not consume the skip counter — otherwise real post-replay events
-		// get incorrectly skipped.
-		inLoop := lt.InLoop(ev)
-
 		if skipped < replayedCount {
-			if !inLoop {
-				skipped++
-			}
-
+			skipped++
 			return false
 		}
 
-		return !inLoop
+		return true
 	})
 }
 
@@ -209,25 +198,7 @@ func (s *Server) handleGlobalSSE(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "event: connected\ndata: {}\n\n")
 	flusher.Flush()
 
-	loops := map[string]*loopTracker{}
-
 	sseEventLoop(w, r, flusher, ch, false, func(ev event.Event) bool {
-		lt := loops[ev.ExecutionID]
-		if lt == nil {
-			lt = &loopTracker{}
-			loops[ev.ExecutionID] = lt
-		}
-
-		lt.Track(ev)
-
-		if lt.InLoop(ev) {
-			return false
-		}
-
-		if ev.Type == event.WorkflowCompleted {
-			delete(loops, ev.ExecutionID)
-		}
-
 		return true
 	})
 }
