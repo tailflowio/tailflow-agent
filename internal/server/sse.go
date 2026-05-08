@@ -52,7 +52,8 @@ func (lt *loopTracker) trackGoto(ev event.Event) {
 	}
 }
 
-// step.goto events are never considered "in loop" (always pass through).
+// InLoop reports whether the given event belongs to a loop body iteration
+// past the first one. step.goto events always pass through (return false).
 func (lt *loopTracker) InLoop(ev event.Event) bool {
 	return lt.Iteration > 1 && lt.Body[ev.StepID] && ev.Type != event.StepGoto
 }
