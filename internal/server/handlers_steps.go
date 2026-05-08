@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"time"
@@ -11,8 +12,17 @@ import (
 )
 
 func (s *Server) handleGetAllStepMetrics(w http.ResponseWriter, r *http.Request) {
-	allMetrics := s.config.ExecutionStore.GetAllStepMetrics()
-	execs := s.config.ExecutionStore.List()
+	allMetrics, err := s.config.ExecutionStore.GetAllStepMetrics(r.Context())
+	if err != nil {
+		s.writeError(r.Context(), w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	execs, err := s.config.ExecutionStore.List(r.Context())
+	if err != nil {
+		s.writeError(r.Context(), w, http.StatusInternalServerError, err.Error())
+		return
+	}
 
 	type stepStats struct {
 		TotalExecutions int      `json:"total_executions"`
@@ -69,9 +79,18 @@ func (s *Server) handleGetStepDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	history := s.buildStepHistory(stepID)
+	history, err := s.buildStepHistory(r.Context(), stepID)
+	if err != nil {
+		s.writeError(r.Context(), w, http.StatusInternalServerError, err.Error())
+		return
+	}
 
-	metrics := s.config.ExecutionStore.GetStepMetrics(stepID)
+	metrics, err := s.config.ExecutionStore.GetStepMetrics(r.Context(), stepID)
+	if err != nil {
+		s.writeError(r.Context(), w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	if metrics == nil {
 		metrics = &store.StepMetrics{}
 	}
@@ -103,8 +122,12 @@ type stepHistoryEntry struct {
 	Error       string `json:"error,omitempty"`
 }
 
-func (s *Server) buildStepHistory(stepID string) []stepHistoryEntry {
-	execs := s.config.ExecutionStore.List()
+func (s *Server) buildStepHistory(ctx context.Context, stepID string) ([]stepHistoryEntry, error) {
+	execs, err := s.config.ExecutionStore.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	history := make([]stepHistoryEntry, 0, len(execs))
 
 	for _, exec := range execs {
@@ -117,7 +140,7 @@ func (s *Server) buildStepHistory(stepID string) []stepHistoryEntry {
 		history = append(history, entry)
 	}
 
-	return history
+	return history, nil
 }
 
 func buildHistoryEntry(exec *store.Execution, sr *runtime.StepResult) stepHistoryEntry {

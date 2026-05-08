@@ -79,7 +79,12 @@ func writeSSEEvent(w http.ResponseWriter, ev event.Event) bool {
 func (s *Server) replayStoredEvents(
 	w http.ResponseWriter, flusher http.Flusher, executionID string,
 ) (replayedCount int, workflowDone bool) {
-	stored := s.config.ExecutionStore.GetEvents(executionID)
+	stored, err := s.config.ExecutionStore.GetEvents(s.ctx, executionID)
+	if err != nil {
+		s.config.Logger.Error("execution store: get events failed", "execution_id", executionID, "error", err)
+		return 0, false
+	}
+
 	sent := 0
 
 	for _, ev := range stored {

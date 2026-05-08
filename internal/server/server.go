@@ -205,9 +205,20 @@ func (s *Server) recoverExecutions(ctx context.Context) {
 	}
 }
 
+// stepMetricsRefresher is implemented by stores that maintain a precomputed
+// metrics cache (currently only the in-memory store). SQL/ClickHouse backends
+// compute metrics on demand and do not implement this interface.
+type stepMetricsRefresher interface {
+	RefreshStepMetrics()
+}
+
 func (s *Server) startMetricsRefresh(ctx context.Context) {
+	refresher, _ := s.config.ExecutionStore.(stepMetricsRefresher)
+
 	go func() {
-		s.config.ExecutionStore.RefreshStepMetrics()
+		if refresher != nil {
+			refresher.RefreshStepMetrics()
+		}
 
 		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
@@ -217,7 +228,9 @@ func (s *Server) startMetricsRefresh(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				s.config.ExecutionStore.RefreshStepMetrics()
+				if refresher != nil {
+					refresher.RefreshStepMetrics()
+				}
 
 				snap := s.metrics.Snapshot()
 				s.config.EventBus.Publish(event.Event{
@@ -351,7 +364,11 @@ func (s *Server) runWorkflowAsync(params map[string]any, opts ...asyncRunOpts) s
 		Params:       s.sensitive.MaskMap(params),
 		StartedAt:    time.Now(),
 	}
-	s.config.ExecutionStore.Add(exec)
+
+	addErr := s.config.ExecutionStore.Add(s.ctx, exec)
+	if addErr != nil {
+		s.config.Logger.Error("execution store: add failed", "execution_id", executionID, "error", addErr)
+	}
 
 	stopCapture := s.captureEvents(executionID)
 	services := s.buildActionServices()
@@ -438,7 +455,12 @@ func (s *Server) ensureWorkflowCompleted(
 	executionID string, result *engine.ExecuteResult, err error, execCtx context.Context,
 ) {
 	// Check if workflow.completed was already stored by captureEvents.
-	for _, ev := range s.config.ExecutionStore.GetEvents(executionID) {
+	stored, getErr := s.config.ExecutionStore.GetEvents(s.ctx, executionID)
+	if getErr != nil {
+		s.config.Logger.Error("execution store: get events failed", "execution_id", executionID, "error", getErr)
+	}
+
+	for _, ev := range stored {
 		if ev.Type == event.WorkflowCompleted {
 			return // already there, nothing to do
 		}
@@ -462,7 +484,11 @@ func (s *Server) ensureWorkflowCompleted(
 		Data:        map[string]any{"status": status},
 	}
 
-	s.config.ExecutionStore.AppendEvent(executionID, completedEv)
+	appendErr := s.config.ExecutionStore.AppendEvent(s.ctx, executionID, completedEv)
+	if appendErr != nil {
+		s.config.Logger.Error("execution store: append completed event failed", "execution_id", executionID, "error", appendErr)
+	}
+
 	s.config.EventBus.Publish(completedEv)
 }
 

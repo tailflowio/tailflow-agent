@@ -40,7 +40,11 @@ func (s *Server) buildActionServices() *runtime.ActionServices {
 				Params:       params,
 				StartedAt:    time.Now(),
 			}
-			s.config.ExecutionStore.Add(exec)
+
+			addErr := s.config.ExecutionStore.Add(s.ctx, exec)
+			if addErr != nil {
+				return "", fmt.Errorf("schedule execution: %w", addErr)
+			}
 
 			timer := time.AfterFunc(delay, func() {
 				s.runWorkflowAsync(params)
@@ -99,7 +103,7 @@ func (s *Server) processEvent(executionID string, ev event.Event, lt *loopTracke
 	// Reset body steps to pending on goto so dashboard stays coherent during loops
 	if ev.Type == event.StepGoto && lt.Body != nil {
 		for sid := range lt.Body {
-			s.config.ExecutionStore.UpdateStep(executionID, sid, func(r *runtime.StepResult) {
+			_ = s.config.ExecutionStore.UpdateStep(s.ctx, executionID, sid, func(r *runtime.StepResult) {
 				r.Status = "pending"
 			})
 		}
@@ -107,7 +111,7 @@ func (s *Server) processEvent(executionID string, ev event.Event, lt *loopTracke
 
 	// Skip loop body events after iteration 1 to prevent unbounded memory growth
 	if !lt.InLoop(ev) {
-		s.config.ExecutionStore.AppendEvent(executionID, ev)
+		_ = s.config.ExecutionStore.AppendEvent(s.ctx, executionID, ev)
 	}
 
 	if ev.StepID == "" {
@@ -120,20 +124,20 @@ func (s *Server) processEvent(executionID string, ev event.Event, lt *loopTracke
 func (s *Server) applyStepEvent(executionID string, ev event.Event) {
 	switch ev.Type {
 	case event.StepStarted:
-		s.config.ExecutionStore.UpdateStep(executionID, ev.StepID, func(r *runtime.StepResult) {
+		_ = s.config.ExecutionStore.UpdateStep(s.ctx, executionID, ev.StepID, func(r *runtime.StepResult) {
 			r.Status = runtime.StatusRunning
 		})
-		s.config.ExecutionStore.IncrStepExecCount(ev.StepID)
+		_ = s.config.ExecutionStore.IncrStepExecCount(s.ctx, ev.StepID)
 	case event.StepWaiting:
-		s.config.ExecutionStore.UpdateStep(executionID, ev.StepID, func(r *runtime.StepResult) {
+		_ = s.config.ExecutionStore.UpdateStep(s.ctx, executionID, ev.StepID, func(r *runtime.StepResult) {
 			r.Status = runtime.StatusWaiting
 		})
 	case event.StepInput:
-		s.config.ExecutionStore.UpdateStep(executionID, ev.StepID, func(r *runtime.StepResult) {
+		_ = s.config.ExecutionStore.UpdateStep(s.ctx, executionID, ev.StepID, func(r *runtime.StepResult) {
 			r.Input = ev.Data
 		})
 	case event.StepCompleted:
-		s.config.ExecutionStore.UpdateStep(executionID, ev.StepID, func(r *runtime.StepResult) {
+		_ = s.config.ExecutionStore.UpdateStep(s.ctx, executionID, ev.StepID, func(r *runtime.StepResult) {
 			r.Status = runtime.StatusSuccess
 
 			o, ok := ev.Data["output"]
@@ -142,16 +146,16 @@ func (s *Server) applyStepEvent(executionID string, ev event.Event) {
 			}
 		})
 	case event.StepFailed:
-		s.config.ExecutionStore.UpdateStep(executionID, ev.StepID, func(r *runtime.StepResult) {
+		_ = s.config.ExecutionStore.UpdateStep(s.ctx, executionID, ev.StepID, func(r *runtime.StepResult) {
 			r.Status = runtime.StatusFailed
 			r.Error = &runtime.StepError{Message: ev.Message, Code: "action_failed", StepID: ev.StepID}
 		})
 	case event.StepSkipped:
-		s.config.ExecutionStore.UpdateStep(executionID, ev.StepID, func(r *runtime.StepResult) {
+		_ = s.config.ExecutionStore.UpdateStep(s.ctx, executionID, ev.StepID, func(r *runtime.StepResult) {
 			r.Status = runtime.StatusSkipped
 		})
 	case event.StepOutput:
-		s.config.ExecutionStore.UpdateStep(executionID, ev.StepID, func(r *runtime.StepResult) {
+		_ = s.config.ExecutionStore.UpdateStep(s.ctx, executionID, ev.StepID, func(r *runtime.StepResult) {
 			o, ok := ev.Data["output"]
 			if ok {
 				r.Output = o
@@ -171,7 +175,7 @@ func (s *Server) applyWorkflowCompleted(executionID string, ev event.Event) {
 
 	ts := ev.Timestamp
 
-	s.config.ExecutionStore.UpdateExecution(executionID, func(exec *store.Execution) {
+	_ = s.config.ExecutionStore.UpdateExecution(s.ctx, executionID, func(exec *store.Execution) {
 		exec.Status = statusStr
 		exec.FinishedAt = &ts
 	})
@@ -180,7 +184,7 @@ func (s *Server) applyWorkflowCompleted(executionID string, ev event.Event) {
 func (s *Server) finalizeExecution(
 	executionID string, result *engine.ExecuteResult, err error, execCtx context.Context,
 ) {
-	s.config.ExecutionStore.UpdateExecution(executionID, func(exec *store.Execution) {
+	_ = s.config.ExecutionStore.UpdateExecution(s.ctx, executionID, func(exec *store.Execution) {
 		switch {
 		case err != nil && execCtx.Err() != nil:
 			exec.Status = runtime.StatusCancelled

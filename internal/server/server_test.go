@@ -354,7 +354,7 @@ func (s *ServerTestSuite) TestStartRabbitMQConsumer_OnMessage_WithAckFn() {
 
 	// Wait for execution to complete
 	s.Eventually(func() bool {
-		execs := srv.config.ExecutionStore.List()
+		execs, _ := srv.config.ExecutionStore.List(context.Background())
 		for _, e := range execs {
 			if e.Status != "running" {
 				return true
@@ -443,7 +443,7 @@ func (s *ServerTestSuite) TestRunWorkflowAsync_WithTriggerData() {
 	s.NotEmpty(execID)
 
 	s.Eventually(func() bool {
-		exec, err := srv.config.ExecutionStore.Get(execID)
+		exec, err := srv.config.ExecutionStore.Get(context.Background(), execID)
 		return err == nil && exec.Status != "running"
 	}, 5*time.Second, 50*time.Millisecond)
 }
@@ -558,7 +558,7 @@ func (s *ServerTestSuite) TestStartCronScheduler_CronCallbackFires() {
 
 	// Wait for the cron to fire and create at least one execution
 	s.Eventually(func() bool {
-		execs := srv.config.ExecutionStore.List()
+		execs, _ := srv.config.ExecutionStore.List(context.Background())
 		return len(execs) > 0
 	}, 5*time.Second, 100*time.Millisecond)
 }
@@ -568,13 +568,13 @@ func (s *ServerTestSuite) TestEnsureWorkflowCompleted_AlreadyStored() {
 	srv := newTestServer(s.T())
 
 	execID := "ewc-already"
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: execID, WorkflowName: "test", Status: runtime.StatusSuccess,
 		StartedAt: time.Now(),
 	})
 
 	// Pre-append a WorkflowCompleted event
-	srv.config.ExecutionStore.AppendEvent(execID, event.Event{
+	srv.config.ExecutionStore.AppendEvent(context.Background(), execID, event.Event{
 		Type:        event.WorkflowCompleted,
 		ExecutionID: execID,
 		Data:        map[string]any{"status": "success"},
@@ -588,7 +588,7 @@ func (s *ServerTestSuite) TestEnsureWorkflowCompleted_AlreadyStored() {
 	srv.ensureWorkflowCompleted(execID, result, nil, context.Background())
 
 	// No additional event should be appended
-	events := srv.config.ExecutionStore.GetEvents(execID)
+	events, _ := srv.config.ExecutionStore.GetEvents(context.Background(), execID)
 	s.Len(events, 1)
 
 	// Verify nothing was published to the bus
@@ -605,7 +605,7 @@ func (s *ServerTestSuite) TestEnsureWorkflowCompleted_ErrorCancelled() {
 	srv := newTestServer(s.T())
 
 	execID := "ewc-cancel"
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: execID, WorkflowName: "test", Status: runtime.StatusRunning,
 		StartedAt: time.Now(),
 	})
@@ -615,7 +615,7 @@ func (s *ServerTestSuite) TestEnsureWorkflowCompleted_ErrorCancelled() {
 
 	srv.ensureWorkflowCompleted(execID, nil, errors.New("context cancelled"), ctx)
 
-	events := srv.config.ExecutionStore.GetEvents(execID)
+	events, _ := srv.config.ExecutionStore.GetEvents(context.Background(), execID)
 	s.Require().Len(events, 1)
 	s.Equal(event.WorkflowCompleted, events[0].Type)
 	s.Equal(runtime.StatusCancelled, events[0].Data["status"])
@@ -626,14 +626,14 @@ func (s *ServerTestSuite) TestEnsureWorkflowCompleted_ErrorFailed() {
 	srv := newTestServer(s.T())
 
 	execID := "ewc-fail"
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: execID, WorkflowName: "test", Status: runtime.StatusRunning,
 		StartedAt: time.Now(),
 	})
 
 	srv.ensureWorkflowCompleted(execID, nil, errors.New("exec failed"), context.Background())
 
-	events := srv.config.ExecutionStore.GetEvents(execID)
+	events, _ := srv.config.ExecutionStore.GetEvents(context.Background(), execID)
 	s.Require().Len(events, 1)
 	s.Equal(event.WorkflowCompleted, events[0].Type)
 	s.Equal(runtime.StatusFailed, events[0].Data["status"])
@@ -644,7 +644,7 @@ func (s *ServerTestSuite) TestEnsureWorkflowCompleted_SuccessWithResult() {
 	srv := newTestServer(s.T())
 
 	execID := "ewc-result"
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: execID, WorkflowName: "test", Status: runtime.StatusRunning,
 		StartedAt: time.Now(),
 	})
@@ -652,7 +652,7 @@ func (s *ServerTestSuite) TestEnsureWorkflowCompleted_SuccessWithResult() {
 	result := &engine.ExecuteResult{Status: runtime.StatusCompletedWithErrors}
 	srv.ensureWorkflowCompleted(execID, result, nil, context.Background())
 
-	events := srv.config.ExecutionStore.GetEvents(execID)
+	events, _ := srv.config.ExecutionStore.GetEvents(context.Background(), execID)
 	s.Require().Len(events, 1)
 	s.Equal(event.WorkflowCompleted, events[0].Type)
 	s.Equal(runtime.StatusCompletedWithErrors, events[0].Data["status"])
@@ -663,14 +663,14 @@ func (s *ServerTestSuite) TestEnsureWorkflowCompleted_NilResultNilError() {
 	srv := newTestServer(s.T())
 
 	execID := "ewc-default"
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: execID, WorkflowName: "test", Status: runtime.StatusRunning,
 		StartedAt: time.Now(),
 	})
 
 	srv.ensureWorkflowCompleted(execID, nil, nil, context.Background())
 
-	events := srv.config.ExecutionStore.GetEvents(execID)
+	events, _ := srv.config.ExecutionStore.GetEvents(context.Background(), execID)
 	s.Require().Len(events, 1)
 	s.Equal(event.WorkflowCompleted, events[0].Type)
 	s.Equal(runtime.StatusSuccess, events[0].Data["status"])
@@ -681,7 +681,7 @@ func (s *ServerTestSuite) TestEnsureWorkflowCompleted_PublishesEvent() {
 	srv := newTestServer(s.T())
 
 	execID := "ewc-publish"
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: execID, WorkflowName: "test", Status: runtime.StatusRunning,
 		StartedAt: time.Now(),
 	})
@@ -747,7 +747,7 @@ func (s *ServerTestSuite) TestRecoverExecutions_SkipsUnknownWorkflow() {
 
 	srv.recoverExecutions(context.Background())
 
-	execs := srv.config.ExecutionStore.List()
+	execs, _ := srv.config.ExecutionStore.List(context.Background())
 	for _, exec := range execs {
 		s.NotEqual("exec-unknown", exec.ID)
 	}
@@ -760,7 +760,8 @@ func (s *ServerTestSuite) TestRecoverExecutions_NoopWhenRecoveryDisabled() {
 
 	srv.recoverExecutions(context.Background())
 
-	s.Empty(srv.config.ExecutionStore.List())
+	allExecs, _ := srv.config.ExecutionStore.List(context.Background())
+	s.Empty(allExecs)
 }
 
 func (s *ServerTestSuite) TestNewRedisKVStoreFn_DefaultDialFails() {

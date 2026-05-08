@@ -1,6 +1,8 @@
 package store
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -12,6 +14,8 @@ import (
 
 type ExecutionStoreTestSuite struct {
 	suite.Suite
+
+	ctx context.Context
 }
 
 func TestExecutionStore(t *testing.T) {
@@ -19,7 +23,7 @@ func TestExecutionStore(t *testing.T) {
 }
 
 func (s *ExecutionStoreTestSuite) SetupTest() {
-	// required by convention
+	s.ctx = context.Background()
 }
 
 func (s *ExecutionStoreTestSuite) TestAddAndGet() {
@@ -31,9 +35,9 @@ func (s *ExecutionStoreTestSuite) TestAddAndGet() {
 		Status:       "running",
 		StartedAt:    time.Now(),
 	}
-	st.Add(exec)
+	s.Require().NoError(st.Add(s.ctx, exec))
 
-	got, err := st.Get("exec-1")
+	got, err := st.Get(s.ctx, "exec-1")
 	s.Require().NoError(err)
 	s.Equal("exec-1", got.ID)
 	s.Equal("running", got.Status)
@@ -41,23 +45,25 @@ func (s *ExecutionStoreTestSuite) TestAddAndGet() {
 
 func (s *ExecutionStoreTestSuite) TestNotFound() {
 	st := NewExecutionStore(10)
-	_, err := st.Get("nonexistent")
+	_, err := st.Get(s.ctx, "nonexistent")
 	s.Error(err)
+	s.True(errors.Is(err, ErrNotFound), "error should wrap ErrNotFound")
 }
 
 func (s *ExecutionStoreTestSuite) TestList_ReturnsReverseOrder() {
 	st := NewExecutionStore(10)
 
 	for i := 0; i < 5; i++ {
-		st.Add(&Execution{
+		s.Require().NoError(st.Add(s.ctx, &Execution{
 			ID:           fmt.Sprintf("exec-%d", i),
 			WorkflowName: "test",
 			Status:       "success",
 			StartedAt:    time.Now(),
-		})
+		}))
 	}
 
-	list := st.List()
+	list, err := st.List(s.ctx)
+	s.Require().NoError(err)
 	s.Len(list, 5)
 	// Most recent first
 	s.Equal("exec-4", list[0].ID)
@@ -68,28 +74,30 @@ func (s *ExecutionStoreTestSuite) TestRingBuffer() {
 	st := NewExecutionStore(3) // Only 3 slots
 
 	for i := 0; i < 5; i++ {
-		st.Add(&Execution{
+		s.Require().NoError(st.Add(s.ctx, &Execution{
 			ID:           fmt.Sprintf("exec-%d", i),
 			WorkflowName: "test",
 			Status:       "success",
 			StartedAt:    time.Now(),
-		})
+		}))
 	}
 
-	s.Equal(3, st.Count())
+	count, err := st.Count(s.ctx)
+	s.Require().NoError(err)
+	s.Equal(3, count)
 
 	// exec-0 and exec-1 should be evicted
-	_, err := st.Get("exec-0")
+	_, err = st.Get(s.ctx, "exec-0")
 	s.Error(err)
-	_, err = st.Get("exec-1")
+	_, err = st.Get(s.ctx, "exec-1")
 	s.Error(err)
 
 	// exec-2, exec-3, exec-4 should exist
-	_, err = st.Get("exec-2")
+	_, err = st.Get(s.ctx, "exec-2")
 	s.NoError(err)
-	_, err = st.Get("exec-3")
+	_, err = st.Get(s.ctx, "exec-3")
 	s.NoError(err)
-	_, err = st.Get("exec-4")
+	_, err = st.Get(s.ctx, "exec-4")
 	s.NoError(err)
 }
 
@@ -102,18 +110,18 @@ func (s *ExecutionStoreTestSuite) TestUpdate_StatusAndFinishedAt() {
 		Status:       "running",
 		StartedAt:    time.Now(),
 	}
-	st.Add(exec)
+	s.Require().NoError(st.Add(s.ctx, exec))
 
 	now := time.Now()
-	st.Update(&Execution{
+	s.Require().NoError(st.Update(s.ctx, &Execution{
 		ID:           "exec-1",
 		WorkflowName: "test",
 		Status:       "success",
 		StartedAt:    exec.StartedAt,
 		FinishedAt:   &now,
-	})
+	}))
 
-	got, _ := st.Get("exec-1")
+	got, _ := st.Get(s.ctx, "exec-1")
 	s.Equal("success", got.Status)
 	s.NotNil(got.FinishedAt)
 }
@@ -131,38 +139,41 @@ func (s *ExecutionStoreTestSuite) TestUpdateExecution() {
 		Status:       "running",
 		StartedAt:    time.Now(),
 	}
-	st.Add(exec)
+	s.Require().NoError(st.Add(s.ctx, exec))
 
-	st.UpdateExecution("exec-1", func(e *Execution) {
+	err := st.UpdateExecution(s.ctx, "exec-1", func(e *Execution) {
 		e.Status = "success"
 	})
+	s.Require().NoError(err)
 
-	got, err := st.Get("exec-1")
+	got, err := st.Get(s.ctx, "exec-1")
 	s.Require().NoError(err)
 	s.Equal("success", got.Status)
 }
 
 func (s *ExecutionStoreTestSuite) TestUpdateExecution_NotFound() {
 	st := NewExecutionStore(10)
-	// Should not panic when updating a nonexistent execution
+	// Should not panic and should not error when target is missing.
 	s.NotPanics(func() {
-		st.UpdateExecution("nonexistent", func(e *Execution) {
+		err := st.UpdateExecution(s.ctx, "nonexistent", func(e *Execution) {
 			e.Status = "success"
 		})
+		s.NoError(err)
 	}, "UpdateExecution with nonexistent ID should not panic")
 }
 
 func (s *ExecutionStoreTestSuite) TestAppendAndGetEvents() {
 	st := NewExecutionStore(10)
-	st.Add(&Execution{ID: "exec-1", WorkflowName: "test", Status: "running", StartedAt: time.Now()})
+	s.Require().NoError(st.Add(s.ctx, &Execution{ID: "exec-1", WorkflowName: "test", Status: "running", StartedAt: time.Now()}))
 
 	ev1 := event.Event{Type: event.StepStarted, ExecutionID: "exec-1", StepID: "step1"}
 	ev2 := event.Event{Type: event.StepCompleted, ExecutionID: "exec-1", StepID: "step1"}
 
-	st.AppendEvent("exec-1", ev1)
-	st.AppendEvent("exec-1", ev2)
+	s.Require().NoError(st.AppendEvent(s.ctx, "exec-1", ev1))
+	s.Require().NoError(st.AppendEvent(s.ctx, "exec-1", ev2))
 
-	events := st.GetEvents("exec-1")
+	events, err := st.GetEvents(s.ctx, "exec-1")
+	s.Require().NoError(err)
 	s.Len(events, 2)
 	s.Equal(event.StepStarted, events[0].Type)
 	s.Equal(event.StepCompleted, events[1].Type)
@@ -170,110 +181,116 @@ func (s *ExecutionStoreTestSuite) TestAppendAndGetEvents() {
 
 func (s *ExecutionStoreTestSuite) TestGetEvents_Empty() {
 	st := NewExecutionStore(10)
-	events := st.GetEvents("nonexistent")
+	events, err := st.GetEvents(s.ctx, "nonexistent")
+	s.Require().NoError(err)
 	s.Nil(events)
 }
 
 func (s *ExecutionStoreTestSuite) TestGetEvents_ReturnsCopy() {
 	st := NewExecutionStore(10)
-	st.AppendEvent("exec-1", event.Event{Type: event.StepStarted, ExecutionID: "exec-1"})
+	s.Require().NoError(st.AppendEvent(s.ctx, "exec-1", event.Event{Type: event.StepStarted, ExecutionID: "exec-1"}))
 
-	events1 := st.GetEvents("exec-1")
-	events2 := st.GetEvents("exec-1")
+	events1, err := st.GetEvents(s.ctx, "exec-1")
+	s.Require().NoError(err)
+	events2, err := st.GetEvents(s.ctx, "exec-1")
+	s.Require().NoError(err)
 	s.Len(events1, 1)
 	s.Len(events2, 1)
 	// Modifying returned slice should not affect the store
 	events1[0].StepID = "modified"
-	events2Again := st.GetEvents("exec-1")
+	events2Again, err := st.GetEvents(s.ctx, "exec-1")
+	s.Require().NoError(err)
 	s.Empty(events2Again[0].StepID)
 }
 
 func (s *ExecutionStoreTestSuite) TestUpdateStep_NewStep() {
 	st := NewExecutionStore(10)
-	st.Add(&Execution{
+	s.Require().NoError(st.Add(s.ctx, &Execution{
 		ID:           "exec-1",
 		WorkflowName: "test",
 		Status:       runtime.StatusRunning,
 		StartedAt:    time.Now(),
-	})
+	}))
 
-	st.UpdateStep("exec-1", "step1", func(step *runtime.StepResult) {
+	err := st.UpdateStep(s.ctx, "exec-1", "step1", func(step *runtime.StepResult) {
 		step.Status = runtime.StatusRunning
 	})
+	s.Require().NoError(err)
 
-	got, _ := st.Get("exec-1")
+	got, _ := st.Get(s.ctx, "exec-1")
 	s.NotNil(got.Steps["step1"])
 	s.Equal(runtime.StatusRunning, got.Steps["step1"].Status)
 }
 
 func (s *ExecutionStoreTestSuite) TestUpdateStep_ExistingStep() {
 	st := NewExecutionStore(10)
-	st.Add(&Execution{
+	s.Require().NoError(st.Add(s.ctx, &Execution{
 		ID:           "exec-1",
 		WorkflowName: "test",
 		Status:       runtime.StatusRunning,
 		Steps:        map[string]*runtime.StepResult{"step1": {Status: runtime.StatusRunning}},
 		StartedAt:    time.Now(),
-	})
+	}))
 
-	st.UpdateStep("exec-1", "step1", func(step *runtime.StepResult) {
+	err := st.UpdateStep(s.ctx, "exec-1", "step1", func(step *runtime.StepResult) {
 		step.Status = runtime.StatusSuccess
 		step.Output = "done"
 	})
+	s.Require().NoError(err)
 
-	got, _ := st.Get("exec-1")
+	got, _ := st.Get(s.ctx, "exec-1")
 	s.Equal(runtime.StatusSuccess, got.Steps["step1"].Status)
 	s.Equal("done", got.Steps["step1"].Output)
 }
 
 func (s *ExecutionStoreTestSuite) TestUpdateStep_AutoDerivesRunning() {
 	st := NewExecutionStore(10)
-	st.Add(&Execution{
+	s.Require().NoError(st.Add(s.ctx, &Execution{
 		ID:           "exec-1",
 		WorkflowName: "test",
 		Status:       runtime.StatusWaiting,
 		StartedAt:    time.Now(),
-	})
+	}))
 
-	st.UpdateStep("exec-1", "step1", func(step *runtime.StepResult) {
+	s.Require().NoError(st.UpdateStep(s.ctx, "exec-1", "step1", func(step *runtime.StepResult) {
 		step.Status = runtime.StatusRunning
-	})
+	}))
 
-	got, _ := st.Get("exec-1")
+	got, _ := st.Get(s.ctx, "exec-1")
 	s.Equal(runtime.StatusRunning, got.Status)
 }
 
 func (s *ExecutionStoreTestSuite) TestUpdateStep_AutoDerivesWaiting() {
 	st := NewExecutionStore(10)
-	st.Add(&Execution{
+	s.Require().NoError(st.Add(s.ctx, &Execution{
 		ID:           "exec-1",
 		WorkflowName: "test",
 		Status:       runtime.StatusRunning,
 		StartedAt:    time.Now(),
-	})
+	}))
 
-	st.UpdateStep("exec-1", "step1", func(step *runtime.StepResult) {
+	s.Require().NoError(st.UpdateStep(s.ctx, "exec-1", "step1", func(step *runtime.StepResult) {
 		step.Status = runtime.StatusWaiting
-	})
+	}))
 
-	got, _ := st.Get("exec-1")
+	got, _ := st.Get(s.ctx, "exec-1")
 	s.Equal(runtime.StatusWaiting, got.Status)
 }
 
 func (s *ExecutionStoreTestSuite) TestUpdateStep_NoAutoDerive_TerminalStatus() {
 	st := NewExecutionStore(10)
-	st.Add(&Execution{
+	s.Require().NoError(st.Add(s.ctx, &Execution{
 		ID:           "exec-1",
 		WorkflowName: "test",
 		Status:       runtime.StatusSuccess,
 		StartedAt:    time.Now(),
-	})
+	}))
 
-	st.UpdateStep("exec-1", "step1", func(step *runtime.StepResult) {
+	s.Require().NoError(st.UpdateStep(s.ctx, "exec-1", "step1", func(step *runtime.StepResult) {
 		step.Status = runtime.StatusRunning
-	})
+	}))
 
-	got, _ := st.Get("exec-1")
+	got, _ := st.Get(s.ctx, "exec-1")
 	// Should NOT change from success to running
 	s.Equal(runtime.StatusSuccess, got.Status)
 }
@@ -282,27 +299,28 @@ func (s *ExecutionStoreTestSuite) TestUpdateStep_NotFound() {
 	st := NewExecutionStore(10)
 	// Should not panic when updating a step on a nonexistent execution
 	s.NotPanics(func() {
-		st.UpdateStep("nonexistent", "step1", func(step *runtime.StepResult) {
+		err := st.UpdateStep(s.ctx, "nonexistent", "step1", func(step *runtime.StepResult) {
 			step.Status = runtime.StatusRunning
 		})
+		s.NoError(err)
 	}, "UpdateStep with nonexistent execution should not panic")
 }
 
 func (s *ExecutionStoreTestSuite) TestUpdateStep_NilStepsMap() {
 	st := NewExecutionStore(10)
-	st.Add(&Execution{
+	s.Require().NoError(st.Add(s.ctx, &Execution{
 		ID:           "exec-1",
 		WorkflowName: "test",
 		Status:       runtime.StatusRunning,
 		StartedAt:    time.Now(),
 		Steps:        nil,
-	})
+	}))
 
-	st.UpdateStep("exec-1", "step1", func(step *runtime.StepResult) {
+	s.Require().NoError(st.UpdateStep(s.ctx, "exec-1", "step1", func(step *runtime.StepResult) {
 		step.Status = runtime.StatusRunning
-	})
+	}))
 
-	got, _ := st.Get("exec-1")
+	got, _ := st.Get(s.ctx, "exec-1")
 	s.NotNil(got.Steps)
 	s.Equal(runtime.StatusRunning, got.Steps["step1"].Status)
 }
@@ -310,23 +328,26 @@ func (s *ExecutionStoreTestSuite) TestUpdateStep_NilStepsMap() {
 func (s *ExecutionStoreTestSuite) TestIncrStepExecCount() {
 	st := NewExecutionStore(10)
 
-	st.IncrStepExecCount("step1")
-	st.IncrStepExecCount("step1")
-	st.IncrStepExecCount("step2")
+	s.Require().NoError(st.IncrStepExecCount(s.ctx, "step1"))
+	s.Require().NoError(st.IncrStepExecCount(s.ctx, "step1"))
+	s.Require().NoError(st.IncrStepExecCount(s.ctx, "step2"))
 
-	counts := st.StepExecCounts()
+	counts, err := st.StepExecCounts(s.ctx)
+	s.Require().NoError(err)
 	s.Equal(2, counts["step1"])
 	s.Equal(1, counts["step2"])
 }
 
 func (s *ExecutionStoreTestSuite) TestStepExecCounts_ReturnsCopy() {
 	st := NewExecutionStore(10)
-	st.IncrStepExecCount("step1")
+	s.Require().NoError(st.IncrStepExecCount(s.ctx, "step1"))
 
-	counts := st.StepExecCounts()
+	counts, err := st.StepExecCounts(s.ctx)
+	s.Require().NoError(err)
 	counts["step1"] = 999
 
-	counts2 := st.StepExecCounts()
+	counts2, err := st.StepExecCounts(s.ctx)
+	s.Require().NoError(err)
 	s.Equal(1, counts2["step1"])
 }
 
@@ -337,7 +358,7 @@ func (s *ExecutionStoreTestSuite) TestRefreshStepMetrics() {
 	started := now.Add(-100 * time.Millisecond)
 	finished := now
 
-	st.Add(&Execution{
+	s.Require().NoError(st.Add(s.ctx, &Execution{
 		ID:           "exec-1",
 		WorkflowName: "test",
 		Status:       runtime.StatusSuccess,
@@ -354,18 +375,20 @@ func (s *ExecutionStoreTestSuite) TestRefreshStepMetrics() {
 				FinishedAt: &finished,
 			},
 		},
-	})
+	}))
 
 	st.RefreshStepMetrics()
 
-	m1 := st.GetStepMetrics("step1")
+	m1, err := st.GetStepMetrics(s.ctx, "step1")
+	s.Require().NoError(err)
 	s.Require().NotNil(m1)
 	s.Equal(1, m1.TotalExecutions)
 	s.Equal(1, m1.SuccessCount)
 	s.Equal(0, m1.FailureCount)
 	s.Greater(m1.AvgDurationMs, int64(0))
 
-	m2 := st.GetStepMetrics("step2")
+	m2, err := st.GetStepMetrics(s.ctx, "step2")
+	s.Require().NoError(err)
 	s.Require().NotNil(m2)
 	s.Equal(1, m2.TotalExecutions)
 	s.Equal(0, m2.SuccessCount)
@@ -374,7 +397,8 @@ func (s *ExecutionStoreTestSuite) TestRefreshStepMetrics() {
 
 func (s *ExecutionStoreTestSuite) TestGetStepMetrics_Nil() {
 	st := NewExecutionStore(10)
-	m := st.GetStepMetrics("nonexistent")
+	m, err := st.GetStepMetrics(s.ctx, "nonexistent")
+	s.Require().NoError(err)
 	s.Nil(m)
 }
 
@@ -382,7 +406,7 @@ func (s *ExecutionStoreTestSuite) TestGetStepMetrics_StepNotInMetrics() {
 	st := NewExecutionStore(10)
 
 	now := time.Now()
-	st.Add(&Execution{
+	s.Require().NoError(st.Add(s.ctx, &Execution{
 		ID:           "exec-1",
 		WorkflowName: "test",
 		Status:       runtime.StatusSuccess,
@@ -390,13 +414,14 @@ func (s *ExecutionStoreTestSuite) TestGetStepMetrics_StepNotInMetrics() {
 		Steps: map[string]*runtime.StepResult{
 			"step1": {Status: runtime.StatusSuccess},
 		},
-	})
+	}))
 
 	// Refresh populates stepMetrics map with step1 only
 	st.RefreshStepMetrics()
 
 	// stepMetrics is now non-nil but "unknown-step" is not in the map
-	m := st.GetStepMetrics("unknown-step")
+	m, err := st.GetStepMetrics(s.ctx, "unknown-step")
+	s.Require().NoError(err)
 	s.Nil(m)
 }
 
@@ -406,7 +431,7 @@ func (s *ExecutionStoreTestSuite) TestGetAllStepMetrics() {
 	now := time.Now()
 	started := now.Add(-50 * time.Millisecond)
 
-	st.Add(&Execution{
+	s.Require().NoError(st.Add(s.ctx, &Execution{
 		ID:           "exec-1",
 		WorkflowName: "test",
 		Status:       runtime.StatusSuccess,
@@ -415,11 +440,12 @@ func (s *ExecutionStoreTestSuite) TestGetAllStepMetrics() {
 			"step1": {Status: runtime.StatusSuccess, StartedAt: &started, FinishedAt: &now},
 			"step2": {Status: runtime.StatusSuccess, StartedAt: &started, FinishedAt: &now},
 		},
-	})
+	}))
 
 	st.RefreshStepMetrics()
 
-	all := st.GetAllStepMetrics()
+	all, err := st.GetAllStepMetrics(s.ctx)
+	s.Require().NoError(err)
 	s.Len(all, 2)
 	s.NotNil(all["step1"])
 	s.NotNil(all["step2"])
@@ -429,7 +455,7 @@ func (s *ExecutionStoreTestSuite) TestGetAllStepMetrics_ReturnsCopy() {
 	st := NewExecutionStore(10)
 
 	now := time.Now()
-	st.Add(&Execution{
+	s.Require().NoError(st.Add(s.ctx, &Execution{
 		ID:           "exec-1",
 		WorkflowName: "test",
 		Status:       runtime.StatusSuccess,
@@ -437,21 +463,23 @@ func (s *ExecutionStoreTestSuite) TestGetAllStepMetrics_ReturnsCopy() {
 		Steps: map[string]*runtime.StepResult{
 			"step1": {Status: runtime.StatusSuccess},
 		},
-	})
+	}))
 
 	st.RefreshStepMetrics()
 
-	all := st.GetAllStepMetrics()
+	all, err := st.GetAllStepMetrics(s.ctx)
+	s.Require().NoError(err)
 	all["step1"].TotalExecutions = 999
 
-	all2 := st.GetAllStepMetrics()
+	all2, err := st.GetAllStepMetrics(s.ctx)
+	s.Require().NoError(err)
 	s.Equal(1, all2["step1"].TotalExecutions)
 }
 
 func (s *ExecutionStoreTestSuite) TestSnapshot_NilStepsNilParamsNilFinishedAt() {
 	st := NewExecutionStore(10)
 
-	st.Add(&Execution{
+	s.Require().NoError(st.Add(s.ctx, &Execution{
 		ID:           "exec-nil",
 		WorkflowName: "test",
 		Status:       runtime.StatusRunning,
@@ -459,9 +487,9 @@ func (s *ExecutionStoreTestSuite) TestSnapshot_NilStepsNilParamsNilFinishedAt() 
 		Steps:        nil,
 		Params:       nil,
 		FinishedAt:   nil,
-	})
+	}))
 
-	got, err := st.Get("exec-nil")
+	got, err := st.Get(s.ctx, "exec-nil")
 	s.Require().NoError(err)
 	s.Nil(got.Steps)
 	s.Nil(got.Params)
@@ -474,7 +502,7 @@ func (s *ExecutionStoreTestSuite) TestSnapshot_WithStepsParamsAndFinishedAt() {
 	now := time.Now()
 	finished := now.Add(1 * time.Second)
 
-	st.Add(&Execution{
+	s.Require().NoError(st.Add(s.ctx, &Execution{
 		ID:           "exec-full",
 		WorkflowName: "test",
 		Status:       runtime.StatusSuccess,
@@ -485,9 +513,9 @@ func (s *ExecutionStoreTestSuite) TestSnapshot_WithStepsParamsAndFinishedAt() {
 			"step1": {Status: runtime.StatusSuccess, Output: "ok"},
 			"step2": {Status: runtime.StatusFailed, Error: &runtime.StepError{Message: "fail"}},
 		},
-	})
+	}))
 
-	got, err := st.Get("exec-full")
+	got, err := st.Get(s.ctx, "exec-full")
 	s.Require().NoError(err)
 
 	// Verify deep copy of Steps
@@ -509,7 +537,7 @@ func (s *ExecutionStoreTestSuite) TestSnapshot_WithStepsParamsAndFinishedAt() {
 	newFinished := now.Add(99 * time.Second)
 	got.FinishedAt = &newFinished
 
-	original, err := st.Get("exec-full")
+	original, err := st.Get(s.ctx, "exec-full")
 	s.Require().NoError(err)
 	s.Equal("prod", original.Params["env"])
 	s.Equal(runtime.StatusSuccess, original.Steps["step1"].Status)
@@ -522,24 +550,25 @@ func (s *ExecutionStoreTestSuite) TestRefreshStepMetrics_LastExecution() {
 	t1 := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
 	t2 := time.Date(2025, 1, 2, 10, 0, 0, 0, time.UTC)
 
-	st.Add(&Execution{
-		ID:        "exec-1",
+	s.Require().NoError(st.Add(s.ctx, &Execution{
+		ID:           "exec-1",
 		WorkflowName: "test",
-		Status:    runtime.StatusSuccess,
-		StartedAt: t1,
-		Steps:     map[string]*runtime.StepResult{"step1": {Status: runtime.StatusSuccess}},
-	})
-	st.Add(&Execution{
-		ID:        "exec-2",
+		Status:       runtime.StatusSuccess,
+		StartedAt:    t1,
+		Steps:        map[string]*runtime.StepResult{"step1": {Status: runtime.StatusSuccess}},
+	}))
+	s.Require().NoError(st.Add(s.ctx, &Execution{
+		ID:           "exec-2",
 		WorkflowName: "test",
-		Status:    runtime.StatusSuccess,
-		StartedAt: t2,
-		Steps:     map[string]*runtime.StepResult{"step1": {Status: runtime.StatusSuccess}},
-	})
+		Status:       runtime.StatusSuccess,
+		StartedAt:    t2,
+		Steps:        map[string]*runtime.StepResult{"step1": {Status: runtime.StatusSuccess}},
+	}))
 
 	st.RefreshStepMetrics()
 
-	m := st.GetStepMetrics("step1")
+	m, err := st.GetStepMetrics(s.ctx, "step1")
+	s.Require().NoError(err)
 	s.Require().NotNil(m)
 	s.Equal(2, m.TotalExecutions)
 	s.Equal(t2.Format(time.RFC3339), m.LastExecution)

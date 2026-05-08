@@ -1,6 +1,9 @@
+// Package store defines the persistence contract for workflow executions.
 package store
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"sync"
@@ -9,6 +12,10 @@ import (
 	"github.com/tailflow/tailflow/internal/event"
 	"github.com/tailflow/tailflow/internal/runtime"
 )
+
+// ErrNotFound is returned by ExecutionStore.Get when no execution matches the
+// given id. Backends should wrap it with %w so callers can use errors.Is.
+var ErrNotFound = errors.New("execution not found")
 
 // Execution represents a stored workflow execution.
 type Execution struct {
@@ -22,23 +29,59 @@ type Execution struct {
 	Error        string                         `json:"error,omitempty"`
 }
 
-// ExecutionStore is the contract for execution persistence.
+// ExecutionStore is the contract for execution persistence. Implementations
+// may be in-memory, SQL (MariaDB/MySQL/Postgres), or columnar (ClickHouse).
+// All methods accept a context for cancellation, deadlines and tracing.
+//
+// Writes return error so backends backed by network/disk can propagate
+// failures. Implementations may also return context errors (DeadlineExceeded,
+// Canceled) when the caller's context is no longer live.
 type ExecutionStore interface {
-	Add(exec *Execution)
-	Get(id string) (*Execution, error)
-	Update(exec *Execution)
-	UpdateExecution(id string, fn func(exec *Execution))
-	List() []*Execution
-	Count() int
-	AppendEvent(executionID string, ev event.Event)
-	GetEvents(executionID string) []event.Event
-	GetEventsPaginated(executionID string, offset, limit int) ([]event.Event, int)
-	UpdateStep(executionID, stepID string, fn func(step *runtime.StepResult))
-	IncrStepExecCount(stepID string)
-	StepExecCounts() map[string]int
-	RefreshStepMetrics()
-	GetStepMetrics(stepID string) *StepMetrics
-	GetAllStepMetrics() map[string]*StepMetrics
+	// Add inserts a new execution. Returns an error if persistence fails.
+	Add(ctx context.Context, exec *Execution) error
+
+	// Get returns the execution by id. Wraps ErrNotFound when absent.
+	Get(ctx context.Context, id string) (*Execution, error)
+
+	// Update overwrites a stored execution with the given snapshot.
+	Update(ctx context.Context, exec *Execution) error
+
+	// UpdateExecution atomically applies fn to the stored execution.
+	// Implementations guarantee serial access to fn for the same id.
+	// Missing executions are silently ignored.
+	UpdateExecution(ctx context.Context, id string, fn func(exec *Execution)) error
+
+	// List returns all stored executions, newest first.
+	List(ctx context.Context) ([]*Execution, error)
+
+	// Count returns the number of stored executions.
+	Count(ctx context.Context) (int, error)
+
+	// AppendEvent appends an event to the execution's event log.
+	AppendEvent(ctx context.Context, executionID string, ev event.Event) error
+
+	// GetEvents returns the full event log for the given execution.
+	GetEvents(ctx context.Context, executionID string) ([]event.Event, error)
+
+	// GetEventsPaginated returns a window of events plus the total count.
+	GetEventsPaginated(ctx context.Context, executionID string, offset, limit int) ([]event.Event, int, error)
+
+	// UpdateStep atomically applies fn to the named step within an execution.
+	// Missing executions and steps are created on demand.
+	UpdateStep(ctx context.Context, executionID, stepID string, fn func(step *runtime.StepResult)) error
+
+	// IncrStepExecCount increments the lifetime execution count of a step.
+	IncrStepExecCount(ctx context.Context, stepID string) error
+
+	// StepExecCounts returns a snapshot of all step execution counts.
+	StepExecCounts(ctx context.Context) (map[string]int, error)
+
+	// GetStepMetrics returns aggregated metrics for the given step, or nil
+	// if no metrics have been computed yet for that step.
+	GetStepMetrics(ctx context.Context, stepID string) (*StepMetrics, error)
+
+	// GetAllStepMetrics returns aggregated metrics for every known step.
+	GetAllStepMetrics(ctx context.Context) (map[string]*StepMetrics, error)
 }
 
 // StepMetrics holds cached metrics for a single step.
@@ -65,6 +108,8 @@ type MemoryExecutionStore struct {
 	stepMetrics map[string]*StepMetrics // stepID -> cached metrics
 }
 
+// NewExecutionStore returns a new in-memory ExecutionStore with the given
+// ring-buffer capacity. A non-positive capacity falls back to 100.
 func NewExecutionStore(capacity int) *MemoryExecutionStore {
 	if capacity <= 0 {
 		capacity = 100
@@ -79,7 +124,8 @@ func NewExecutionStore(capacity int) *MemoryExecutionStore {
 	}
 }
 
-func (s *MemoryExecutionStore) Add(exec *Execution) {
+// Add inserts a new execution. Evicts the oldest entry if capacity is reached.
+func (s *MemoryExecutionStore) Add(_ context.Context, exec *Execution) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -99,15 +145,18 @@ func (s *MemoryExecutionStore) Add(exec *Execution) {
 	if s.count < s.capacity {
 		s.count++
 	}
+
+	return nil
 }
 
-func (s *MemoryExecutionStore) Get(id string) (*Execution, error) {
+// Get returns a deep snapshot of the stored execution, or wraps ErrNotFound.
+func (s *MemoryExecutionStore) Get(_ context.Context, id string) (*Execution, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	exec, ok := s.byID[id]
 	if !ok {
-		return nil, fmt.Errorf("execution %q not found", id)
+		return nil, fmt.Errorf("%w: %q", ErrNotFound, id)
 	}
 
 	return exec.snapshot(), nil
@@ -138,7 +187,8 @@ func (e *Execution) snapshot() *Execution {
 	return &cp
 }
 
-func (s *MemoryExecutionStore) Update(exec *Execution) {
+// Update overwrites the stored execution with the given snapshot.
+func (s *MemoryExecutionStore) Update(_ context.Context, exec *Execution) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -146,12 +196,14 @@ func (s *MemoryExecutionStore) Update(exec *Execution) {
 	if ok {
 		*existing = *exec
 	}
+
+	return nil
 }
 
-// UpdateExecution atomically applies a mutation to the stored execution.
+// UpdateExecution atomically applies fn to the stored execution.
 // The callback runs while the store lock is held, preventing concurrent
 // mutations from captureEvents and finalizeExecution.
-func (s *MemoryExecutionStore) UpdateExecution(id string, fn func(exec *Execution)) {
+func (s *MemoryExecutionStore) UpdateExecution(_ context.Context, id string, fn func(exec *Execution)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -159,9 +211,12 @@ func (s *MemoryExecutionStore) UpdateExecution(id string, fn func(exec *Executio
 	if ok {
 		fn(exec)
 	}
+
+	return nil
 }
 
-func (s *MemoryExecutionStore) List() []*Execution {
+// List returns all stored executions, newest first.
+func (s *MemoryExecutionStore) List(_ context.Context) ([]*Execution, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -174,33 +229,37 @@ func (s *MemoryExecutionStore) List() []*Execution {
 		}
 	}
 
-	return result
+	return result, nil
 }
 
-func (s *MemoryExecutionStore) Count() int {
+// Count returns the number of stored executions.
+func (s *MemoryExecutionStore) Count(_ context.Context) (int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.count
+	return s.count, nil
 }
 
-func (s *MemoryExecutionStore) AppendEvent(executionID string, ev event.Event) {
+// AppendEvent appends an event to the execution's event log.
+func (s *MemoryExecutionStore) AppendEvent(_ context.Context, executionID string, ev event.Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.events[executionID] = append(s.events[executionID], ev)
+
+	return nil
 }
 
 // UpdateStep applies a partial update to a step within a running execution.
 // It also automatically derives the execution-level status from step states
 // (running vs waiting) while the execution is still active.
-func (s *MemoryExecutionStore) UpdateStep(executionID, stepID string, fn func(step *runtime.StepResult)) {
+func (s *MemoryExecutionStore) UpdateStep(_ context.Context, executionID, stepID string, fn func(step *runtime.StepResult)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	exec, ok := s.byID[executionID]
 	if !ok {
-		return
+		return nil
 	}
 
 	if exec.Steps == nil {
@@ -215,40 +274,44 @@ func (s *MemoryExecutionStore) UpdateStep(executionID, stepID string, fn func(st
 
 	// Auto-derive execution status from step states (only while active)
 	if exec.Status != runtime.StatusRunning && exec.Status != runtime.StatusWaiting {
-		return
+		return nil
 	}
 
 	for _, step := range exec.Steps {
 		if step.Status == runtime.StatusRunning {
 			exec.Status = runtime.StatusRunning
-			return
+			return nil
 		}
 	}
 
 	for _, step := range exec.Steps {
 		if step.Status == runtime.StatusWaiting {
 			exec.Status = runtime.StatusWaiting
-			return
+			return nil
 		}
 	}
+
+	return nil
 }
 
-func (s *MemoryExecutionStore) GetEvents(executionID string) []event.Event {
+// GetEvents returns a defensive copy of the full event log for executionID.
+func (s *MemoryExecutionStore) GetEvents(_ context.Context, executionID string) ([]event.Event, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	evts := s.events[executionID]
 	if evts == nil {
-		return nil
+		return nil, nil
 	}
 
 	out := make([]event.Event, len(evts))
 	copy(out, evts)
 
-	return out
+	return out, nil
 }
 
-func (s *MemoryExecutionStore) GetEventsPaginated(executionID string, offset, limit int) ([]event.Event, int) {
+// GetEventsPaginated returns a window of events with the total count.
+func (s *MemoryExecutionStore) GetEventsPaginated(_ context.Context, executionID string, offset, limit int) ([]event.Event, int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -256,7 +319,7 @@ func (s *MemoryExecutionStore) GetEventsPaginated(executionID string, offset, li
 	total := len(evts)
 
 	if offset >= total {
-		return nil, total
+		return nil, total, nil
 	}
 
 	end := offset + limit
@@ -267,28 +330,34 @@ func (s *MemoryExecutionStore) GetEventsPaginated(executionID string, offset, li
 	out := make([]event.Event, end-offset)
 	copy(out, evts[offset:end])
 
-	return out, total
+	return out, total, nil
 }
 
-func (s *MemoryExecutionStore) IncrStepExecCount(stepID string) {
+// IncrStepExecCount increments the lifetime execution count of a step.
+func (s *MemoryExecutionStore) IncrStepExecCount(_ context.Context, stepID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.stepExecCounts[stepID]++
+
+	return nil
 }
 
-func (s *MemoryExecutionStore) StepExecCounts() map[string]int {
+// StepExecCounts returns a defensive copy of every step's execution counter.
+func (s *MemoryExecutionStore) StepExecCounts(_ context.Context) (map[string]int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	out := make(map[string]int, len(s.stepExecCounts))
 	maps.Copy(out, s.stepExecCounts)
 
-	return out
+	return out, nil
 }
 
 // RefreshStepMetrics recomputes cached step metrics from all stored executions.
-// Designed to be called periodically by a background goroutine.
+// Designed to be called periodically by a background goroutine. It is not part
+// of the ExecutionStore interface — backends that compute metrics on demand
+// (SQL, ClickHouse) do not need it.
 func (s *MemoryExecutionStore) RefreshStepMetrics() {
 	s.mu.RLock()
 
@@ -350,25 +419,27 @@ func computeStepMetrics(execs []*Execution) map[string]*StepMetrics {
 	return metrics
 }
 
-func (s *MemoryExecutionStore) GetStepMetrics(stepID string) *StepMetrics {
+// GetStepMetrics returns a copy of the cached metrics for a step, or nil.
+func (s *MemoryExecutionStore) GetStepMetrics(_ context.Context, stepID string) (*StepMetrics, error) {
 	s.metricsMu.RLock()
 	defer s.metricsMu.RUnlock()
 
 	if s.stepMetrics == nil {
-		return nil
+		return nil, nil
 	}
 
 	m := s.stepMetrics[stepID]
 	if m == nil {
-		return nil
+		return nil, nil
 	}
 
 	cp := *m
 
-	return &cp
+	return &cp, nil
 }
 
-func (s *MemoryExecutionStore) GetAllStepMetrics() map[string]*StepMetrics {
+// GetAllStepMetrics returns a defensive copy of every cached step's metrics.
+func (s *MemoryExecutionStore) GetAllStepMetrics(_ context.Context) (map[string]*StepMetrics, error) {
 	s.metricsMu.RLock()
 	defer s.metricsMu.RUnlock()
 
@@ -379,5 +450,5 @@ func (s *MemoryExecutionStore) GetAllStepMetrics() map[string]*StepMetrics {
 		out[k] = &cp
 	}
 
-	return out
+	return out, nil
 }

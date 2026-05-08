@@ -92,12 +92,12 @@ func (s *SSETestSuite) TestHandleSSE_ReplaysStoredEvents() {
 	synctest.Test(s.T(), func(t *testing.T) {
 		srv := newTestServer(t)
 
-		srv.config.ExecutionStore.AppendEvent("exec-1", event.Event{
+		srv.config.ExecutionStore.AppendEvent(context.Background(), "exec-1", event.Event{
 			Type:        event.StepStarted,
 			ExecutionID: "exec-1",
 			StepID:      "step-a",
 		})
-		srv.config.ExecutionStore.AppendEvent("exec-1", event.Event{
+		srv.config.ExecutionStore.AppendEvent(context.Background(), "exec-1", event.Event{
 			Type:        event.StepCompleted,
 			ExecutionID: "exec-1",
 			StepID:      "step-a",
@@ -458,12 +458,12 @@ func (s *SSETestSuite) TestReplayStoredEvents_WithWorkflowCompleted() {
 	synctest.Test(s.T(), func(t *testing.T) {
 		srv := newTestServer(t)
 
-		srv.config.ExecutionStore.AppendEvent("exec-1", event.Event{
+		srv.config.ExecutionStore.AppendEvent(context.Background(), "exec-1", event.Event{
 			Type:        event.StepStarted,
 			ExecutionID: "exec-1",
 			StepID:      "step-a",
 		})
-		srv.config.ExecutionStore.AppendEvent("exec-1", event.Event{
+		srv.config.ExecutionStore.AppendEvent(context.Background(), "exec-1", event.Event{
 			Type:        event.WorkflowCompleted,
 			ExecutionID: "exec-1",
 		})
@@ -481,7 +481,7 @@ func (s *SSETestSuite) TestHandleSSE_StoredWorkflowCompleted_ClosesImmediately()
 	synctest.Test(s.T(), func(t *testing.T) {
 		srv := newTestServer(t)
 
-		srv.config.ExecutionStore.AppendEvent("exec-1", event.Event{
+		srv.config.ExecutionStore.AppendEvent(context.Background(), "exec-1", event.Event{
 			Type:        event.WorkflowCompleted,
 			ExecutionID: "exec-1",
 		})
@@ -712,7 +712,7 @@ func (s *SSETestSuite) TestHandleSSE_SkipsAlreadyReplayedEvents() {
 		srv := newTestServer(t)
 
 		// Store an event before subscribing
-		srv.config.ExecutionStore.AppendEvent("exec-1", event.Event{
+		srv.config.ExecutionStore.AppendEvent(context.Background(), "exec-1", event.Event{
 			Type:        event.StepStarted,
 			ExecutionID: "exec-1",
 			StepID:      "step-a",

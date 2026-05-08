@@ -131,7 +131,11 @@ func (s *Server) prepareTriggerExecution(
 		Params:       s.sensitive.MaskMap(params),
 		StartedAt:    time.Now(),
 	}
-	s.config.ExecutionStore.Add(exec)
+
+	addErr := s.config.ExecutionStore.Add(s.ctx, exec)
+	if addErr != nil {
+		s.config.Logger.Error("execution store: add failed", "execution_id", executionID, "error", addErr)
+	}
 
 	stopCapture := s.captureEvents(executionID)
 	services := s.buildActionServices()

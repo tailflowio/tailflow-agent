@@ -388,14 +388,14 @@ func (s *HandlersTestSuite) TestRunWorkflow_ReturnsExecutionID() {
 
 	// Execution should be in the store immediately
 	execID := resp["execution_id"].(string)
-	exec, err := srv.config.ExecutionStore.Get(execID)
+	exec, err := srv.config.ExecutionStore.Get(context.Background(), execID)
 	s.Require().NoError(err)
 	s.Equal("running", exec.Status)
 	s.Equal("test-workflow", exec.WorkflowName)
 
 	// Wait for async execution to finish
 	s.Eventually(func() bool {
-		exec, err := srv.config.ExecutionStore.Get(execID)
+		exec, err := srv.config.ExecutionStore.Get(context.Background(), execID)
 		return err == nil && exec.Status == "success"
 	}, 2*time.Second, 10*time.Millisecond)
 }
@@ -564,7 +564,7 @@ func (s *HandlersTestSuite) TestGetWorkflowActivity_WithRunningAndWaitingSteps()
 	srv := newTestServer(s.T())
 
 	// Add a running execution with a running step
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID:           "exec-run-1",
 		WorkflowName: "test-workflow",
 		Status:       runtime.StatusRunning,
@@ -575,7 +575,7 @@ func (s *HandlersTestSuite) TestGetWorkflowActivity_WithRunningAndWaitingSteps()
 	})
 
 	// Add a waiting execution with a waiting step
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID:           "exec-wait-1",
 		WorkflowName: "test-workflow",
 		Status:       runtime.StatusWaiting,
@@ -586,7 +586,7 @@ func (s *HandlersTestSuite) TestGetWorkflowActivity_WithRunningAndWaitingSteps()
 	})
 
 	// Add a completed execution (should be skipped)
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID:           "exec-done-1",
 		WorkflowName: "test-workflow",
 		Status:       runtime.StatusSuccess,
@@ -626,7 +626,7 @@ func (s *HandlersTestSuite) TestGetWorkflowActivity_Empty() {
 func (s *HandlersTestSuite) TestGetWorkflowActivity_RunningExecCompletedSteps() {
 	srv := newTestServer(s.T())
 
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID:           "exec-1",
 		WorkflowName: "test-workflow",
 		Status:       runtime.StatusRunning,
@@ -656,7 +656,7 @@ func (s *HandlersTestSuite) TestGetStepDetail_WithHistory() {
 	execFinished := time.Now()
 
 	// Execution with step result that has all fields
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID:           "exec-hist-1",
 		WorkflowName: "test-workflow",
 		Status:       runtime.StatusSuccess,
@@ -673,7 +673,7 @@ func (s *HandlersTestSuite) TestGetStepDetail_WithHistory() {
 	})
 
 	// Execution with step result that has error and no started_at
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID:           "exec-hist-2",
 		WorkflowName: "test-workflow",
 		Status:       runtime.StatusFailed,
@@ -688,7 +688,7 @@ func (s *HandlersTestSuite) TestGetStepDetail_WithHistory() {
 	})
 
 	// Execution with step result that has startedAt but no finishedAt, and exec has finishedAt
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID:           "exec-hist-3",
 		WorkflowName: "test-workflow",
 		Status:       runtime.StatusFailed,
@@ -703,7 +703,7 @@ func (s *HandlersTestSuite) TestGetStepDetail_WithHistory() {
 	})
 
 	// Execution without the greet step (should be skipped)
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID:           "exec-hist-4",
 		WorkflowName: "test-workflow",
 		Status:       runtime.StatusSuccess,
@@ -749,15 +749,15 @@ func (s *HandlersTestSuite) TestListExecutions_FilterByStatus() {
 	now := time.Now()
 	finished := now.Add(1 * time.Second)
 
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: "e1", WorkflowName: "test", Status: runtime.StatusSuccess,
 		StartedAt: now, FinishedAt: &finished,
 	})
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: "e2", WorkflowName: "test", Status: runtime.StatusFailed,
 		StartedAt: now, FinishedAt: &finished,
 	})
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: "e3", WorkflowName: "test", Status: runtime.StatusRunning,
 		StartedAt: now,
 	})
@@ -790,16 +790,16 @@ func (s *HandlersTestSuite) TestListExecutions_SortByDuration() {
 	shortFinish := now.Add(100 * time.Millisecond)
 	longFinish := now.Add(5 * time.Second)
 
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: "short", WorkflowName: "test", Status: runtime.StatusSuccess,
 		StartedAt: now, FinishedAt: &shortFinish,
 	})
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: "long", WorkflowName: "test", Status: runtime.StatusSuccess,
 		StartedAt: now, FinishedAt: &longFinish,
 	})
 	// Running execution (no FinishedAt) – duration is 0
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: "running", WorkflowName: "test", Status: runtime.StatusRunning,
 		StartedAt: now,
 	})
@@ -835,10 +835,10 @@ func (s *HandlersTestSuite) TestListExecutions_OrderAsc() {
 	srv := newTestServer(s.T())
 
 	now := time.Now()
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: "first", WorkflowName: "test", Status: runtime.StatusSuccess, StartedAt: now,
 	})
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: "second", WorkflowName: "test", Status: runtime.StatusSuccess, StartedAt: now.Add(1 * time.Second),
 	})
 
@@ -859,7 +859,7 @@ func (s *HandlersTestSuite) TestListExecutions_OrderAsc() {
 func (s *HandlersTestSuite) TestListExecutions_OffsetBeyondTotal() {
 	srv := newTestServer(s.T())
 
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: "e1", WorkflowName: "test", Status: runtime.StatusSuccess, StartedAt: time.Now(),
 	})
 
@@ -878,7 +878,7 @@ func (s *HandlersTestSuite) TestListExecutions_OffsetBeyondTotal() {
 func (s *HandlersTestSuite) TestListExecutions_InvalidPaginationParams() {
 	srv := newTestServer(s.T())
 
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: "e1", WorkflowName: "test", Status: runtime.StatusSuccess, StartedAt: time.Now(),
 	})
 
@@ -905,7 +905,7 @@ func (s *HandlersTestSuite) TestListExecutions_InvalidPaginationParams() {
 func (s *HandlersTestSuite) TestGetExecution_Found() {
 	srv := newTestServer(s.T())
 
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: "exec-123", WorkflowName: "test-workflow", Status: runtime.StatusSuccess,
 		StartedAt: time.Now(),
 	})
@@ -944,7 +944,7 @@ func (s *HandlersTestSuite) TestCancelExecution_NotFound() {
 func (s *HandlersTestSuite) TestCancelExecution_NotRunning() {
 	srv := newTestServer(s.T())
 
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: "exec-done", WorkflowName: "test-workflow", Status: runtime.StatusSuccess,
 		StartedAt: time.Now(),
 	})
@@ -959,7 +959,7 @@ func (s *HandlersTestSuite) TestCancelExecution_NotRunning() {
 func (s *HandlersTestSuite) TestCancelExecution_Success() {
 	srv := newTestServer(s.T())
 
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: "exec-cancel", WorkflowName: "test-workflow", Status: runtime.StatusRunning,
 		StartedAt: time.Now(),
 	})
@@ -980,7 +980,7 @@ func (s *HandlersTestSuite) TestCancelExecution_Success() {
 func (s *HandlersTestSuite) TestCancelExecution_WaitingStatus() {
 	srv := newTestServer(s.T())
 
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: "exec-wait-cancel", WorkflowName: "test-workflow", Status: runtime.StatusWaiting,
 		StartedAt: time.Now(),
 	})
@@ -997,7 +997,7 @@ func (s *HandlersTestSuite) TestCancelExecution_WaitingStatus() {
 func (s *HandlersTestSuite) TestCancelExecution_NoCancelFunc() {
 	srv := newTestServer(s.T())
 
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: "exec-no-cancel", WorkflowName: "test-workflow", Status: runtime.StatusRunning,
 		StartedAt: time.Now(),
 	})
@@ -1058,7 +1058,7 @@ func (s *HandlersTestSuite) TestPublicTrigger_HTTPAsync() {
 	// Wait for async execution to finish
 	execID := resp["execution_id"].(string)
 	s.Eventually(func() bool {
-		exec, getErr := srv.config.ExecutionStore.Get(execID)
+		exec, getErr := srv.config.ExecutionStore.Get(context.Background(), execID)
 		return getErr == nil && (exec.Status == "success" || exec.Status == "failed")
 	}, 2*time.Second, 10*time.Millisecond)
 }
@@ -1377,14 +1377,15 @@ func (s *HandlersTestSuite) TestBuildActionServices_ScheduleExecution() {
 	s.NotEmpty(execID)
 
 	// Verify the scheduled execution was added to the store
-	exec, getErr := srv.config.ExecutionStore.Get(execID)
+	exec, getErr := srv.config.ExecutionStore.Get(context.Background(), execID)
 	s.NoError(getErr)
 	s.Equal(runtime.StatusScheduled, exec.Status)
 
 	// Wait for scheduled timer to fire
 	s.Eventually(func() bool {
 		// At least 2 executions in store: the scheduled one and the one triggered by the timer
-		return srv.config.ExecutionStore.Count() >= 2
+		count, _ := srv.config.ExecutionStore.Count(context.Background())
+		return count >= 2
 	}, 2*time.Second, 50*time.Millisecond)
 }
 
@@ -1393,7 +1394,7 @@ func (s *HandlersTestSuite) TestApplyStepEvent_AllTypes() {
 	srv := newTestServer(s.T())
 
 	execID := "apply-test"
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: execID, WorkflowName: "test", Status: runtime.StatusRunning,
 		StartedAt: time.Now(),
 	})
@@ -1402,14 +1403,14 @@ func (s *HandlersTestSuite) TestApplyStepEvent_AllTypes() {
 	srv.applyStepEvent(execID, event.Event{
 		Type: event.StepStarted, StepID: "s1",
 	})
-	exec, _ := srv.config.ExecutionStore.Get(execID)
+	exec, _ := srv.config.ExecutionStore.Get(context.Background(), execID)
 	s.Equal(runtime.StatusRunning, exec.Steps["s1"].Status)
 
 	// StepWaiting
 	srv.applyStepEvent(execID, event.Event{
 		Type: event.StepWaiting, StepID: "s1",
 	})
-	exec, _ = srv.config.ExecutionStore.Get(execID)
+	exec, _ = srv.config.ExecutionStore.Get(context.Background(), execID)
 	s.Equal(runtime.StatusWaiting, exec.Steps["s1"].Status)
 
 	// StepInput
@@ -1417,7 +1418,7 @@ func (s *HandlersTestSuite) TestApplyStepEvent_AllTypes() {
 		Type: event.StepInput, StepID: "s1",
 		Data: map[string]any{"input_key": "input_val"},
 	})
-	exec, _ = srv.config.ExecutionStore.Get(execID)
+	exec, _ = srv.config.ExecutionStore.Get(context.Background(), execID)
 	s.NotNil(exec.Steps["s1"].Input)
 
 	// StepCompleted
@@ -1425,7 +1426,7 @@ func (s *HandlersTestSuite) TestApplyStepEvent_AllTypes() {
 		Type: event.StepCompleted, StepID: "s1",
 		Data: map[string]any{"output": map[string]any{"result": 42}},
 	})
-	exec, _ = srv.config.ExecutionStore.Get(execID)
+	exec, _ = srv.config.ExecutionStore.Get(context.Background(), execID)
 	s.Equal(runtime.StatusSuccess, exec.Steps["s1"].Status)
 	s.NotNil(exec.Steps["s1"].Output)
 
@@ -1433,7 +1434,7 @@ func (s *HandlersTestSuite) TestApplyStepEvent_AllTypes() {
 	srv.applyStepEvent(execID, event.Event{
 		Type: event.StepFailed, StepID: "s2", Message: "boom",
 	})
-	exec, _ = srv.config.ExecutionStore.Get(execID)
+	exec, _ = srv.config.ExecutionStore.Get(context.Background(), execID)
 	s.Equal(runtime.StatusFailed, exec.Steps["s2"].Status)
 	s.Equal("boom", exec.Steps["s2"].Error.Message)
 
@@ -1441,7 +1442,7 @@ func (s *HandlersTestSuite) TestApplyStepEvent_AllTypes() {
 	srv.applyStepEvent(execID, event.Event{
 		Type: event.StepSkipped, StepID: "s3",
 	})
-	exec, _ = srv.config.ExecutionStore.Get(execID)
+	exec, _ = srv.config.ExecutionStore.Get(context.Background(), execID)
 	s.Equal(runtime.StatusSkipped, exec.Steps["s3"].Status)
 
 	// StepOutput
@@ -1449,7 +1450,7 @@ func (s *HandlersTestSuite) TestApplyStepEvent_AllTypes() {
 		Type: event.StepOutput, StepID: "s1",
 		Data: map[string]any{"output": "new-output"},
 	})
-	exec, _ = srv.config.ExecutionStore.Get(execID)
+	exec, _ = srv.config.ExecutionStore.Get(context.Background(), execID)
 	s.Equal("new-output", exec.Steps["s1"].Output)
 
 	// No-op events (should not crash)
@@ -1464,7 +1465,7 @@ func (s *HandlersTestSuite) TestApplyWorkflowCompleted_ValidStatus() {
 	srv := newTestServer(s.T())
 
 	execID := "wfc-1"
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: execID, WorkflowName: "test", Status: runtime.StatusRunning,
 		StartedAt: time.Now(),
 	})
@@ -1476,7 +1477,7 @@ func (s *HandlersTestSuite) TestApplyWorkflowCompleted_ValidStatus() {
 		Data:      map[string]any{"status": "success"},
 	})
 
-	exec, _ := srv.config.ExecutionStore.Get(execID)
+	exec, _ := srv.config.ExecutionStore.Get(context.Background(), execID)
 	s.Equal(runtime.StatusSuccess, exec.Status)
 	s.NotNil(exec.FinishedAt)
 }
@@ -1485,7 +1486,7 @@ func (s *HandlersTestSuite) TestApplyWorkflowCompleted_NoStatus() {
 	srv := newTestServer(s.T())
 
 	execID := "wfc-2"
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: execID, WorkflowName: "test", Status: runtime.StatusRunning,
 		StartedAt: time.Now(),
 	})
@@ -1496,7 +1497,7 @@ func (s *HandlersTestSuite) TestApplyWorkflowCompleted_NoStatus() {
 		Data: map[string]any{},
 	})
 
-	exec, _ := srv.config.ExecutionStore.Get(execID)
+	exec, _ := srv.config.ExecutionStore.Get(context.Background(), execID)
 	s.Equal(runtime.StatusRunning, exec.Status) // unchanged
 }
 
@@ -1505,7 +1506,7 @@ func (s *HandlersTestSuite) TestApplyStepEvent_WorkflowCompleted() {
 	srv := newTestServer(s.T())
 
 	execID := "wfc-dispatch"
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: execID, WorkflowName: "test", Status: runtime.StatusRunning,
 		StartedAt: time.Now(),
 	})
@@ -1518,7 +1519,7 @@ func (s *HandlersTestSuite) TestApplyStepEvent_WorkflowCompleted() {
 		Data:      map[string]any{"status": "failed"},
 	})
 
-	exec, _ := srv.config.ExecutionStore.Get(execID)
+	exec, _ := srv.config.ExecutionStore.Get(context.Background(), execID)
 	s.Equal(runtime.StatusFailed, exec.Status)
 }
 
@@ -1527,7 +1528,7 @@ func (s *HandlersTestSuite) TestProcessEvent_StepGotoResetsBody() {
 	srv := newTestServer(s.T())
 
 	execID := "pe-goto"
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: execID, WorkflowName: "test", Status: runtime.StatusRunning,
 		StartedAt: time.Now(),
 		Steps: map[string]*runtime.StepResult{
@@ -1560,7 +1561,7 @@ func (s *HandlersTestSuite) TestProcessEvent_StepGotoResetsBody() {
 		},
 	}, lt, &completedSeen)
 
-	exec, _ := srv.config.ExecutionStore.Get(execID)
+	exec, _ := srv.config.ExecutionStore.Get(context.Background(), execID)
 	s.Equal("pending", exec.Steps["step_b"].Status)
 }
 
@@ -1569,7 +1570,7 @@ func (s *HandlersTestSuite) TestProcessEvent_EmptyStepID() {
 	srv := newTestServer(s.T())
 
 	execID := "pe-empty"
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: execID, WorkflowName: "test", Status: runtime.StatusRunning,
 		StartedAt: time.Now(),
 	})
@@ -1589,7 +1590,7 @@ func (s *HandlersTestSuite) TestProcessEvent_LoopBodyEventSkipped() {
 	srv := newTestServer(s.T())
 
 	execID := "pe-loop"
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: execID, WorkflowName: "test", Status: runtime.StatusRunning,
 		StartedAt: time.Now(),
 	})
@@ -1614,7 +1615,7 @@ func (s *HandlersTestSuite) TestProcessEvent_LoopBodyEventSkipped() {
 	}, lt, &completedSeen)
 
 	// Event should NOT be appended (loop body after iteration 1)
-	events := srv.config.ExecutionStore.GetEvents(execID)
+	events, _ := srv.config.ExecutionStore.GetEvents(context.Background(), execID)
 	s.Len(events, 0)
 }
 
@@ -1623,7 +1624,7 @@ func (s *HandlersTestSuite) TestCaptureEvents_IgnoresOtherExecution() {
 	srv := newTestServer(s.T())
 
 	execID := "cap-1"
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: execID, WorkflowName: "test", Status: runtime.StatusRunning,
 		StartedAt: time.Now(),
 	})
@@ -1643,7 +1644,7 @@ func (s *HandlersTestSuite) TestCaptureEvents_IgnoresOtherExecution() {
 	stopCapture()
 
 	// No events should be stored for execID
-	events := srv.config.ExecutionStore.GetEvents(execID)
+	events, _ := srv.config.ExecutionStore.GetEvents(context.Background(), execID)
 	s.Len(events, 0)
 }
 
@@ -1652,7 +1653,7 @@ func (s *HandlersTestSuite) TestFinalizeExecution_ErrorCancelled() {
 	srv := newTestServer(s.T())
 
 	execID := "fin-cancel"
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: execID, WorkflowName: "test", Status: runtime.StatusRunning,
 		StartedAt: time.Now(),
 	})
@@ -1662,7 +1663,7 @@ func (s *HandlersTestSuite) TestFinalizeExecution_ErrorCancelled() {
 
 	srv.finalizeExecution(execID, nil, errors.New("context cancelled"), ctx)
 
-	exec, _ := srv.config.ExecutionStore.Get(execID)
+	exec, _ := srv.config.ExecutionStore.Get(context.Background(), execID)
 	s.Equal(runtime.StatusCancelled, exec.Status)
 	s.Equal("execution cancelled", exec.Error)
 	s.NotNil(exec.FinishedAt)
@@ -1673,14 +1674,14 @@ func (s *HandlersTestSuite) TestFinalizeExecution_ErrorNotCancelled() {
 	srv := newTestServer(s.T())
 
 	execID := "fin-err"
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: execID, WorkflowName: "test", Status: runtime.StatusRunning,
 		StartedAt: time.Now(),
 	})
 
 	srv.finalizeExecution(execID, nil, errors.New("something failed"), context.Background())
 
-	exec, _ := srv.config.ExecutionStore.Get(execID)
+	exec, _ := srv.config.ExecutionStore.Get(context.Background(), execID)
 	s.Equal(runtime.StatusFailed, exec.Status)
 	s.Equal("something failed", exec.Error)
 	s.NotNil(exec.FinishedAt)
@@ -1691,7 +1692,7 @@ func (s *HandlersTestSuite) TestFinalizeExecution_SuccessWithResultError() {
 	srv := newTestServer(s.T())
 
 	execID := "fin-res-err"
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: execID, WorkflowName: "test", Status: runtime.StatusRunning,
 		StartedAt: time.Now(),
 	})
@@ -1708,7 +1709,7 @@ func (s *HandlersTestSuite) TestFinalizeExecution_SuccessWithResultError() {
 
 	srv.finalizeExecution(execID, result, nil, context.Background())
 
-	exec, _ := srv.config.ExecutionStore.Get(execID)
+	exec, _ := srv.config.ExecutionStore.Get(context.Background(), execID)
 	s.Equal(runtime.StatusCompletedWithErrors, exec.Status)
 	s.Equal("partial failure", exec.Error)
 	s.NotNil(exec.FinishedAt)
@@ -1720,7 +1721,7 @@ func (s *HandlersTestSuite) TestFinalizeExecution_SuccessWithSteps() {
 	srv := newTestServer(s.T())
 
 	execID := "fin-ok"
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: execID, WorkflowName: "test", Status: runtime.StatusRunning,
 		StartedAt: time.Now(),
 		Steps: map[string]*runtime.StepResult{
@@ -1741,7 +1742,7 @@ func (s *HandlersTestSuite) TestFinalizeExecution_SuccessWithSteps() {
 
 	srv.finalizeExecution(execID, result, nil, context.Background())
 
-	exec, _ := srv.config.ExecutionStore.Get(execID)
+	exec, _ := srv.config.ExecutionStore.Get(context.Background(), execID)
 	s.Equal(runtime.StatusSuccess, exec.Status)
 	// s1 should have its Input preserved from event tracking
 	s.Equal("input-data", exec.Steps["s1"].Input)
@@ -2041,7 +2042,7 @@ func (s *HandlersTestSuite) TestCaptureEvents_FullLifecycle() {
 	srv := newTestServer(s.T())
 
 	execID := "cap-full"
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: execID, WorkflowName: "test", Status: runtime.StatusRunning,
 		StartedAt: time.Now(),
 	})
@@ -2065,10 +2066,10 @@ func (s *HandlersTestSuite) TestCaptureEvents_FullLifecycle() {
 
 	stopCapture()
 
-	events := srv.config.ExecutionStore.GetEvents(execID)
+	events, _ := srv.config.ExecutionStore.GetEvents(context.Background(), execID)
 	s.Len(events, 2)
 
-	exec, _ := srv.config.ExecutionStore.Get(execID)
+	exec, _ := srv.config.ExecutionStore.Get(context.Background(), execID)
 	s.Equal(runtime.StatusSuccess, exec.Steps["s1"].Status)
 }
 
@@ -2173,7 +2174,7 @@ func (s *HandlersTestSuite) TestProcessEvent_DuplicateWorkflowCompleted() {
 	srv := newTestServer(s.T())
 
 	execID := "pe-dedup"
-	srv.config.ExecutionStore.Add(&store.Execution{
+	srv.config.ExecutionStore.Add(context.Background(), &store.Execution{
 		ID: execID, WorkflowName: "test", Status: runtime.StatusRunning,
 		StartedAt: time.Now(),
 	})
@@ -2189,7 +2190,7 @@ func (s *HandlersTestSuite) TestProcessEvent_DuplicateWorkflowCompleted() {
 	}, lt, &completedSeen)
 
 	s.True(completedSeen)
-	events := srv.config.ExecutionStore.GetEvents(execID)
+	events, _ := srv.config.ExecutionStore.GetEvents(context.Background(), execID)
 	s.Len(events, 1)
 
 	// Second WorkflowCompleted event should be deduplicated (early return)
@@ -2200,7 +2201,7 @@ func (s *HandlersTestSuite) TestProcessEvent_DuplicateWorkflowCompleted() {
 	}, lt, &completedSeen)
 
 	// Still only 1 event stored — the duplicate was dropped
-	events = srv.config.ExecutionStore.GetEvents(execID)
+	events, _ = srv.config.ExecutionStore.GetEvents(context.Background(), execID)
 	s.Len(events, 1)
 }
 

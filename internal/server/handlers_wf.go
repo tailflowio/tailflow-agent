@@ -141,7 +141,12 @@ func (s *Server) handleGetWorkflowActivity(w http.ResponseWriter, r *http.Reques
 		Waiting []string `json:"waiting"`
 	}
 
-	execs := s.config.ExecutionStore.List()
+	execs, err := s.config.ExecutionStore.List(r.Context())
+	if err != nil {
+		s.writeError(r.Context(), w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	activity := make(map[string]*stepActivity)
 
 	for _, exec := range execs {
@@ -168,8 +173,14 @@ func (s *Server) handleGetWorkflowActivity(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
+	counts, err := s.config.ExecutionStore.StepExecCounts(r.Context())
+	if err != nil {
+		s.writeError(r.Context(), w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	s.writeJSON(r.Context(), w, http.StatusOK, map[string]any{
 		"steps":       activity,
-		"exec_counts": s.config.ExecutionStore.StepExecCounts(),
+		"exec_counts": counts,
 	})
 }

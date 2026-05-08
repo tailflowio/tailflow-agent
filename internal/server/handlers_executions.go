@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -14,7 +15,11 @@ import (
 )
 
 func (s *Server) handleListExecutions(w http.ResponseWriter, r *http.Request) {
-	execs := s.config.ExecutionStore.List() // newest-first
+	execs, err := s.config.ExecutionStore.List(r.Context()) // newest-first
+	if err != nil {
+		s.writeError(r.Context(), w, http.StatusInternalServerError, err.Error())
+		return
+	}
 
 	execs = filterByStatus(execs, r.URL.Query().Get("status"))
 	total := len(execs)
@@ -106,9 +111,13 @@ func parseIntParam(r *http.Request, name string, defaultVal int) int {
 func (s *Server) handleGetExecution(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	exec, err := s.config.ExecutionStore.Get(id)
+	exec, err := s.config.ExecutionStore.Get(r.Context(), id)
 	if err != nil {
-		s.writeError(r.Context(), w, http.StatusNotFound, err.Error())
+		status := http.StatusInternalServerError
+		if errors.Is(err, store.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		s.writeError(r.Context(), w, status, err.Error())
 		return
 	}
 
@@ -132,7 +141,12 @@ func (s *Server) handleListEvents(w http.ResponseWriter, r *http.Request) {
 		offset = 0
 	}
 
-	allEvents := s.config.ExecutionStore.GetEvents(id)
+	allEvents, err := s.config.ExecutionStore.GetEvents(r.Context(), id)
+	if err != nil {
+		s.writeError(r.Context(), w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	total := len(allEvents)
 
 	// Paginate from the end (newest first)
@@ -166,9 +180,13 @@ func (s *Server) handleListEvents(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCancelExecution(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	exec, err := s.config.ExecutionStore.Get(id)
+	exec, err := s.config.ExecutionStore.Get(r.Context(), id)
 	if err != nil {
-		s.writeError(r.Context(), w, http.StatusNotFound, err.Error())
+		status := http.StatusInternalServerError
+		if errors.Is(err, store.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		s.writeError(r.Context(), w, status, err.Error())
 		return
 	}
 
