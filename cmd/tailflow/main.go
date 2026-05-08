@@ -23,11 +23,10 @@ import (
 	"github.com/tailflow/tailflow/internal/event"
 	"github.com/tailflow/tailflow/internal/export"
 	"github.com/tailflow/tailflow/internal/export/saas"
+	agentfx "github.com/tailflow/tailflow/internal/fx"
 	tfotel "github.com/tailflow/tailflow/internal/otel"
 	"github.com/tailflow/tailflow/internal/parser"
 	"github.com/tailflow/tailflow/internal/runtime"
-	"github.com/tailflow/tailflow/internal/server"
-	"github.com/tailflow/tailflow/internal/store"
 )
 
 var version = "dev"
@@ -1138,66 +1137,6 @@ func resolveOTelConfig(endpoint, serviceName *string) tfotel.Config {
 	}
 }
 
-func buildLogger(level slog.Level, otelResult *tfotel.Result) *slog.Logger {
-	baseHandler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})
-
-	otelHandler := tfotel.NewLogHandler(otelResult.LoggerProvider)
-	if otelHandler == nil {
-		return slog.New(baseHandler)
-	}
-
-	return slog.New(&multiHandler{handlers: []slog.Handler{baseHandler, otelHandler}})
-}
-
-type multiHandler struct {
-	handlers []slog.Handler
-}
-
-func (m *multiHandler) Enabled(ctx context.Context, level slog.Level) bool {
-	for _, h := range m.handlers {
-		if h.Enabled(ctx, level) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func (m *multiHandler) Handle(ctx context.Context, r slog.Record) error {
-	var firstErr error
-
-	for _, h := range m.handlers {
-		if !h.Enabled(ctx, r.Level) {
-			continue
-		}
-
-		handleErr := h.Handle(ctx, r.Clone())
-		if handleErr != nil && firstErr == nil {
-			firstErr = handleErr
-		}
-	}
-
-	return firstErr
-}
-
-func (m *multiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	handlers := make([]slog.Handler, len(m.handlers))
-	for i, h := range m.handlers {
-		handlers[i] = h.WithAttrs(attrs)
-	}
-
-	return &multiHandler{handlers: handlers}
-}
-
-func (m *multiHandler) WithGroup(name string) slog.Handler {
-	handlers := make([]slog.Handler, len(m.handlers))
-	for i, h := range m.handlers {
-		handlers[i] = h.WithGroup(name)
-	}
-
-	return &multiHandler{handlers: handlers}
-}
-
 func runCmd(noColorFlag *bool, exporterURL, exporterKey, exporterName, otelEndpoint, otelServiceName *string) *cobra.Command {
 	var (
 		params []string
@@ -1338,7 +1277,7 @@ func executeRun(
 		return fmt.Errorf("otel business metrics: %w", bmErr)
 	}
 
-	logger := buildLogger(slog.LevelError+1, otelResult)
+	logger := tfotel.NewSlogLogger(slog.LevelError+1, otelResult)
 
 	exec, services, closeFn, setupErr := setupActionRegistry(wf, bus, logger, tracer, bm)
 	if setupErr != nil {
@@ -1822,91 +1761,22 @@ func executeServe(
 	path string, port int, maxExecs int, selfHosted, editor bool,
 	exportURL, apiKey, exporterName string, otelCfg tfotel.Config,
 ) error {
-	otelResult, err := tfotel.Setup(context.Background(), otelCfg)
-	if err != nil {
-		return fmt.Errorf("otel setup: %w", err)
-	}
-	defer shutdownOTel(otelResult)
-
-	wf, parseErr := parser.Parse(path)
-	if parseErr != nil {
-		return parseErr
-	}
-
-	bus := event.NewBus()
-	defer bus.Close()
-
-	reg := action.NewRegistry()
-	action.RegisterBuiltins(reg)
-
-	if !selfHosted {
-		reg.SetAllowlist(saasAllowedActions(reg.Names()))
-	}
-
-	tracer := tfotel.NewTracer(otelResult.TracerProvider)
-
-	bm, bmErr := tfotel.NewBusinessMetrics(otelResult.MeterProvider)
-	if bmErr != nil {
-		return fmt.Errorf("otel business metrics: %w", bmErr)
-	}
-
-	logger := buildLogger(slog.LevelInfo, otelResult)
-	exec := engine.NewExecutor(reg, bus, logger, wf.Sensitive, tracer, bm)
-
-	execStore := store.NewExecutionStore(maxExecs)
-
-	exporter, claimer, recoverer := buildExportPorts(exportURL, apiKey, exporterName, bus, wf, logger)
-
-	srv := server.New(server.Config{
-		Port:           port,
-		Executor:       exec,
-		Workflow:       wf,
-		FilePath:       path,
-		EditorEnabled:  editor,
-		ExecutionStore: execStore,
-		EventBus:       bus,
-		Logger:         logger,
-		ExporterName:   exporterName,
-		Version:        version,
-		Exporter:       exporter,
-		Claimer:        claimer,
-		Recoverer:      recoverer,
-	})
-
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	return srv.Run(ctx)
-}
-
-// buildExportPorts wires the SaaS impls (or noops when no ExportURL) for the
-// server's export.* dependency interfaces. The server takes ownership of the
-// returned ports — it calls Start/Shutdown on the exporter as part of its own
-// lifecycle, so callers do not manage a separate cancel here.
-func buildExportPorts(
-	exportURL, apiKey, exporterName string,
-	bus *event.Bus, wf *parser.Workflow, logger *slog.Logger,
-) (export.EventExporter, export.IdempotencyClaimer, export.ExecutionRecoverer) {
-	if exportURL == "" {
-		return export.NewNoopExporter(), export.NewNoopClaimer(), export.NewNoopRecoverer()
-	}
-
-	exporter := saas.NewExporter(saas.Config{
-		ExportURL:           exportURL,
-		APIKey:              apiKey,
-		AgentName:           exporterName,
-		EventBus:            bus,
-		Logger:              logger,
-		WorkflowName:        wf.Name,
-		WorkflowDescription: wf.Description,
-		WorkflowTags:        wf.Tags,
-		TriggerType:         resolveTriggerType(wf),
-		StepsCount:          len(wf.Steps),
-		Version:             version,
-		Revision:            wf.Revision,
+	return agentfx.RunApp(ctx, agentfx.Config{
+		WorkflowPath: path,
+		Port:         port,
+		MaxExecs:     maxExecs,
+		SelfHosted:   selfHosted,
+		Editor:       editor,
+		ExportURL:    exportURL,
+		APIKey:       apiKey,
+		ExporterName: exporterName,
+		Version:      version,
+		OTel:         otelCfg,
+		LogLevel:     slog.LevelInfo,
 	})
-
-	return exporter, saas.NewClaimClient(exportURL, apiKey), saas.NewRecoveryClient(exportURL, apiKey)
 }
 
 func cliAllowedActions(all []string) []string {
@@ -1915,27 +1785,6 @@ func cliAllowedActions(all []string) []string {
 	for _, name := range all {
 		if strings.HasPrefix(name, "wait.") ||
 			name == "schedule" {
-			continue
-		}
-
-		allowed = append(allowed, name)
-	}
-
-	return allowed
-}
-
-func saasAllowedActions(all []string) []string {
-	blocked := map[string]bool{
-		"js":         true,
-		"exec":       true,
-		"file.read":  true,
-		"file.write": true,
-	}
-
-	allowed := make([]string, 0, len(all))
-
-	for _, name := range all {
-		if blocked[name] {
 			continue
 		}
 
