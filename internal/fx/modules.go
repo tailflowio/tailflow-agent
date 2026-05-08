@@ -70,14 +70,16 @@ func RunApp(ctx context.Context, cfg Config) error {
 		uberfx.Populate(&srv),
 	)
 
-	if err := app.Err(); err != nil {
+	err := app.Err()
+	if err != nil {
 		return fmt.Errorf("fx wiring: %w", err)
 	}
 
 	startCtx, startCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer startCancel()
 
-	if err := app.Start(startCtx); err != nil {
+	err = app.Start(startCtx)
+	if err != nil {
 		return fmt.Errorf("fx start: %w", err)
 	}
 
