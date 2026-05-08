@@ -41,19 +41,17 @@ type Config struct {
 // ServeModule bundles every provider required to run `tailflow serve`.
 var ServeModule = uberfx.Module("serve",
 	uberfx.Provide(
-		provideOTel,
-		provideTracer,
-		provideBusinessMetrics,
-		provideLogger,
-		provideWorkflow,
-		provideEventBus,
-		provideRegistry,
-		provideExecutor,
-		provideExecutionStore,
-		provideExporter,
-		provideClaimer,
-		provideRecoverer,
-		provideServer,
+		NewOTel,
+		NewTracer,
+		NewBusinessMetrics,
+		NewLogger,
+		NewWorkflow,
+		NewEventBus,
+		NewActionRegistry,
+		NewExecutor,
+		NewExecutionStore,
+		NewExportPorts,
+		NewServer,
 	),
 )
 
@@ -92,13 +90,28 @@ func RunApp(ctx context.Context, cfg Config) error {
 	return srv.Run(ctx)
 }
 
-func provideOTel(lc uberfx.Lifecycle, cfg Config) (*tfotel.Result, error) {
-	res, err := tfotel.Setup(context.Background(), cfg.OTel)
-	if err != nil {
-		return nil, fmt.Errorf("otel setup: %w", err)
+// --- OTel ---
+
+type OTelIn struct {
+	uberfx.In
+
+	Config    Config
+	Lifecycle uberfx.Lifecycle
+}
+
+type OTelOut struct {
+	uberfx.Out
+
+	Result *tfotel.Result
+}
+
+func NewOTel(in OTelIn) (out OTelOut, err error) {
+	res, setupErr := tfotel.Setup(context.Background(), in.Config.OTel)
+	if setupErr != nil {
+		return out, fmt.Errorf("otel setup: %w", setupErr)
 	}
 
-	lc.Append(uberfx.Hook{
+	in.Lifecycle.Append(uberfx.Hook{
 		OnStop: func(ctx context.Context) error {
 			flushCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			defer cancel()
@@ -109,133 +122,292 @@ func provideOTel(lc uberfx.Lifecycle, cfg Config) (*tfotel.Result, error) {
 		},
 	})
 
-	return res, nil
+	out.Result = res
+
+	return out, nil
 }
 
-func provideTracer(res *tfotel.Result) *tfotel.Tracer {
-	return tfotel.NewTracer(res.TracerProvider)
+// --- Tracer ---
+
+type TracerIn struct {
+	uberfx.In
+
+	Result *tfotel.Result
 }
 
-func provideBusinessMetrics(res *tfotel.Result) (*tfotel.BusinessMetrics, error) {
-	bm, err := tfotel.NewBusinessMetrics(res.MeterProvider)
-	if err != nil {
-		return nil, fmt.Errorf("otel business metrics: %w", err)
+type TracerOut struct {
+	uberfx.Out
+
+	Tracer *tfotel.Tracer
+}
+
+func NewTracer(in TracerIn) TracerOut {
+	return TracerOut{Tracer: tfotel.NewTracer(in.Result.TracerProvider)}
+}
+
+// --- BusinessMetrics ---
+
+type BusinessMetricsIn struct {
+	uberfx.In
+
+	Result *tfotel.Result
+}
+
+type BusinessMetricsOut struct {
+	uberfx.Out
+
+	BusinessMetrics *tfotel.BusinessMetrics
+}
+
+func NewBusinessMetrics(in BusinessMetricsIn) (out BusinessMetricsOut, err error) {
+	bm, bmErr := tfotel.NewBusinessMetrics(in.Result.MeterProvider)
+	if bmErr != nil {
+		return out, fmt.Errorf("otel business metrics: %w", bmErr)
 	}
 
-	return bm, nil
+	out.BusinessMetrics = bm
+
+	return out, nil
 }
 
-func provideLogger(cfg Config, res *tfotel.Result) *slog.Logger {
-	return tfotel.NewSlogLogger(cfg.LogLevel, res)
+// --- Logger ---
+
+type LoggerIn struct {
+	uberfx.In
+
+	Config Config
+	Result *tfotel.Result
 }
 
-func provideWorkflow(cfg Config) (*parser.Workflow, error) {
-	wf, err := parser.Parse(cfg.WorkflowPath)
-	if err != nil {
-		return nil, fmt.Errorf("parse workflow: %w", err)
+type LoggerOut struct {
+	uberfx.Out
+
+	Logger *slog.Logger
+}
+
+func NewLogger(in LoggerIn) LoggerOut {
+	return LoggerOut{Logger: tfotel.NewSlogLogger(in.Config.LogLevel, in.Result)}
+}
+
+// --- Workflow ---
+
+type WorkflowIn struct {
+	uberfx.In
+
+	Config Config
+}
+
+type WorkflowOut struct {
+	uberfx.Out
+
+	Workflow *parser.Workflow
+}
+
+func NewWorkflow(in WorkflowIn) (out WorkflowOut, err error) {
+	wf, parseErr := parser.Parse(in.Config.WorkflowPath)
+	if parseErr != nil {
+		return out, fmt.Errorf("parse workflow: %w", parseErr)
 	}
 
-	return wf, nil
+	out.Workflow = wf
+
+	return out, nil
 }
 
-func provideEventBus(lc uberfx.Lifecycle) *event.Bus {
+// --- EventBus ---
+
+type EventBusIn struct {
+	uberfx.In
+
+	Lifecycle uberfx.Lifecycle
+}
+
+type EventBusOut struct {
+	uberfx.Out
+
+	EventBus *event.Bus
+}
+
+func NewEventBus(in EventBusIn) EventBusOut {
 	bus := event.NewBus()
 
-	lc.Append(uberfx.Hook{
+	in.Lifecycle.Append(uberfx.Hook{
 		OnStop: func(_ context.Context) error {
 			bus.Close()
 			return nil
 		},
 	})
 
-	return bus
+	return EventBusOut{EventBus: bus}
 }
 
-func provideRegistry(cfg Config) *action.Registry {
+// --- ActionRegistry ---
+
+type ActionRegistryIn struct {
+	uberfx.In
+
+	Config Config
+}
+
+type ActionRegistryOut struct {
+	uberfx.Out
+
+	Registry *action.Registry
+}
+
+func NewActionRegistry(in ActionRegistryIn) ActionRegistryOut {
 	reg := action.NewRegistry()
 	action.RegisterBuiltins(reg)
 
-	if !cfg.SelfHosted {
+	if !in.Config.SelfHosted {
 		reg.SetAllowlist(saasAllowedActions(reg.Names()))
 	}
 
-	return reg
+	return ActionRegistryOut{Registry: reg}
 }
 
-func provideExecutor(
-	reg *action.Registry, bus *event.Bus, logger *slog.Logger,
-	wf *parser.Workflow, tracer *tfotel.Tracer, bm *tfotel.BusinessMetrics,
-) *engine.Executor {
-	return engine.NewExecutor(reg, bus, logger, wf.Sensitive, tracer, bm)
+// --- Executor ---
+
+type ExecutorIn struct {
+	uberfx.In
+
+	BusinessMetrics *tfotel.BusinessMetrics
+	EventBus        *event.Bus
+	Logger          *slog.Logger
+	Registry        *action.Registry
+	Tracer          *tfotel.Tracer
+	Workflow        *parser.Workflow
 }
 
-func provideExecutionStore(cfg Config) store.ExecutionStore {
-	return store.NewExecutionStore(cfg.MaxExecs)
+type ExecutorOut struct {
+	uberfx.Out
+
+	Executor *engine.Executor
 }
 
-// provideExporter returns the SaaS exporter when ExportURL is set, otherwise a
-// noop. The server owns the Start/Shutdown lifecycle on this exporter (see
-// internal/server.shutdownServices), so no fx hook is registered here.
-func provideExporter(cfg Config, bus *event.Bus, wf *parser.Workflow, logger *slog.Logger) export.EventExporter {
-	if cfg.ExportURL == "" {
-		return export.NewNoopExporter()
+func NewExecutor(in ExecutorIn) ExecutorOut {
+	exec := engine.NewExecutor(
+		in.Registry, in.EventBus, in.Logger,
+		in.Workflow.Sensitive, in.Tracer, in.BusinessMetrics,
+	)
+
+	return ExecutorOut{Executor: exec}
+}
+
+// --- ExecutionStore ---
+
+type ExecutionStoreIn struct {
+	uberfx.In
+
+	Config Config
+}
+
+type ExecutionStoreOut struct {
+	uberfx.Out
+
+	Store store.ExecutionStore
+}
+
+func NewExecutionStore(in ExecutionStoreIn) ExecutionStoreOut {
+	return ExecutionStoreOut{Store: store.NewExecutionStore(in.Config.MaxExecs)}
+}
+
+// --- ExportPorts ---
+
+// ExportPortsIn / ExportPortsOut centralise the SaaS-vs-noop branching for the
+// three export.* ports. The server takes ownership of the Start/Shutdown
+// lifecycle on the exporter, so no fx hook is registered here.
+type ExportPortsIn struct {
+	uberfx.In
+
+	Config   Config
+	EventBus *event.Bus
+	Logger   *slog.Logger
+	Workflow *parser.Workflow
+}
+
+type ExportPortsOut struct {
+	uberfx.Out
+
+	Claimer   export.IdempotencyClaimer
+	Exporter  export.EventExporter
+	Recoverer export.ExecutionRecoverer
+}
+
+func NewExportPorts(in ExportPortsIn) ExportPortsOut {
+	if in.Config.ExportURL == "" {
+		return ExportPortsOut{
+			Claimer:   export.NewNoopClaimer(),
+			Exporter:  export.NewNoopExporter(),
+			Recoverer: export.NewNoopRecoverer(),
+		}
 	}
 
-	return saas.NewExporter(saas.Config{
-		ExportURL:           cfg.ExportURL,
-		APIKey:              cfg.APIKey,
-		AgentName:           cfg.ExporterName,
-		EventBus:            bus,
-		Logger:              logger,
-		WorkflowName:        wf.Name,
-		WorkflowDescription: wf.Description,
-		WorkflowTags:        wf.Tags,
-		TriggerType:         resolveTriggerType(wf),
-		StepsCount:          len(wf.Steps),
-		Version:             cfg.Version,
-		Revision:            wf.Revision,
+	exporter := saas.NewExporter(saas.Config{
+		ExportURL:           in.Config.ExportURL,
+		APIKey:              in.Config.APIKey,
+		AgentName:           in.Config.ExporterName,
+		EventBus:            in.EventBus,
+		Logger:              in.Logger,
+		WorkflowName:        in.Workflow.Name,
+		WorkflowDescription: in.Workflow.Description,
+		WorkflowTags:        in.Workflow.Tags,
+		TriggerType:         resolveTriggerType(in.Workflow),
+		StepsCount:          len(in.Workflow.Steps),
+		Version:             in.Config.Version,
+		Revision:            in.Workflow.Revision,
 	})
-}
 
-func provideClaimer(cfg Config) export.IdempotencyClaimer {
-	if cfg.ExportURL == "" {
-		return export.NewNoopClaimer()
+	return ExportPortsOut{
+		Claimer:   saas.NewClaimClient(in.Config.ExportURL, in.Config.APIKey),
+		Exporter:  exporter,
+		Recoverer: saas.NewRecoveryClient(in.Config.ExportURL, in.Config.APIKey),
 	}
-
-	return saas.NewClaimClient(cfg.ExportURL, cfg.APIKey)
 }
 
-func provideRecoverer(cfg Config) export.ExecutionRecoverer {
-	if cfg.ExportURL == "" {
-		return export.NewNoopRecoverer()
-	}
+// --- Server ---
 
-	return saas.NewRecoveryClient(cfg.ExportURL, cfg.APIKey)
+type ServerIn struct {
+	uberfx.In
+
+	Claimer        export.IdempotencyClaimer
+	Config         Config
+	EventBus       *event.Bus
+	Executor       *engine.Executor
+	ExecutionStore store.ExecutionStore
+	Exporter       export.EventExporter
+	Logger         *slog.Logger
+	Recoverer      export.ExecutionRecoverer
+	Workflow       *parser.Workflow
 }
 
-func provideServer(
-	cfg Config,
-	exec *engine.Executor, wf *parser.Workflow, logger *slog.Logger,
-	execStore store.ExecutionStore, bus *event.Bus,
-	exporter export.EventExporter, claimer export.IdempotencyClaimer,
-	recoverer export.ExecutionRecoverer,
-) *server.Server {
-	return server.New(server.Config{
-		Port:           cfg.Port,
-		Executor:       exec,
-		Workflow:       wf,
-		FilePath:       cfg.WorkflowPath,
-		EditorEnabled:  cfg.Editor,
-		ExecutionStore: execStore,
-		EventBus:       bus,
-		Logger:         logger,
-		ExporterName:   cfg.ExporterName,
-		Version:        cfg.Version,
-		Exporter:       exporter,
-		Claimer:        claimer,
-		Recoverer:      recoverer,
+type ServerOut struct {
+	uberfx.Out
+
+	Server *server.Server
+}
+
+func NewServer(in ServerIn) ServerOut {
+	srv := server.New(server.Config{
+		Port:           in.Config.Port,
+		Executor:       in.Executor,
+		Workflow:       in.Workflow,
+		FilePath:       in.Config.WorkflowPath,
+		EditorEnabled:  in.Config.Editor,
+		ExecutionStore: in.ExecutionStore,
+		EventBus:       in.EventBus,
+		Logger:         in.Logger,
+		ExporterName:   in.Config.ExporterName,
+		Version:        in.Config.Version,
+		Exporter:       in.Exporter,
+		Claimer:        in.Claimer,
+		Recoverer:      in.Recoverer,
 	})
+
+	return ServerOut{Server: srv}
 }
+
+// --- helpers ---
 
 // saasAllowedActions filters out actions that should not be runnable on a
 // hosted SaaS deployment (raw exec / js / file IO).

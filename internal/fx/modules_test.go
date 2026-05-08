@@ -9,7 +9,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
-	"github.com/tailflow/tailflow/internal/export"
 	tfotel "github.com/tailflow/tailflow/internal/otel"
 	"github.com/tailflow/tailflow/internal/parser"
 	"github.com/tailflow/tailflow/internal/server"
@@ -23,20 +22,19 @@ type ModulesTestSuite struct {
 
 func TestModules(t *testing.T) { suite.Run(t, new(ModulesTestSuite)) }
 
-func (s *ModulesTestSuite) TestProvideRegistry_DefaultAppliesSaaSAllowlist() {
-	reg := provideRegistry(Config{SelfHosted: false})
-	s.NotNil(reg)
+func (s *ModulesTestSuite) TestNewActionRegistry_DefaultAppliesSaaSAllowlist() {
+	out := NewActionRegistry(ActionRegistryIn{Config: Config{SelfHosted: false}})
+	s.NotNil(out.Registry)
 
-	// Built-in `exec` is blocked by the SaaS allowlist.
-	_, err := reg.Create("exec")
+	_, err := out.Registry.Create("exec")
 	s.Error(err, "exec must be blocked under SaaS profile")
 }
 
-func (s *ModulesTestSuite) TestProvideRegistry_SelfHostedKeepsEverything() {
-	reg := provideRegistry(Config{SelfHosted: true})
-	s.NotNil(reg)
+func (s *ModulesTestSuite) TestNewActionRegistry_SelfHostedKeepsEverything() {
+	out := NewActionRegistry(ActionRegistryIn{Config: Config{SelfHosted: true}})
+	s.NotNil(out.Registry)
 
-	_, err := reg.Create("exec")
+	_, err := out.Registry.Create("exec")
 	s.NoError(err, "exec must be available in self-hosted profile")
 }
 
@@ -57,22 +55,20 @@ func (s *ModulesTestSuite) TestResolveTriggerType() {
 	s.Equal("schedule", resolveTriggerType(&parser.Workflow{Trigger: &parser.Trigger{Schedule: &parser.ScheduleTrigger{}}}))
 }
 
-func (s *ModulesTestSuite) TestProvideExporter_NoopWhenURLEmpty() {
-	exp := provideExporter(Config{}, nil, &parser.Workflow{}, slog.Default())
-	s.NotNil(exp)
-	_, ok := exp.(interface{ noop() bool })
-	_ = ok // we just confirm it implements the interface; actual type is internal
-	// Sanity: ensure it's the noop. The export.NewNoopExporter returns a known type;
-	// compare by behavioural shape via type-assert against the export.EventExporter
-	// interface — we know the noop is safe to call without start.
-	var _ export.EventExporter = exp
+func (s *ModulesTestSuite) TestNewExportPorts_NoopWhenURLEmpty() {
+	out := NewExportPorts(ExportPortsIn{
+		Config:   Config{},
+		Workflow: &parser.Workflow{},
+		Logger:   slog.Default(),
+	})
+	s.NotNil(out.Claimer)
+	s.NotNil(out.Exporter)
+	s.NotNil(out.Recoverer)
 }
 
-func (s *ModulesTestSuite) TestProvideClaimerAndRecoverer_NoopWhenURLEmpty() {
-	c := provideClaimer(Config{})
-	r := provideRecoverer(Config{})
-	s.NotNil(c)
-	s.NotNil(r)
+func (s *ModulesTestSuite) TestNewExecutionStore_UsesConfigMaxExecs() {
+	out := NewExecutionStore(ExecutionStoreIn{Config: Config{MaxExecs: 42}})
+	s.NotNil(out.Store)
 }
 
 // TestRunApp_StartsAndStops boots the full ServeModule against a tiny fixture
@@ -117,11 +113,8 @@ steps:
 	require.NotNil(t, app)
 	require.NotNil(t, srv)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	app.RequireStart()
 	app.RequireStop()
 
-	_ = ctx
+	_ = context.Background()
 }
