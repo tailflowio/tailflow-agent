@@ -4,9 +4,11 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/suite"
+	"github.com/tailflow/tailflow/web"
 )
 
 type RoutesTestSuite struct {
@@ -54,12 +56,24 @@ func (s *RoutesTestSuite) TestSPARouting_ApiNotFound() {
 func (s *RoutesTestSuite) TestSPARouting_StaticAsset() {
 	srv := newTestServer(s.T())
 
-	// Request an existing static asset file
-	req := httptest.NewRequest("GET", "/assets/DashboardView-jnNJTy3N.js", nil)
+	// Pick a JS asset dynamically — vite content-hashes filenames so we
+	// can't hardcode one without breaking on every build.
+	entries, err := web.DistFS.ReadDir("dist/assets")
+	s.Require().NoError(err)
+
+	var assetName string
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".js") {
+			assetName = e.Name()
+			break
+		}
+	}
+	s.Require().NotEmpty(assetName, "no js asset found in embedded dist")
+
+	req := httptest.NewRequest("GET", "/assets/"+assetName, nil)
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 
-	// Should serve the actual JS file
 	s.Equal(http.StatusOK, w.Code)
 	s.Contains(w.Header().Get("Content-Type"), "javascript")
 }

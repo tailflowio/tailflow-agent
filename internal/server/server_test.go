@@ -15,7 +15,6 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/suite"
-	"github.com/tailflow/tailflow/internal/action"
 	"github.com/tailflow/tailflow/internal/engine"
 	"github.com/tailflow/tailflow/internal/event"
 	"github.com/tailflow/tailflow/internal/export/saas"
@@ -545,33 +544,6 @@ func (s *ServerTestSuite) TestStartMetricsRefresh_PublishesMetrics() {
 	s.True(metricsReceived)
 }
 
-func newTestServerWithWorkflow(t *testing.T, yaml string) *Server {
-	t.Helper()
-
-	wf, err := parser.ParseBytes([]byte(yaml))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	bus := event.NewBus()
-	t.Cleanup(bus.Close)
-
-	reg := action.NewRegistry()
-	action.RegisterBuiltins(reg)
-
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	exec := engine.NewExecutor(reg, bus, logger, nil, nil, nil)
-
-	return New(Config{
-		Port:           0,
-		Executor:       exec,
-		Workflow:       wf,
-		ExecutionStore: store.NewExecutionStore(10),
-		EventBus:       bus,
-		Logger:         logger,
-	})
-}
-
 func (s *ServerTestSuite) TestStartCronScheduler_CronCallbackFires() {
 	srv := newTestServer(s.T())
 	srv.config.Workflow.Trigger = &parser.Trigger{
@@ -736,7 +708,8 @@ func (s *ServerTestSuite) TestRecoverExecutions_ResumesIncompleteExecutions() {
 		w.Header().Set("Content-Type", "application/json")
 
 		now := time.Now().Format(time.RFC3339)
-		_, _ = fmt.Fprintf(w, `[{"execution_id":"exec-recovered","workflow_name":"test-workflow","status":"running","params":{"env":"staging"},"steps":{"greet":{"status":"success","started_at":"%s","finished_at":"%s"}}}]`, now, now)
+		// params is wire-encoded as a JSON-string field per RecoveredExecution.RawParams.
+		_, _ = fmt.Fprintf(w, `[{"execution_id":"exec-recovered","workflow_name":"test-workflow","status":"running","params":"{\"env\":\"staging\"}","steps":{"greet":{"status":"success","started_at":"%s","finished_at":"%s"}}}]`, now, now)
 	}))
 	defer mockSaaS.Close()
 
