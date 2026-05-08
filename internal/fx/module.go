@@ -23,9 +23,6 @@ type Config struct {
 	MaxExecs     int
 	SelfHosted   bool
 	Editor       bool
-	ExportURL    string
-	APIKey       string
-	ExporterName string
 	Version      string
 	OTel         tfotel.Config
 	LogLevel     slog.Level

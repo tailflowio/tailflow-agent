@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"os/signal"
 	"syscall"
@@ -13,7 +12,7 @@ import (
 	tfotel "github.com/tailflow/tailflow/internal/otel"
 )
 
-func serveCmd(exporterURL, exporterKey, exporterName, otelEndpoint, otelServiceName *string) *cobra.Command {
+func serveCmd(otelEndpoint, otelServiceName *string) *cobra.Command {
 	var (
 		port       int
 		maxExecs   int
@@ -26,17 +25,9 @@ func serveCmd(exporterURL, exporterKey, exporterName, otelEndpoint, otelServiceN
 		Short: "Start the web server for a single workflow",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			url := flagOrEnv(*exporterURL, "TAILFLOW_EXPORTER_URL")
-			key := flagOrEnv(*exporterKey, "TAILFLOW_EXPORTER_KEY")
-			name := flagOrEnv(*exporterName, "TAILFLOW_EXPORTER_NAME")
-
-			if url != "" && name == "" {
-				return errors.New("--exporter-name (or TAILFLOW_EXPORTER_NAME) is required when exporter is enabled")
-			}
-
 			otelCfg := resolveOTelConfig(otelEndpoint, otelServiceName)
 
-			return executeServe(args[0], port, maxExecs, selfHosted, editor, url, key, name, otelCfg)
+			return executeServe(args[0], port, maxExecs, selfHosted, editor, otelCfg)
 		},
 	}
 	cmd.Flags().IntVarP(&port, "port", "P", 8080, "Server port")
@@ -47,10 +38,7 @@ func serveCmd(exporterURL, exporterKey, exporterName, otelEndpoint, otelServiceN
 	return cmd
 }
 
-func executeServe(
-	path string, port int, maxExecs int, selfHosted, editor bool,
-	exportURL, apiKey, exporterName string, otelCfg tfotel.Config,
-) error {
+func executeServe(path string, port, maxExecs int, selfHosted, editor bool, otelCfg tfotel.Config) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
@@ -60,9 +48,6 @@ func executeServe(
 		MaxExecs:     maxExecs,
 		SelfHosted:   selfHosted,
 		Editor:       editor,
-		ExportURL:    exportURL,
-		APIKey:       apiKey,
-		ExporterName: exporterName,
 		Version:      version,
 		OTel:         otelCfg,
 		LogLevel:     slog.LevelInfo,

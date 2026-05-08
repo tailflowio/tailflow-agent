@@ -1,9 +1,10 @@
-// Package export defines the boundary between the agent and the SaaS backend.
+// Package export defines a stable boundary for streaming agent events and
+// resolving cross-process concerns (idempotency, recovery) to a remote sink.
 //
-// The agent depends only on the interfaces and DTOs declared here. Concrete
-// implementations live in subpackages (e.g. internal/export/saas) and are
-// selected by main.go based on runtime configuration. A no-op implementation
-// (see noop.go) is used by self-hosted deployments without a SaaS endpoint.
+// The agent currently runs self-hosted only and ships with no-op
+// implementations of every port (see noop.go). The interfaces and DTOs are
+// kept as a structural seam so a future remote-sink adapter can plug in
+// without re-shaping the agent core.
 package export
 
 import (

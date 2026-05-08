@@ -42,7 +42,6 @@ func NewServer(in ServerIn) ServerOut {
 		ExecutionStore: in.ExecutionStore,
 		EventBus:       in.EventBus,
 		Logger:         in.Logger,
-		ExporterName:   in.Config.ExporterName,
 		Version:        in.Config.Version,
 		Exporter:       in.Exporter,
 		Claimer:        in.Claimer,

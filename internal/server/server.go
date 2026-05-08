@@ -37,9 +37,8 @@ type Config struct {
 	ExecutionStore store.ExecutionStore
 	EventBus       *event.Bus
 	Logger         *slog.Logger
-	ExporterName   string
 	Version        string
-	// Exporter, Claimer, Recoverer are the SaaS-side ports. Default to noop
+	// Exporter, Claimer, Recoverer are the export ports. Default to noop
 	// implementations when nil — see export.NewNoop*.
 	Exporter  export.EventExporter
 	Claimer   export.IdempotencyClaimer
@@ -165,9 +164,9 @@ func (s *Server) recoverExecutions(ctx context.Context) {
 		return
 	}
 
-	s.config.Logger.Info("recovery: checking for recoverable executions", "agent", s.config.ExporterName)
+	s.config.Logger.Info("recovery: checking for recoverable executions")
 
-	recovered, err := s.config.Recoverer.RecoverExecutions(ctx, s.config.ExporterName)
+	recovered, err := s.config.Recoverer.RecoverExecutions(ctx, "")
 	if err != nil {
 		s.config.Logger.Error("recovery: failed to fetch executions", "error", err)
 		return

@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"sync/atomic"
 	"testing"
@@ -17,7 +16,7 @@ import (
 	"github.com/stretchr/testify/suite"
 	"github.com/tailflow/tailflow/internal/engine"
 	"github.com/tailflow/tailflow/internal/event"
-	"github.com/tailflow/tailflow/internal/export/saas"
+	"github.com/tailflow/tailflow/internal/export"
 	"github.com/tailflow/tailflow/internal/parser"
 	"github.com/tailflow/tailflow/internal/runtime"
 	"github.com/tailflow/tailflow/internal/store"
@@ -704,19 +703,18 @@ func (s *ServerTestSuite) TestEnsureWorkflowCompleted_PublishesEvent() {
 }
 
 func (s *ServerTestSuite) TestRecoverExecutions_ResumesIncompleteExecutions() {
-	mockSaaS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-
-		now := time.Now().Format(time.RFC3339)
-		// params is wire-encoded as a JSON-string field per RecoveredExecution.RawParams.
-		_, _ = fmt.Fprintf(w, `[{"execution_id":"exec-recovered","workflow_name":"test-workflow","status":"running","params":"{\"env\":\"staging\"}","steps":{"greet":{"status":"success","started_at":"%s","finished_at":"%s"}}}]`, now, now)
-	}))
-	defer mockSaaS.Close()
-
+	now := time.Now()
 	srv := newTestServer(s.T())
 	srv.config.Workflow.Recovery = true
-	srv.config.Recoverer = saas.NewRecoveryClient(mockSaaS.URL, "")
-	srv.config.ExporterName = "test-agent"
+	srv.config.Recoverer = &stubRecoverer{executions: []export.RecoveredExecution{{
+		ExecutionID:  "exec-recovered",
+		WorkflowName: "test-workflow",
+		Status:       "running",
+		Params:       map[string]any{"env": "staging"},
+		Steps: map[string]*runtime.StepResult{
+			"greet": {Status: "success", StartedAt: &now, FinishedAt: &now},
+		},
+	}}}
 	srv.ctx = context.Background()
 
 	var started atomic.Int32
@@ -738,16 +736,13 @@ func (s *ServerTestSuite) TestRecoverExecutions_ResumesIncompleteExecutions() {
 }
 
 func (s *ServerTestSuite) TestRecoverExecutions_SkipsUnknownWorkflow() {
-	mockSaaS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`[{"execution_id":"exec-unknown","workflow_name":"unknown-workflow","status":"running"}]`))
-	}))
-	defer mockSaaS.Close()
-
 	srv := newTestServer(s.T())
 	srv.config.Workflow.Recovery = true
-	srv.config.Recoverer = saas.NewRecoveryClient(mockSaaS.URL, "")
-	srv.config.ExporterName = "test-agent"
+	srv.config.Recoverer = &stubRecoverer{executions: []export.RecoveredExecution{{
+		ExecutionID:  "exec-unknown",
+		WorkflowName: "unknown-workflow",
+		Status:       "running",
+	}}}
 	srv.ctx = context.Background()
 
 	srv.recoverExecutions(context.Background())

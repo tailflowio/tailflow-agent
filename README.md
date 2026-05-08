@@ -90,13 +90,6 @@ tailflow serve examples/sync-callback.yaml --port 8080
 
 # Self-hosted mode - enables exec, js, file.* actions
 tailflow serve --selfhosted examples/ping.yaml
-
-# With SaaS monitoring
-tailflow serve --selfhosted \
-  --exporter-url https://saas.example.com \
-  --exporter-key my-key \
-  --exporter-name my-agent \
-  examples/ping.yaml
 ```
 
 ### `.env` support
@@ -112,7 +105,7 @@ SLACK_WEBHOOK=https://hooks.slack.com/xxx
 Variables from `.env` are available via `{{ env.DATABASE_URL }}` in your workflows. Environment variables already set in your shell take precedence over `.env` values.
 
 **Priority (highest to lowest):**
-1. CLI flags (`--exporter-url`)
+1. CLI flags
 2. Shell environment (`export X=...`)
 3. `.env` file
 4. Workflow defaults
@@ -480,114 +473,6 @@ The [`examples/`](./examples) directory contains ready-to-run workflows:
 
 ---
 
-## SaaS Export
-
-TailFlow agents can push events, heartbeats, and system metrics to a central SaaS platform for distributed workflow monitoring.
-
-```mermaid
-graph LR
-    Agent["TailFlow Agent<br/><i>(self-hosted)</i><br/>- Runs workflows<br/>- Local UI<br/>- Export events"] -->|"/register<br/>/ingest (events)<br/>/heartbeat (metrics)"| SaaS["SaaS Platform<br/><i>(central)</i><br/>- Dashboard<br/>- Alerting<br/>- History"]
-    SaaS -->|"agent_id, config"| Agent
-```
-
-### Enable export
-
-```bash
-tailflow serve --selfhosted \
-  --exporter-url https://saas.example.com \
-  --exporter-key my-api-key \
-  --exporter-name my-agent \
-  examples/ping.yaml
-```
-
-### How it works
-
-1. **Registration** - Agent sends workflow metadata to `/api/v1/agent/register`. The SaaS responds with an `agent_id` and optional config overrides.
-2. **Event ingestion** - Workflow events (step started/completed/failed, logs) are batched and flushed to `/api/v1/agent/ingest` every 1s.
-3. **Heartbeat** - Agent sends uptime, active execution count, and system metrics (CPU, memory, goroutines, network) to `/api/v1/agent/heartbeat` every 10s.
-
-### Protocol
-
-**`POST /api/v1/agent/register`** (agent -> SaaS)
-```json
-{
-  "session_id": "uuid",
-  "agent_name": "my-agent",
-  "workflow_name": "ping",
-  "workflow_description": "Ping a host",
-  "workflow_tags": ["example", "network"],
-  "revision": "1.0.0",
-  "trigger_type": "schedule",
-  "steps_count": 5,
-  "version": "1.0.0"
-}
-```
-
-**Response** (SaaS -> agent)
-```json
-{
-  "agent_id": "uuid-assigned-by-saas",
-  "heartbeat_interval_s": 5,
-  "flush_interval_s": 1
-}
-```
-
-**`POST /api/v1/agent/ingest`** (every flush interval)
-```json
-{
-  "agent_id": "uuid",
-  "session_id": "uuid",
-  "events": [
-    {
-      "type": "step.started",
-      "timestamp": "2025-01-15T10:30:00Z",
-      "execution_id": "exec-uuid",
-      "step_id": "ping",
-      "data": {},
-      "message": ""
-    }
-  ]
-}
-```
-
-**`POST /api/v1/agent/heartbeat`** (every heartbeat interval)
-```json
-{
-  "agent_id": "uuid",
-  "session_id": "uuid",
-  "uptime_s": 3600,
-  "active_executions": 2,
-  "metrics": {
-    "cpu_percent": 12.5,
-    "rss_kb": 45000,
-    "goroutines": 8,
-    "heap_mb": 3.2,
-    "net_rx_bytes": 123456,
-    "net_tx_bytes": 78900,
-    "uptime_s": 3600,
-    "available": true
-  }
-}
-```
-
-### Design
-
-- **Non-blocking** - Export failures never affect workflow execution. Events are buffered until registration succeeds.
-- **Server-driven config** - The SaaS pushes interval overrides via `/register` and `/heartbeat` responses (e.g., free plan = 30s heartbeat, pro = 5s).
-- **Session tracking** - `session_id` (generated per startup) lets the SaaS detect agent restarts. `agent_id` (persistent, SaaS-assigned) identifies the deployment.
-
-### Test locally
-
-```bash
-tailflow serve --selfhosted \
-  --exporter-url http://localhost:9090 \
-  --exporter-key test \
-  --exporter-name my-agent \
-  examples/ping.yaml
-```
-
----
-
 ## Architecture
 
 ```mermaid
@@ -683,9 +568,8 @@ Testing "my-workflow"...
 | Flag | Env variable | Description |
 |------|-------------|-------------|
 | `--no-color` | | Disable colour output |
-| `--exporter-url` | `TAILFLOW_EXPORTER_URL` | SaaS endpoint URL for event export |
-| `--exporter-key` | `TAILFLOW_EXPORTER_KEY` | API key for SaaS authentication |
-| `--exporter-name` | `TAILFLOW_EXPORTER_NAME` | Unique agent name |
+| `--otel-endpoint` | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP/HTTP endpoint |
+| `--otel-service-name` | `OTEL_SERVICE_NAME` | Service name (default: tailflow) |
 
 ### API Endpoints
 

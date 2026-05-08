@@ -19,7 +19,6 @@ import (
 	"github.com/tailflow/tailflow/internal/engine"
 	"github.com/tailflow/tailflow/internal/event"
 	"github.com/tailflow/tailflow/internal/export"
-	"github.com/tailflow/tailflow/internal/export/saas"
 	"github.com/tailflow/tailflow/internal/parser"
 	"github.com/tailflow/tailflow/internal/runtime"
 	"github.com/tailflow/tailflow/internal/store"
@@ -2205,7 +2204,7 @@ func (s *HandlersTestSuite) TestProcessEvent_DuplicateWorkflowCompleted() {
 	s.Len(events, 1)
 }
 
-func newTestServerIdempotent(t *testing.T, saasURL string) *Server {
+func newTestServerIdempotent(t *testing.T, claimer export.IdempotencyClaimer) *Server {
 	t.Helper()
 
 	yaml := `version: "2.0"
@@ -2242,9 +2241,8 @@ steps:
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	exec := engine.NewExecutor(reg, bus, logger, nil, nil, nil)
 
-	var claimer export.IdempotencyClaimer = export.NewNoopClaimer()
-	if saasURL != "" {
-		claimer = saas.NewClaimClient(saasURL, "test-key")
+	if claimer == nil {
+		claimer = export.NewNoopClaimer()
 	}
 
 	return New(Config{
@@ -2259,13 +2257,12 @@ steps:
 }
 
 func (s *HandlersTestSuite) TestPublicTrigger_IdempotencyDeduplicated() {
-	mockSaaS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"claimed":false,"execution_id":"existing-exec","status":"success"}`))
-	}))
-	defer mockSaaS.Close()
-
-	srv := newTestServerIdempotent(s.T(), mockSaaS.URL)
+	claimer := &stubClaimer{result: &export.ClaimResult{
+		Claimed:             false,
+		ExistingExecutionID: "existing-exec",
+		ExistingStatus:      "success",
+	}}
+	srv := newTestServerIdempotent(s.T(), claimer)
 
 	req := httptest.NewRequest("POST", "/api/public/submit", strings.NewReader(`{"order_id":"ord-123"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -2283,13 +2280,8 @@ func (s *HandlersTestSuite) TestPublicTrigger_IdempotencyDeduplicated() {
 }
 
 func (s *HandlersTestSuite) TestPublicTrigger_IdempotencyClaimed() {
-	mockSaaS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"claimed":true}`))
-	}))
-	defer mockSaaS.Close()
-
-	srv := newTestServerIdempotent(s.T(), mockSaaS.URL)
+	claimer := &stubClaimer{result: &export.ClaimResult{Claimed: true}}
+	srv := newTestServerIdempotent(s.T(), claimer)
 
 	req := httptest.NewRequest("POST", "/api/public/submit", strings.NewReader(`{"order_id":"ord-456"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -2322,7 +2314,7 @@ func (s *HandlersTestSuite) TestPublicTrigger_NoIdempotencyKeyNoExportURL() {
 }
 
 func (s *HandlersTestSuite) TestPublicTrigger_IdempotencyNoExportURL() {
-	srv := newTestServerIdempotent(s.T(), "")
+	srv := newTestServerIdempotent(s.T(), nil)
 
 	req := httptest.NewRequest("POST", "/api/public/submit", strings.NewReader(`{"order_id":"ord-789"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -2338,13 +2330,8 @@ func (s *HandlersTestSuite) TestPublicTrigger_IdempotencyNoExportURL() {
 }
 
 func (s *HandlersTestSuite) TestPublicTrigger_IdempotencyResolveError() {
-	mockSaaS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"claimed":true}`))
-	}))
-	defer mockSaaS.Close()
-
-	srv := newTestServerIdempotent(s.T(), mockSaaS.URL)
+	claimer := &stubClaimer{result: &export.ClaimResult{Claimed: true}}
+	srv := newTestServerIdempotent(s.T(), claimer)
 	srv.config.Workflow.Trigger.HTTP.IdempotencyKey = "{{ invalid_expression( }}"
 
 	req := httptest.NewRequest("POST", "/api/public/submit", strings.NewReader(`{"order_id":"ord-789"}`))
@@ -2361,7 +2348,7 @@ func (s *HandlersTestSuite) TestPublicTrigger_IdempotencyResolveError() {
 }
 
 func (s *HandlersTestSuite) TestPublicTrigger_IdempotencyClaimError() {
-	srv := newTestServerIdempotent(s.T(), "http://127.0.0.1:1")
+	srv := newTestServerIdempotent(s.T(), &stubClaimer{err: errStubClaim})
 
 	req := httptest.NewRequest("POST", "/api/public/submit", strings.NewReader(`{"order_id":"ord-789"}`))
 	req.Header.Set("Content-Type", "application/json")

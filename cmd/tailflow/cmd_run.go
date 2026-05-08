@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -17,14 +16,12 @@ import (
 	"github.com/tailflow/tailflow/internal/action"
 	"github.com/tailflow/tailflow/internal/engine"
 	"github.com/tailflow/tailflow/internal/event"
-	"github.com/tailflow/tailflow/internal/export"
-	"github.com/tailflow/tailflow/internal/export/saas"
 	tfotel "github.com/tailflow/tailflow/internal/otel"
 	"github.com/tailflow/tailflow/internal/parser"
 	"github.com/tailflow/tailflow/internal/runtime"
 )
 
-func runCmd(noColorFlag *bool, exporterURL, exporterKey, exporterName, otelEndpoint, otelServiceName *string) *cobra.Command {
+func runCmd(noColorFlag *bool, otelEndpoint, otelServiceName *string) *cobra.Command {
 	var (
 		params []string
 		data   string
@@ -36,18 +33,9 @@ func runCmd(noColorFlag *bool, exporterURL, exporterKey, exporterName, otelEndpo
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			noColor := detectNoColor(*noColorFlag)
-
-			url := flagOrEnv(*exporterURL, "TAILFLOW_EXPORTER_URL")
-			key := flagOrEnv(*exporterKey, "TAILFLOW_EXPORTER_KEY")
-			name := flagOrEnv(*exporterName, "TAILFLOW_EXPORTER_NAME")
-
-			if url != "" && name == "" {
-				return errors.New("--exporter-name (or TAILFLOW_EXPORTER_NAME) is required when exporter is enabled")
-			}
-
 			otelCfg := resolveOTelConfig(otelEndpoint, otelServiceName)
 
-			return executeRun(args[0], params, data, noColor, url, key, name, otelCfg)
+			return executeRun(args[0], params, data, noColor, otelCfg)
 		},
 	}
 	cmd.Flags().StringArrayVarP(&params, "param", "p", nil, "Parameters (key=value)")
@@ -57,11 +45,9 @@ func runCmd(noColorFlag *bool, exporterURL, exporterKey, exporterName, otelEndpo
 }
 
 type runResources struct {
-	bus          *event.Bus
-	exporter     export.EventExporter
-	exportCancel context.CancelFunc
-	tickDone     chan struct{}
-	wg           sync.WaitGroup
+	bus      *event.Bus
+	tickDone chan struct{}
+	wg       sync.WaitGroup
 }
 
 func (rr *runResources) shutdown() {
@@ -71,18 +57,9 @@ func (rr *runResources) shutdown() {
 	if rr.tickDone != nil {
 		close(rr.tickDone)
 	}
-
-	rr.exportCancel()
-
-	if rr.exporter != nil {
-		rr.exporter.Shutdown()
-	}
 }
 
-func executeRun(
-	path string, rawParams []string, data string, noColor bool,
-	exportURL, apiKey, exporterName string, otelCfg tfotel.Config,
-) error {
+func executeRun(path string, rawParams []string, data string, noColor bool, otelCfg tfotel.Config) error {
 	otelCfg.Sync = true
 
 	otelResult, err := tfotel.Setup(context.Background(), otelCfg)
@@ -126,7 +103,7 @@ func executeRun(
 
 	defer closeFn()
 
-	res := setupRunResources(bus, renderer, exportURL, apiKey, exporterName, wf)
+	res := setupRunResources(bus, renderer)
 	opts := buildExecutionOptions(renderer, wf, path, data, services)
 
 	renderer.printTree()
@@ -174,16 +151,8 @@ func setupActionRegistry(
 	}, nil
 }
 
-func setupRunResources(
-	bus *event.Bus, renderer *cliRenderer,
-	exportURL, apiKey, exporterName string, wf *parser.Workflow,
-) *runResources {
-	res := &runResources{
-		bus:          bus,
-		exportCancel: func() {},
-	}
-
-	res.exporter, res.exportCancel = setupExporter(exportURL, apiKey, exporterName, bus, wf)
+func setupRunResources(bus *event.Bus, renderer *cliRenderer) *runResources {
+	res := &runResources{bus: bus}
 
 	ch := bus.Subscribe(eventBusBuffer)
 
@@ -212,55 +181,6 @@ func setupRunResources(
 	}
 
 	return res
-}
-
-func setupExporter(
-	exportURL, apiKey, exporterName string, bus *event.Bus, wf *parser.Workflow,
-) (export.EventExporter, context.CancelFunc) {
-	if exportURL == "" {
-		return export.NewNoopExporter(), func() {}
-	}
-
-	exportLogger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	exporter := saas.NewExporter(saas.Config{
-		ExportURL:           exportURL,
-		APIKey:              apiKey,
-		AgentName:           exporterName,
-		EventBus:            bus,
-		Logger:              exportLogger,
-		WorkflowName:        wf.Name,
-		WorkflowDescription: wf.Description,
-		WorkflowTags:        wf.Tags,
-		TriggerType:         resolveTriggerType(wf),
-		StepsCount:          len(wf.Steps),
-		Version:             version,
-		Revision:            wf.Revision,
-	})
-
-	exportCtx, exportCancel := context.WithCancel(context.Background())
-	exporter.Start(exportCtx)
-
-	return exporter, exportCancel
-}
-
-func resolveTriggerType(wf *parser.Workflow) string {
-	t := wf.Trigger
-	if t == nil {
-		return ""
-	}
-
-	switch {
-	case t.HTTP != nil:
-		return "http"
-	case t.Webhook != nil:
-		return "webhook"
-	case t.Schedule != nil:
-		return "schedule"
-	case t.RabbitMQ != nil:
-		return "rabbitmq"
-	default:
-		return ""
-	}
 }
 
 func buildExecutionOptions(
