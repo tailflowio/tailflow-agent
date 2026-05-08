@@ -484,7 +484,7 @@ func (s *HandlersTestSuite) TestFinalizeExecution_NotFound() {
 	})
 }
 
-// handleGetMetrics
+// TestGetMetrics_ReturnsSnapshot covers handleGetMetrics.
 func (s *HandlersTestSuite) TestGetMetrics_ReturnsSnapshot() {
 	srv := newTestServer(s.T())
 
@@ -496,7 +496,7 @@ func (s *HandlersTestSuite) TestGetMetrics_ReturnsSnapshot() {
 	s.Contains(w.Header().Get("Content-Type"), "application/json")
 }
 
-// handleGetWorkflow – cron trigger path (next_run)
+// TestGetWorkflow_WithCronTrigger covers handleGetWorkflow – cron trigger path (next_run).
 func (s *HandlersTestSuite) TestGetWorkflow_WithCronTrigger() {
 	srv := newTestServerCron(s.T())
 
@@ -512,7 +512,7 @@ func (s *HandlersTestSuite) TestGetWorkflow_WithCronTrigger() {
 	s.NotNil(resp["next_run"], "should include next_run for cron trigger")
 }
 
-// handleValidateWorkflow – invalid workflow
+// TestValidateWorkflow_Invalid covers handleValidateWorkflow – invalid workflow.
 func (s *HandlersTestSuite) TestValidateWorkflow_Invalid() {
 	srv := newTestServer(s.T())
 	// Break the workflow by clearing its version
@@ -530,7 +530,7 @@ func (s *HandlersTestSuite) TestValidateWorkflow_Invalid() {
 	s.NotEmpty(resp["errors"])
 }
 
-// handleRunWorkflow – nil body
+// TestRunWorkflow_NilBody covers handleRunWorkflow – nil body.
 func (s *HandlersTestSuite) TestRunWorkflow_NilBody() {
 	srv := newTestServer(s.T())
 
@@ -545,7 +545,7 @@ func (s *HandlersTestSuite) TestRunWorkflow_NilBody() {
 	s.NotEmpty(resp["execution_id"])
 }
 
-// handleRunWorkflow – invalid JSON body (decode error path)
+// TestRunWorkflow_InvalidJSON covers handleRunWorkflow – invalid JSON body (decode error path).
 func (s *HandlersTestSuite) TestRunWorkflow_InvalidJSON() {
 	srv := newTestServer(s.T())
 
@@ -560,7 +560,7 @@ func (s *HandlersTestSuite) TestRunWorkflow_InvalidJSON() {
 	s.NotEmpty(resp["execution_id"])
 }
 
-// handleGetWorkflowActivity – running and waiting executions
+// TestGetWorkflowActivity_WithRunningAndWaitingSteps covers handleGetWorkflowActivity – running and waiting executions.
 func (s *HandlersTestSuite) TestGetWorkflowActivity_WithRunningAndWaitingSteps() {
 	srv := newTestServer(s.T())
 
@@ -612,7 +612,7 @@ func (s *HandlersTestSuite) TestGetWorkflowActivity_WithRunningAndWaitingSteps()
 	s.NotEmpty(greet["waiting"])
 }
 
-// handleGetWorkflowActivity – no running/waiting execs
+// TestGetWorkflowActivity_Empty covers handleGetWorkflowActivity – no running/waiting execs.
 func (s *HandlersTestSuite) TestGetWorkflowActivity_Empty() {
 	srv := newTestServer(s.T())
 
@@ -623,7 +623,7 @@ func (s *HandlersTestSuite) TestGetWorkflowActivity_Empty() {
 	s.Equal(http.StatusOK, w.Code)
 }
 
-// handleGetWorkflowActivity – running exec with completed steps
+// TestGetWorkflowActivity_RunningExecCompletedSteps covers handleGetWorkflowActivity – running exec with completed steps.
 func (s *HandlersTestSuite) TestGetWorkflowActivity_RunningExecCompletedSteps() {
 	srv := newTestServer(s.T())
 
@@ -648,7 +648,7 @@ func (s *HandlersTestSuite) TestGetWorkflowActivity_RunningExecCompletedSteps() 
 	s.Empty(steps) // completed steps not counted
 }
 
-// buildStepHistory + buildHistoryEntry
+// TestGetStepDetail_WithHistory covers buildStepHistory + buildHistoryEntry.
 func (s *HandlersTestSuite) TestGetStepDetail_WithHistory() {
 	srv := newTestServer(s.T())
 
@@ -743,7 +743,7 @@ func (s *HandlersTestSuite) TestGetStepDetail_WithHistory() {
 	s.NotEmpty(entryPartial["finished_at"]) // falls back to exec.FinishedAt
 }
 
-// filterByStatus
+// TestListExecutions_FilterByStatus covers filterByStatus.
 func (s *HandlersTestSuite) TestListExecutions_FilterByStatus() {
 	srv := newTestServer(s.T())
 
@@ -783,7 +783,7 @@ func (s *HandlersTestSuite) TestListExecutions_FilterByStatus() {
 	s.Equal(float64(2), resp2["total"])
 }
 
-// sortExecutions with duration + asc/desc
+// TestListExecutions_SortByDuration covers sortExecutions with duration + asc/desc.
 func (s *HandlersTestSuite) TestListExecutions_SortByDuration() {
 	srv := newTestServer(s.T())
 
@@ -831,7 +831,7 @@ func (s *HandlersTestSuite) TestListExecutions_SortByDuration() {
 	s.Equal("long", lastItem["id"])
 }
 
-// sortExecutions – order=asc without specific sort (default date order reversed)
+// TestListExecutions_OrderAsc covers sortExecutions – order=asc without specific sort (default date order reversed).
 func (s *HandlersTestSuite) TestListExecutions_OrderAsc() {
 	srv := newTestServer(s.T())
 
@@ -856,7 +856,7 @@ func (s *HandlersTestSuite) TestListExecutions_OrderAsc() {
 	s.Equal("first", firstItem["id"])
 }
 
-// paginateExecutions – offset beyond items count
+// TestListExecutions_OffsetBeyondTotal covers paginateExecutions – offset beyond items count.
 func (s *HandlersTestSuite) TestListExecutions_OffsetBeyondTotal() {
 	srv := newTestServer(s.T())
 
@@ -875,7 +875,7 @@ func (s *HandlersTestSuite) TestListExecutions_OffsetBeyondTotal() {
 	s.Len(items, 0)
 }
 
-// parseIntParam – invalid and negative values
+// TestListExecutions_InvalidPaginationParams covers parseIntParam – invalid and negative values.
 func (s *HandlersTestSuite) TestListExecutions_InvalidPaginationParams() {
 	srv := newTestServer(s.T())
 
@@ -902,7 +902,7 @@ func (s *HandlersTestSuite) TestListExecutions_InvalidPaginationParams() {
 	s.Equal(http.StatusOK, w2.Code)
 }
 
-// handleGetExecution
+// TestGetExecution_Found covers handleGetExecution.
 func (s *HandlersTestSuite) TestGetExecution_Found() {
 	srv := newTestServer(s.T())
 
@@ -931,7 +931,7 @@ func (s *HandlersTestSuite) TestGetExecution_NotFound() {
 	s.Equal(http.StatusNotFound, w.Code)
 }
 
-// handleCancelExecution
+// TestCancelExecution_NotFound covers handleCancelExecution.
 func (s *HandlersTestSuite) TestCancelExecution_NotFound() {
 	srv := newTestServer(s.T())
 
@@ -1014,7 +1014,7 @@ func (s *HandlersTestSuite) TestCancelExecution_NoCancelFunc() {
 	s.Contains(resp["error"], "cancel function not found")
 }
 
-// handlePublicTrigger – no trigger configured
+// TestPublicTrigger_NoTrigger covers handlePublicTrigger – no trigger configured.
 func (s *HandlersTestSuite) TestPublicTrigger_NoTrigger() {
 	srv := newTestServer(s.T())
 
@@ -1025,7 +1025,7 @@ func (s *HandlersTestSuite) TestPublicTrigger_NoTrigger() {
 	s.Equal(http.StatusNotFound, w.Code)
 }
 
-// handlePublicTrigger – HTTP trigger, sync
+// TestPublicTrigger_HTTPSync covers handlePublicTrigger – HTTP trigger, sync.
 func (s *HandlersTestSuite) TestPublicTrigger_HTTPSync() {
 	srv := newTestServerHTTPTrigger(s.T())
 
@@ -1041,7 +1041,7 @@ func (s *HandlersTestSuite) TestPublicTrigger_HTTPSync() {
 	s.Equal("success", resp["status"])
 }
 
-// handlePublicTrigger – HTTP trigger, async
+// TestPublicTrigger_HTTPAsync covers handlePublicTrigger – HTTP trigger, async.
 func (s *HandlersTestSuite) TestPublicTrigger_HTTPAsync() {
 	srv := newTestServerAsyncHTTPTrigger(s.T())
 
@@ -1064,7 +1064,7 @@ func (s *HandlersTestSuite) TestPublicTrigger_HTTPAsync() {
 	}, 2*time.Second, 10*time.Millisecond)
 }
 
-// handlePublicTrigger – webhook trigger
+// TestPublicTrigger_Webhook covers handlePublicTrigger – webhook trigger.
 func (s *HandlersTestSuite) TestPublicTrigger_Webhook() {
 	srv := newTestServerWebhookTrigger(s.T())
 
@@ -1077,7 +1077,7 @@ func (s *HandlersTestSuite) TestPublicTrigger_Webhook() {
 	s.Equal(http.StatusOK, w.Code)
 }
 
-// buildTriggerData – nil body
+// TestPublicTrigger_NilBody covers buildTriggerData – nil body.
 func (s *HandlersTestSuite) TestPublicTrigger_NilBody() {
 	srv := newTestServerHTTPTrigger(s.T())
 
@@ -1088,7 +1088,7 @@ func (s *HandlersTestSuite) TestPublicTrigger_NilBody() {
 	s.Equal(http.StatusOK, w.Code)
 }
 
-// writeTriggerResponse – error path
+// TestWriteTriggerResponse_WithError covers writeTriggerResponse – error path.
 func (s *HandlersTestSuite) TestWriteTriggerResponse_WithError() {
 	srv := newTestServer(s.T())
 
@@ -1101,7 +1101,7 @@ func (s *HandlersTestSuite) TestWriteTriggerResponse_WithError() {
 	s.Equal("exec failed", resp["error"])
 }
 
-// writeTriggerResponse – cancelled context
+// TestWriteTriggerResponse_Cancelled covers writeTriggerResponse – cancelled context.
 func (s *HandlersTestSuite) TestWriteTriggerResponse_Cancelled() {
 	srv := newTestServer(s.T())
 
@@ -1118,7 +1118,7 @@ func (s *HandlersTestSuite) TestWriteTriggerResponse_Cancelled() {
 	s.Equal("exec-2", resp["execution_id"])
 }
 
-// writeTriggerResponse – response action with headers
+// TestWriteTriggerResponse_WithResponseAction covers writeTriggerResponse – response action with headers.
 func (s *HandlersTestSuite) TestWriteTriggerResponse_WithResponseAction() {
 	srv := newTestServer(s.T())
 
@@ -1149,7 +1149,7 @@ func (s *HandlersTestSuite) TestWriteTriggerResponse_WithResponseAction() {
 	s.Equal("custom-value", w.Header().Get("X-Custom"))
 }
 
-// writeTriggerResponse – response action with non-int status (falls back to 200)
+// TestWriteTriggerResponse_ResponseActionDefaultStatus covers writeTriggerResponse – response action with non-int status (falls back to 200).
 func (s *HandlersTestSuite) TestWriteTriggerResponse_ResponseActionDefaultStatus() {
 	srv := newTestServer(s.T())
 
@@ -1176,7 +1176,7 @@ func (s *HandlersTestSuite) TestWriteTriggerResponse_ResponseActionDefaultStatus
 	s.Equal(http.StatusOK, w.Code)
 }
 
-// writeTriggerResponse – response action where output is not map
+// TestWriteTriggerResponse_ResponseActionNonMapOutput covers writeTriggerResponse – response action where output is not map.
 func (s *HandlersTestSuite) TestWriteTriggerResponse_ResponseActionNonMapOutput() {
 	srv := newTestServer(s.T())
 
@@ -1205,7 +1205,7 @@ func (s *HandlersTestSuite) TestWriteTriggerResponse_ResponseActionNonMapOutput(
 	s.Equal("success", resp["status"])
 }
 
-// writeTriggerResponse – response action with nil output
+// TestWriteTriggerResponse_ResponseActionNilOutput covers writeTriggerResponse – response action with nil output.
 func (s *HandlersTestSuite) TestWriteTriggerResponse_ResponseActionNilOutput() {
 	srv := newTestServer(s.T())
 
@@ -1232,7 +1232,7 @@ func (s *HandlersTestSuite) TestWriteTriggerResponse_ResponseActionNilOutput() {
 	s.Equal("success", resp["status"])
 }
 
-// handleWaitWebhook – missing path
+// TestWaitWebhook_BadPath covers handleWaitWebhook – missing path.
 func (s *HandlersTestSuite) TestWaitWebhook_BadPath() {
 	srv := newTestServer(s.T())
 
@@ -1244,7 +1244,7 @@ func (s *HandlersTestSuite) TestWaitWebhook_BadPath() {
 	s.Equal(http.StatusBadRequest, w.Code)
 }
 
-// handleWaitWebhook – nil body
+// TestWaitWebhook_NilBody covers handleWaitWebhook – nil body.
 func (s *HandlersTestSuite) TestWaitWebhook_NilBody() {
 	srv := newTestServer(s.T())
 
@@ -1256,7 +1256,7 @@ func (s *HandlersTestSuite) TestWaitWebhook_NilBody() {
 	s.Equal(http.StatusNotFound, w.Code)
 }
 
-// buildGraphNode + extractLoopPipeline + buildStepEdges
+// TestGetWorkflowGraph_ComplexDAG covers buildGraphNode + extractLoopPipeline + buildStepEdges.
 func (s *HandlersTestSuite) TestGetWorkflowGraph_ComplexDAG() {
 	srv := newTestServerGraph(s.T())
 
@@ -1305,19 +1305,19 @@ func (s *HandlersTestSuite) TestGetWorkflowGraph_ComplexDAG() {
 	s.True(foundWhen, "should have a when edge")
 }
 
-// extractLoopPipeline – no actions key
+// TestExtractLoopPipeline_NoActions covers extractLoopPipeline – no actions key.
 func (s *HandlersTestSuite) TestExtractLoopPipeline_NoActions() {
 	result := extractLoopPipeline(map[string]any{})
 	s.Nil(result)
 }
 
-// extractLoopPipeline – actions is not []any
+// TestExtractLoopPipeline_NotArray covers extractLoopPipeline – actions is not []any.
 func (s *HandlersTestSuite) TestExtractLoopPipeline_NotArray() {
 	result := extractLoopPipeline(map[string]any{"actions": "not-an-array"})
 	s.Nil(result)
 }
 
-// extractLoopPipeline – actions contains non-map items
+// TestExtractLoopPipeline_NonMapItem covers extractLoopPipeline – actions contains non-map items.
 func (s *HandlersTestSuite) TestExtractLoopPipeline_NonMapItem() {
 	result := extractLoopPipeline(map[string]any{
 		"actions": []any{"not-a-map", 42},
@@ -1325,7 +1325,7 @@ func (s *HandlersTestSuite) TestExtractLoopPipeline_NonMapItem() {
 	s.Nil(result)
 }
 
-// extractLoopPipeline – action without name (empty string)
+// TestExtractLoopPipeline_EmptyActionName covers extractLoopPipeline – action without name (empty string).
 func (s *HandlersTestSuite) TestExtractLoopPipeline_EmptyActionName() {
 	result := extractLoopPipeline(map[string]any{
 		"actions": []any{
@@ -1335,7 +1335,7 @@ func (s *HandlersTestSuite) TestExtractLoopPipeline_EmptyActionName() {
 	s.Nil(result) // empty action name is skipped
 }
 
-// buildActionServices – test EmitWaiting and ScheduleExecution
+// TestBuildActionServices_EmitWaiting covers buildActionServices – test EmitWaiting and ScheduleExecution.
 func (s *HandlersTestSuite) TestBuildActionServices_EmitWaiting() {
 	srv := newTestServer(s.T())
 
@@ -1389,7 +1389,7 @@ func (s *HandlersTestSuite) TestBuildActionServices_ScheduleExecution() {
 	}, 2*time.Second, 50*time.Millisecond)
 }
 
-// applyStepEvent – all event types
+// TestApplyStepEvent_AllTypes covers applyStepEvent – all event types.
 func (s *HandlersTestSuite) TestApplyStepEvent_AllTypes() {
 	srv := newTestServer(s.T())
 
@@ -1460,7 +1460,7 @@ func (s *HandlersTestSuite) TestApplyStepEvent_AllTypes() {
 	srv.applyStepEvent(execID, event.Event{Type: event.StepGoto, StepID: "s1"})
 }
 
-// applyWorkflowCompleted
+// TestApplyWorkflowCompleted_ValidStatus covers applyWorkflowCompleted.
 func (s *HandlersTestSuite) TestApplyWorkflowCompleted_ValidStatus() {
 	srv := newTestServer(s.T())
 
@@ -1501,7 +1501,7 @@ func (s *HandlersTestSuite) TestApplyWorkflowCompleted_NoStatus() {
 	s.Equal(runtime.StatusRunning, exec.Status) // unchanged
 }
 
-// applyStepEvent – WorkflowCompleted dispatches to applyWorkflowCompleted
+// TestApplyStepEvent_WorkflowCompleted covers applyStepEvent – WorkflowCompleted dispatches to applyWorkflowCompleted.
 func (s *HandlersTestSuite) TestApplyStepEvent_WorkflowCompleted() {
 	srv := newTestServer(s.T())
 
@@ -1523,7 +1523,7 @@ func (s *HandlersTestSuite) TestApplyStepEvent_WorkflowCompleted() {
 	s.Equal(runtime.StatusFailed, exec.Status)
 }
 
-// processEvent – StepGoto with body resets pending
+// TestProcessEvent_StepGotoResetsBody covers processEvent – StepGoto with body resets pending.
 func (s *HandlersTestSuite) TestProcessEvent_StepGotoResetsBody() {
 	srv := newTestServer(s.T())
 
@@ -1565,7 +1565,7 @@ func (s *HandlersTestSuite) TestProcessEvent_StepGotoResetsBody() {
 	s.Equal("pending", exec.Steps["step_b"].Status)
 }
 
-// processEvent – event with empty StepID (no applyStepEvent call)
+// TestProcessEvent_EmptyStepID covers processEvent – event with empty StepID (no applyStepEvent call).
 func (s *HandlersTestSuite) TestProcessEvent_EmptyStepID() {
 	srv := newTestServer(s.T())
 
@@ -1585,7 +1585,7 @@ func (s *HandlersTestSuite) TestProcessEvent_EmptyStepID() {
 	}, lt, &completedSeen)
 }
 
-// processEvent – loop body event after iteration 1 is skipped from event store
+// TestProcessEvent_LoopBodyEventSkipped covers processEvent – loop body event after iteration 1 is skipped from event store.
 func (s *HandlersTestSuite) TestProcessEvent_LoopBodyEventSkipped() {
 	srv := newTestServer(s.T())
 
@@ -1619,7 +1619,7 @@ func (s *HandlersTestSuite) TestProcessEvent_LoopBodyEventSkipped() {
 	s.Len(events, 0)
 }
 
-// captureEvents – events for a different executionID are ignored
+// TestCaptureEvents_IgnoresOtherExecution covers captureEvents – events for a different executionID are ignored.
 func (s *HandlersTestSuite) TestCaptureEvents_IgnoresOtherExecution() {
 	srv := newTestServer(s.T())
 
@@ -1648,7 +1648,7 @@ func (s *HandlersTestSuite) TestCaptureEvents_IgnoresOtherExecution() {
 	s.Len(events, 0)
 }
 
-// finalizeExecution – error with cancelled context
+// TestFinalizeExecution_ErrorCancelled covers finalizeExecution – error with cancelled context.
 func (s *HandlersTestSuite) TestFinalizeExecution_ErrorCancelled() {
 	srv := newTestServer(s.T())
 
@@ -1669,7 +1669,7 @@ func (s *HandlersTestSuite) TestFinalizeExecution_ErrorCancelled() {
 	s.NotNil(exec.FinishedAt)
 }
 
-// finalizeExecution – error without cancelled context
+// TestFinalizeExecution_ErrorNotCancelled covers finalizeExecution – error without cancelled context.
 func (s *HandlersTestSuite) TestFinalizeExecution_ErrorNotCancelled() {
 	srv := newTestServer(s.T())
 
@@ -1687,7 +1687,7 @@ func (s *HandlersTestSuite) TestFinalizeExecution_ErrorNotCancelled() {
 	s.NotNil(exec.FinishedAt)
 }
 
-// finalizeExecution – success with result error
+// TestFinalizeExecution_SuccessWithResultError covers finalizeExecution – success with result error.
 func (s *HandlersTestSuite) TestFinalizeExecution_SuccessWithResultError() {
 	srv := newTestServer(s.T())
 
@@ -1716,7 +1716,7 @@ func (s *HandlersTestSuite) TestFinalizeExecution_SuccessWithResultError() {
 	s.NotNil(exec.Steps["s1"])
 }
 
-// finalizeExecution – success with steps merge
+// TestFinalizeExecution_SuccessWithSteps covers finalizeExecution – success with steps merge.
 func (s *HandlersTestSuite) TestFinalizeExecution_SuccessWithSteps() {
 	srv := newTestServer(s.T())
 
@@ -1751,7 +1751,7 @@ func (s *HandlersTestSuite) TestFinalizeExecution_SuccessWithSteps() {
 	s.Equal("new-step", exec.Steps["s2"].Output)
 }
 
-// mergeStepResults – nil engineSteps
+// TestMergeStepResults_NilEngineSteps covers mergeStepResults – nil engineSteps.
 func (s *HandlersTestSuite) TestMergeStepResults_NilEngineSteps() {
 	exec := &store.Execution{
 		Steps: map[string]*runtime.StepResult{
@@ -1764,7 +1764,7 @@ func (s *HandlersTestSuite) TestMergeStepResults_NilEngineSteps() {
 	s.Equal(runtime.StatusRunning, exec.Steps["s1"].Status)
 }
 
-// mergeStepResults – nil exec.Steps
+// TestMergeStepResults_NilExecSteps covers mergeStepResults – nil exec.Steps.
 func (s *HandlersTestSuite) TestMergeStepResults_NilExecSteps() {
 	exec := &store.Execution{}
 
@@ -1776,7 +1776,7 @@ func (s *HandlersTestSuite) TestMergeStepResults_NilExecSteps() {
 	s.Equal(engineSteps, exec.Steps)
 }
 
-// mergeStepResults – merge with existing
+// TestMergeStepResults_MergeExisting covers mergeStepResults – merge with existing.
 func (s *HandlersTestSuite) TestMergeStepResults_MergeExisting() {
 	exec := &store.Execution{
 		Steps: map[string]*runtime.StepResult{
@@ -1819,7 +1819,7 @@ func (s *HandlersTestSuite) TestWriteJSON_EncodingError() {
 	})
 }
 
-// handleGetWorkflowGraph – error from BuildDAG (broken depends_on)
+// TestGetWorkflowGraph_BuildDAGError covers handleGetWorkflowGraph – error from BuildDAG (broken depends_on).
 func (s *HandlersTestSuite) TestGetWorkflowGraph_BuildDAGError() {
 	srv := newTestServer(s.T())
 
@@ -1837,13 +1837,13 @@ func (s *HandlersTestSuite) TestGetWorkflowGraph_BuildDAGError() {
 	s.Equal(http.StatusInternalServerError, w.Code)
 }
 
-// buildStepEdges – step with no depends_on and no goto
+// TestBuildStepEdges_NoDeps covers buildStepEdges – step with no depends_on and no goto.
 func (s *HandlersTestSuite) TestBuildStepEdges_NoDeps() {
 	edges := buildStepEdges(parser.Step{ID: "solo", Action: "log"})
 	s.Len(edges, 0)
 }
 
-// buildStepEdges – step with depends_on but no when condition
+// TestBuildStepEdges_DepsNoWhen covers buildStepEdges – step with depends_on but no when condition.
 func (s *HandlersTestSuite) TestBuildStepEdges_DepsNoWhen() {
 	edges := buildStepEdges(parser.Step{
 		ID:        "child",
@@ -1856,7 +1856,7 @@ func (s *HandlersTestSuite) TestBuildStepEdges_DepsNoWhen() {
 	s.Empty(edges[0].Type)
 }
 
-// buildStepEdges – step with goto
+// TestBuildStepEdges_WithGoto covers buildStepEdges – step with goto.
 func (s *HandlersTestSuite) TestBuildStepEdges_WithGoto() {
 	edges := buildStepEdges(parser.Step{
 		ID:     "jumper",
@@ -1873,7 +1873,7 @@ func (s *HandlersTestSuite) TestBuildStepEdges_WithGoto() {
 	s.Equal("some condition", edges[0].Label)
 }
 
-// buildGraphNode – loop action with pipeline
+// TestBuildGraphNode_LoopAction covers buildGraphNode – loop action with pipeline.
 func (s *HandlersTestSuite) TestBuildGraphNode_LoopAction() {
 	node := buildGraphNode(parser.Step{
 		ID:     "my_loop",
@@ -1893,7 +1893,7 @@ func (s *HandlersTestSuite) TestBuildGraphNode_LoopAction() {
 	s.Equal("Call API", node.Pipeline[0].Title)
 }
 
-// buildGraphNode – non-loop action
+// TestBuildGraphNode_NonLoop covers buildGraphNode – non-loop action.
 func (s *HandlersTestSuite) TestBuildGraphNode_NonLoop() {
 	node := buildGraphNode(parser.Step{
 		ID:     "step1",
@@ -1905,7 +1905,7 @@ func (s *HandlersTestSuite) TestBuildGraphNode_NonLoop() {
 	s.Nil(node.Pipeline)
 }
 
-// execDuration with finished execution
+// TestExecDuration_WithFinishedAt covers execDuration with finished execution.
 func (s *HandlersTestSuite) TestExecDuration_WithFinishedAt() {
 	now := time.Now()
 	later := now.Add(5 * time.Second)
@@ -1915,7 +1915,7 @@ func (s *HandlersTestSuite) TestExecDuration_WithFinishedAt() {
 	s.Equal(5*time.Second, d)
 }
 
-// execDuration without finished execution
+// TestExecDuration_NilFinishedAt covers execDuration without finished execution.
 func (s *HandlersTestSuite) TestExecDuration_NilFinishedAt() {
 	exec := &store.Execution{StartedAt: time.Now()}
 
@@ -1923,35 +1923,35 @@ func (s *HandlersTestSuite) TestExecDuration_NilFinishedAt() {
 	s.Equal(time.Duration(0), d)
 }
 
-// parseIntParam – valid value
+// TestParseIntParam_ValidValue covers parseIntParam – valid value.
 func (s *HandlersTestSuite) TestParseIntParam_ValidValue() {
 	r := httptest.NewRequest("GET", "/test?offset=10", nil)
 	v := parseIntParam(r, "offset", 0)
 	s.Equal(10, v)
 }
 
-// parseIntParam – empty (default)
+// TestParseIntParam_Empty covers parseIntParam – empty (default).
 func (s *HandlersTestSuite) TestParseIntParam_Empty() {
 	r := httptest.NewRequest("GET", "/test", nil)
 	v := parseIntParam(r, "offset", 5)
 	s.Equal(5, v)
 }
 
-// parseIntParam – invalid
+// TestParseIntParam_Invalid covers parseIntParam – invalid.
 func (s *HandlersTestSuite) TestParseIntParam_Invalid() {
 	r := httptest.NewRequest("GET", "/test?offset=abc", nil)
 	v := parseIntParam(r, "offset", 7)
 	s.Equal(7, v)
 }
 
-// parseIntParam – negative
+// TestParseIntParam_Negative covers parseIntParam – negative.
 func (s *HandlersTestSuite) TestParseIntParam_Negative() {
 	r := httptest.NewRequest("GET", "/test?offset=-3", nil)
 	v := parseIntParam(r, "offset", 0)
 	s.Equal(0, v)
 }
 
-// buildHistoryEntry – step result with no StartedAt and no exec FinishedAt
+// TestBuildHistoryEntry_NoTimestamps covers buildHistoryEntry – step result with no StartedAt and no exec FinishedAt.
 func (s *HandlersTestSuite) TestBuildHistoryEntry_NoTimestamps() {
 	exec := &store.Execution{
 		ID:        "e1",
@@ -1967,7 +1967,7 @@ func (s *HandlersTestSuite) TestBuildHistoryEntry_NoTimestamps() {
 	s.Empty(entry.FinishedAt)
 }
 
-// buildHistoryEntry – step with StartedAt but no FinishedAt and exec has FinishedAt
+// TestBuildHistoryEntry_ExecFinishedAt covers buildHistoryEntry – step with StartedAt but no FinishedAt and exec has FinishedAt.
 func (s *HandlersTestSuite) TestBuildHistoryEntry_ExecFinishedAt() {
 	started := time.Now()
 	execFinished := started.Add(2 * time.Second)
@@ -1987,7 +1987,7 @@ func (s *HandlersTestSuite) TestBuildHistoryEntry_ExecFinishedAt() {
 	s.Equal(int64(0), entry.DurationMs) // DurationMs only set when both sr.StartedAt and sr.FinishedAt are set
 }
 
-// handleWaitWebhook – invalid body (not JSON)
+// TestWaitWebhook_InvalidBody covers handleWaitWebhook – invalid body (not JSON).
 func (s *HandlersTestSuite) TestWaitWebhook_InvalidBody() {
 	srv := newTestServer(s.T())
 
@@ -1999,7 +1999,7 @@ func (s *HandlersTestSuite) TestWaitWebhook_InvalidBody() {
 	s.Equal(http.StatusNotFound, w.Code)
 }
 
-// filterByStatus – empty status
+// TestFilterByStatus_EmptyFilter covers filterByStatus – empty status.
 func (s *HandlersTestSuite) TestFilterByStatus_EmptyFilter() {
 	execs := []*store.Execution{
 		{ID: "1", Status: runtime.StatusSuccess},
@@ -2010,7 +2010,7 @@ func (s *HandlersTestSuite) TestFilterByStatus_EmptyFilter() {
 	s.Len(result, 2) // no filtering
 }
 
-// sortExecutions – non-duration sort (default, no-op except for order)
+// TestSortExecutions_DefaultSort covers sortExecutions – non-duration sort (default, no-op except for order).
 func (s *HandlersTestSuite) TestSortExecutions_DefaultSort() {
 	now := time.Now()
 	execs := []*store.Execution{
@@ -2025,7 +2025,7 @@ func (s *HandlersTestSuite) TestSortExecutions_DefaultSort() {
 	s.Equal("2", execs[0].ID) // reversed
 }
 
-// paginateExecutions – limit 1 offset 0
+// TestPaginateExecutions_SmallPage covers paginateExecutions – limit 1 offset 0.
 func (s *HandlersTestSuite) TestPaginateExecutions_SmallPage() {
 	execs := []*store.Execution{
 		{ID: "1"}, {ID: "2"}, {ID: "3"},
@@ -2037,7 +2037,7 @@ func (s *HandlersTestSuite) TestPaginateExecutions_SmallPage() {
 	s.Equal("2", paged[0].ID)
 }
 
-// captureEvents full lifecycle
+// TestCaptureEvents_FullLifecycle covers captureEvents full lifecycle.
 func (s *HandlersTestSuite) TestCaptureEvents_FullLifecycle() {
 	srv := newTestServer(s.T())
 
@@ -2073,7 +2073,7 @@ func (s *HandlersTestSuite) TestCaptureEvents_FullLifecycle() {
 	s.Equal(runtime.StatusSuccess, exec.Steps["s1"].Status)
 }
 
-// handlePublicTrigger – trigger with invalid body (decode error in buildTriggerData)
+// TestPublicTrigger_InvalidBody covers handlePublicTrigger – trigger with invalid body (decode error in buildTriggerData).
 func (s *HandlersTestSuite) TestPublicTrigger_InvalidBody() {
 	srv := newTestServerHTTPTrigger(s.T())
 
@@ -2085,7 +2085,7 @@ func (s *HandlersTestSuite) TestPublicTrigger_InvalidBody() {
 	s.Equal(http.StatusOK, w.Code)
 }
 
-// writeTriggerResponse – response action step not in result (step missing from result.Steps)
+// TestWriteTriggerResponse_ResponseStepNotInResult covers writeTriggerResponse – response action step not in result (step missing from result.Steps).
 func (s *HandlersTestSuite) TestWriteTriggerResponse_ResponseStepNotInResult() {
 	srv := newTestServer(s.T())
 
@@ -2107,7 +2107,7 @@ func (s *HandlersTestSuite) TestWriteTriggerResponse_ResponseStepNotInResult() {
 	s.Equal("success", resp["status"])
 }
 
-// writeTriggerResponse – response action with int status field
+// TestWriteTriggerResponse_ResponseActionWithIntStatus covers writeTriggerResponse – response action with int status field.
 func (s *HandlersTestSuite) TestWriteTriggerResponse_ResponseActionWithIntStatus() {
 	srv := newTestServer(s.T())
 
@@ -2134,7 +2134,7 @@ func (s *HandlersTestSuite) TestWriteTriggerResponse_ResponseActionWithIntStatus
 	s.Equal(201, w.Code)
 }
 
-// handleGetVersion – completely untested
+// TestGetVersion_ReturnsVersion covers handleGetVersion – completely untested.
 func (s *HandlersTestSuite) TestGetVersion_ReturnsVersion() {
 	srv := newTestServer(s.T())
 	srv.config.Version = "1.2.3"
@@ -2152,7 +2152,7 @@ func (s *HandlersTestSuite) TestGetVersion_ReturnsVersion() {
 	s.Equal("1.2.3", resp["version"])
 }
 
-// handleGetVersion – empty version string
+// TestGetVersion_EmptyVersion covers handleGetVersion – empty version string.
 func (s *HandlersTestSuite) TestGetVersion_EmptyVersion() {
 	srv := newTestServer(s.T())
 	srv.config.Version = ""
@@ -2169,7 +2169,7 @@ func (s *HandlersTestSuite) TestGetVersion_EmptyVersion() {
 	s.Equal("", resp["version"])
 }
 
-// processEvent – duplicate WorkflowCompleted is deduplicated (completedSeen branch)
+// TestProcessEvent_DuplicateWorkflowCompleted covers processEvent – duplicate WorkflowCompleted is deduplicated (completedSeen branch).
 func (s *HandlersTestSuite) TestProcessEvent_DuplicateWorkflowCompleted() {
 	srv := newTestServer(s.T())
 

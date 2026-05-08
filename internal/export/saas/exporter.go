@@ -76,6 +76,8 @@ func NewExporter(cfg Config) *Exporter {
 	}
 }
 
+// Start launches the exporter background goroutines: registration with the
+// SaaS, the event batch loop, and the heartbeat ticker.
 // Registration failures never block the agent — events are buffered and
 // heartbeats are skipped until the SaaS assigns an agent_id.
 func (e *Exporter) Start(ctx context.Context) {

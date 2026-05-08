@@ -25,6 +25,7 @@ func (r *Registry) Register(name string, factory ActionFactory) {
 	r.factories[name] = factory
 }
 
+// SetAllowlist restricts the registry to the given action names.
 // Pass nil to remove the restriction (all actions allowed).
 func (r *Registry) SetAllowlist(names []string) {
 	r.mu.Lock()

@@ -303,7 +303,7 @@ func (s *HTTPActionTestSuite) TestCustomContentTypeWithBody() {
 	s.Equal(200, out.(map[string]any)["status"])
 }
 
-// parseConfigDuration: timeout is not a string (e.g. an int) returns 0, false.
+// TestParseConfigDuration_NonStringTimeout covers parseConfigDuration: timeout is not a string (e.g. an int) returns 0, false.
 func (s *HTTPActionTestSuite) TestParseConfigDuration_NonStringTimeout() {
 	ctx := newTestContext(map[string]any{
 		"url":     "http://example.com",
@@ -314,7 +314,7 @@ func (s *HTTPActionTestSuite) TestParseConfigDuration_NonStringTimeout() {
 	s.Equal(time.Duration(0), d)
 }
 
-// parseConfigDuration: timeout is an invalid duration string returns 0, false.
+// TestParseConfigDuration_InvalidDurationString covers parseConfigDuration: timeout is an invalid duration string returns 0, false.
 func (s *HTTPActionTestSuite) TestParseConfigDuration_InvalidDurationString() {
 	ctx := newTestContext(map[string]any{
 		"url":     "http://example.com",
@@ -325,7 +325,7 @@ func (s *HTTPActionTestSuite) TestParseConfigDuration_InvalidDurationString() {
 	s.Equal(time.Duration(0), d)
 }
 
-// parseConfigDuration: timeout is a boolean (non-string) returns 0, false.
+// TestParseConfigDuration_BoolTimeout covers parseConfigDuration: timeout is a boolean (non-string) returns 0, false.
 func (s *HTTPActionTestSuite) TestParseConfigDuration_BoolTimeout() {
 	ctx := newTestContext(map[string]any{
 		"url":     "http://example.com",
@@ -336,7 +336,7 @@ func (s *HTTPActionTestSuite) TestParseConfigDuration_BoolTimeout() {
 	s.Equal(time.Duration(0), d)
 }
 
-// resolveHTTPTimeout: non-string timeout falls through to default 30s.
+// TestResolveHTTPTimeout_NonStringTimeoutUsesDefault covers resolveHTTPTimeout: non-string timeout falls through to default 30s.
 func (s *HTTPActionTestSuite) TestResolveHTTPTimeout_NonStringTimeoutUsesDefault() {
 	ctx := newTestContext(map[string]any{
 		"url":     "http://example.com",
@@ -346,7 +346,7 @@ func (s *HTTPActionTestSuite) TestResolveHTTPTimeout_NonStringTimeoutUsesDefault
 	s.Equal(30*time.Second, d)
 }
 
-// resolveHTTPTimeout: invalid duration string falls through to default 30s.
+// TestResolveHTTPTimeout_InvalidDurationUsesDefault covers resolveHTTPTimeout: invalid duration string falls through to default 30s.
 func (s *HTTPActionTestSuite) TestResolveHTTPTimeout_InvalidDurationUsesDefault() {
 	ctx := newTestContext(map[string]any{
 		"url":     "http://example.com",

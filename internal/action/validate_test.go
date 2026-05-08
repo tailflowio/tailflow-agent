@@ -150,7 +150,7 @@ func (s *ValidateActionTestSuite) TestFailOnError_Passes() {
 	s.True(result["valid"].(bool))
 }
 
-// runValidationRules: multiple fields all pass validation (err == nil continue branch).
+// TestRunValidationRules_AllFieldsPass covers runValidationRules: multiple fields all pass validation (err == nil continue branch).
 func (s *ValidateActionTestSuite) TestRunValidationRules_AllFieldsPass() {
 	rules := map[string]any{
 		"email": "required,email",
@@ -165,7 +165,7 @@ func (s *ValidateActionTestSuite) TestRunValidationRules_AllFieldsPass() {
 	s.Empty(errs)
 }
 
-// runValidationRules: nil data map - field lookups return zero values, triggering
+// TestRunValidationRules_NilDataMap covers runValidationRules: nil data map - field lookups return zero values, triggering.
 // validation failures for "required" rules.
 func (s *ValidateActionTestSuite) TestRunValidationRules_NilDataMap() {
 	rules := map[string]any{
@@ -178,7 +178,7 @@ func (s *ValidateActionTestSuite) TestRunValidationRules_NilDataMap() {
 	s.Equal("required", errs[0]["tag"])
 }
 
-// runValidationRules: multiple rules with multiple validation errors.
+// TestRunValidationRules_MultipleFieldErrors covers runValidationRules: multiple rules with multiple validation errors.
 func (s *ValidateActionTestSuite) TestRunValidationRules_MultipleFieldErrors() {
 	rules := map[string]any{
 		"email": "required,email",
@@ -193,7 +193,7 @@ func (s *ValidateActionTestSuite) TestRunValidationRules_MultipleFieldErrors() {
 	s.GreaterOrEqual(len(errs), 2)
 }
 
-// runValidationRules: value is present and valid so err == nil, continue is taken.
+// TestRunValidationRules_FieldPresent_NoError covers runValidationRules: value is present and valid so err == nil, continue is taken.
 func (s *ValidateActionTestSuite) TestRunValidationRules_FieldPresent_NoError() {
 	rules := map[string]any{
 		"count": "min=0",

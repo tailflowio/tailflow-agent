@@ -564,7 +564,7 @@ func (s *ServerTestSuite) TestStartCronScheduler_CronCallbackFires() {
 	}, 5*time.Second, 100*time.Millisecond)
 }
 
-// ensureWorkflowCompleted – already stored (early return)
+// TestEnsureWorkflowCompleted_AlreadyStored covers ensureWorkflowCompleted – already stored (early return).
 func (s *ServerTestSuite) TestEnsureWorkflowCompleted_AlreadyStored() {
 	srv := newTestServer(s.T())
 
@@ -601,7 +601,7 @@ func (s *ServerTestSuite) TestEnsureWorkflowCompleted_AlreadyStored() {
 	}
 }
 
-// ensureWorkflowCompleted – error with cancelled context
+// TestEnsureWorkflowCompleted_ErrorCancelled covers ensureWorkflowCompleted – error with cancelled context.
 func (s *ServerTestSuite) TestEnsureWorkflowCompleted_ErrorCancelled() {
 	srv := newTestServer(s.T())
 
@@ -622,7 +622,7 @@ func (s *ServerTestSuite) TestEnsureWorkflowCompleted_ErrorCancelled() {
 	s.Equal(runtime.StatusCancelled, events[0].Data["status"])
 }
 
-// ensureWorkflowCompleted – error without cancelled context
+// TestEnsureWorkflowCompleted_ErrorFailed covers ensureWorkflowCompleted – error without cancelled context.
 func (s *ServerTestSuite) TestEnsureWorkflowCompleted_ErrorFailed() {
 	srv := newTestServer(s.T())
 
@@ -640,7 +640,7 @@ func (s *ServerTestSuite) TestEnsureWorkflowCompleted_ErrorFailed() {
 	s.Equal(runtime.StatusFailed, events[0].Data["status"])
 }
 
-// ensureWorkflowCompleted – success with result
+// TestEnsureWorkflowCompleted_SuccessWithResult covers ensureWorkflowCompleted – success with result.
 func (s *ServerTestSuite) TestEnsureWorkflowCompleted_SuccessWithResult() {
 	srv := newTestServer(s.T())
 
@@ -659,7 +659,7 @@ func (s *ServerTestSuite) TestEnsureWorkflowCompleted_SuccessWithResult() {
 	s.Equal(runtime.StatusCompletedWithErrors, events[0].Data["status"])
 }
 
-// ensureWorkflowCompleted – nil error and nil result (defaults to success)
+// TestEnsureWorkflowCompleted_NilResultNilError covers ensureWorkflowCompleted – nil error and nil result (defaults to success).
 func (s *ServerTestSuite) TestEnsureWorkflowCompleted_NilResultNilError() {
 	srv := newTestServer(s.T())
 
@@ -677,7 +677,7 @@ func (s *ServerTestSuite) TestEnsureWorkflowCompleted_NilResultNilError() {
 	s.Equal(runtime.StatusSuccess, events[0].Data["status"])
 }
 
-// ensureWorkflowCompleted – publishes to event bus
+// TestEnsureWorkflowCompleted_PublishesEvent covers ensureWorkflowCompleted – publishes to event bus.
 func (s *ServerTestSuite) TestEnsureWorkflowCompleted_PublishesEvent() {
 	srv := newTestServer(s.T())
 

@@ -23,8 +23,8 @@ func TestEngineCoverage(t *testing.T) {
 
 func (s *EngineCoverageTestSuite) SetupTest() {}
 
-// TestSkipNode_CloseDoneChannel covers the branch where skipNode detects
-// that all nodes are completed and closes the done channel.
+// TestSkipNode_MultipleChildrenAllSkipped covers the branch where skipNode
+// detects that all nodes are completed and closes the done channel.
 // This is exercised when the only step fails and its single child is skipped,
 // bringing completed == total. The existing TestSkipDownstreamOnFailure already
 // covers the "not done yet" path; this test ensures two downstream children

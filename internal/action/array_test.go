@@ -542,21 +542,21 @@ func (s *ArrayActionTestSuite) TestSortStringComparison() {
 	s.NotNil(out)
 }
 
-// toAnySlice: non-slice type (e.g. a plain string) returns nil, false.
+// TestToAnySlice_NonSliceType covers toAnySlice: non-slice type (e.g. a plain string) returns nil, false.
 func (s *ArrayActionTestSuite) TestToAnySlice_NonSliceType() {
 	result, ok := toAnySlice("not-a-slice")
 	s.False(ok)
 	s.Nil(result)
 }
 
-// toAnySlice: non-slice type int returns nil, false.
+// TestToAnySlice_IntType covers toAnySlice: non-slice type int returns nil, false.
 func (s *ArrayActionTestSuite) TestToAnySlice_IntType() {
 	result, ok := toAnySlice(42)
 	s.False(ok)
 	s.Nil(result)
 }
 
-// toAnySlice: typed slice ([]string) is converted via reflect path.
+// TestToAnySlice_TypedStringSlice covers toAnySlice: typed slice ([]string) is converted via reflect path.
 func (s *ArrayActionTestSuite) TestToAnySlice_TypedStringSlice() {
 	input := []string{"a", "b", "c"}
 	result, ok := toAnySlice(input)
@@ -567,7 +567,7 @@ func (s *ArrayActionTestSuite) TestToAnySlice_TypedStringSlice() {
 	s.Equal("c", result[2])
 }
 
-// toAnySlice: typed slice ([]int) is converted via reflect path.
+// TestToAnySlice_TypedIntSlice covers toAnySlice: typed slice ([]int) is converted via reflect path.
 func (s *ArrayActionTestSuite) TestToAnySlice_TypedIntSlice() {
 	input := []int{1, 2, 3}
 	result, ok := toAnySlice(input)
@@ -578,14 +578,14 @@ func (s *ArrayActionTestSuite) TestToAnySlice_TypedIntSlice() {
 	s.Equal(3, result[2])
 }
 
-// toAnySlice: nil returns nil, false (nil has no reflect Slice kind).
+// TestToAnySlice_Nil covers toAnySlice: nil returns nil, false (nil has no reflect Slice kind).
 func (s *ArrayActionTestSuite) TestToAnySlice_Nil() {
 	result, ok := toAnySlice(nil)
 	s.False(ok)
 	s.Nil(result)
 }
 
-// toAnySlice: empty typed slice returns empty []any.
+// TestToAnySlice_EmptyTypedSlice covers toAnySlice: empty typed slice returns empty []any.
 func (s *ArrayActionTestSuite) TestToAnySlice_EmptyTypedSlice() {
 	input := []string{}
 	result, ok := toAnySlice(input)
@@ -593,7 +593,7 @@ func (s *ArrayActionTestSuite) TestToAnySlice_EmptyTypedSlice() {
 	s.Require().Len(result, 0)
 }
 
-// toAnySlice: map type returns nil, false.
+// TestToAnySlice_MapType covers toAnySlice: map type returns nil, false.
 func (s *ArrayActionTestSuite) TestToAnySlice_MapType() {
 	result, ok := toAnySlice(map[string]string{"a": "b"})
 	s.False(ok)
