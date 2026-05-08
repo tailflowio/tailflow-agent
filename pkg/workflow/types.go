@@ -59,11 +59,18 @@ type PipelineAction struct {
 type GraphNode struct {
 	ID         string           `json:"id"`
 	Label      string           `json:"label"`
-	Action     string           `json:"action"`                // action type (e.g. "http", "loop", "set")
-	Type       string           `json:"type"`                  // "step", "trigger"
-	Pipeline   []PipelineAction `json:"pipeline,omitempty"`    // loop pipeline sub-actions
-	When       string           `json:"when,omitempty"`        // condition expression for conditional steps
-	OnRecovery string           `json:"on_recovery,omitempty"` // recovery strategy: retry, skip, fail
+	Action     string           `json:"action"`
+	Type       string           `json:"type"`
+	Pipeline   []PipelineAction `json:"pipeline,omitempty"`
+	When       string           `json:"when,omitempty"`
+	OnRecovery string           `json:"on_recovery,omitempty"`
+	Depth      int              `json:"depth"`
+	ParentID   string           `json:"parent_id,omitempty"`
+	IsLast     bool             `json:"is_last"`
+	GotoTarget string           `json:"goto_target,omitempty"`
+	GotoMax    int              `json:"goto_max,omitempty"`
+	InLoop     bool             `json:"in_loop,omitempty"`
+	IsLoopStart bool            `json:"is_loop_start,omitempty"`
 }
 
 // GraphEdge represents an edge in the DAG visualization.
@@ -74,8 +81,30 @@ type GraphEdge struct {
 	Label  string `json:"label,omitempty"` // condition
 }
 
-// Graph is the DAG representation for Vue Flow.
+type TreeLine struct {
+	StepID     string `json:"step_id,omitempty"`
+	Prefix     string `json:"prefix"`
+	Name       string `json:"name"`
+	Label      string `json:"label"`
+	Action     string `json:"action,omitempty"`
+	Merge      string `json:"merge,omitempty"`
+	Type       string `json:"type"`
+	Depth      int    `json:"depth"`
+	InLoop     bool   `json:"in_loop,omitempty"`
+	When       string `json:"when,omitempty"`
+	GotoTarget string `json:"goto_target,omitempty"`
+	GotoMax    int    `json:"goto_max,omitempty"`
+}
+
+type StageInfo struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Steps       []string `json:"steps"`
+}
+
 type Graph struct {
-	Nodes []GraphNode `json:"nodes"`
-	Edges []GraphEdge `json:"edges"`
+	Nodes  []GraphNode `json:"nodes"`
+	Edges  []GraphEdge `json:"edges"`
+	Tree   []TreeLine  `json:"tree,omitempty"`
+	Stages []StageInfo `json:"stages,omitempty"`
 }

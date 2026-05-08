@@ -32,6 +32,7 @@ type ExecutionStore interface {
 	Count() int
 	AppendEvent(executionID string, ev event.Event)
 	GetEvents(executionID string) []event.Event
+	GetEventsPaginated(executionID string, offset, limit int) ([]event.Event, int)
 	UpdateStep(executionID, stepID string, fn func(step *runtime.StepResult))
 	IncrStepExecCount(stepID string)
 	StepExecCounts() map[string]int
@@ -240,11 +241,33 @@ func (s *MemoryExecutionStore) GetEvents(executionID string) []event.Event {
 	if evts == nil {
 		return nil
 	}
-	// Return a copy
+
 	out := make([]event.Event, len(evts))
 	copy(out, evts)
 
 	return out
+}
+
+func (s *MemoryExecutionStore) GetEventsPaginated(executionID string, offset, limit int) ([]event.Event, int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	evts := s.events[executionID]
+	total := len(evts)
+
+	if offset >= total {
+		return nil, total
+	}
+
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+
+	out := make([]event.Event, end-offset)
+	copy(out, evts[offset:end])
+
+	return out, total
 }
 
 func (s *MemoryExecutionStore) IncrStepExecCount(stepID string) {

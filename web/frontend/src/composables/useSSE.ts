@@ -137,7 +137,6 @@ export function useSSE(executionId: string, options?: SSEOptions) {
     eventSource = new EventSource(`/api/executions/${executionId}/events`)
 
     eventSource.addEventListener('connected', () => {
-      // Clear all state on (re)connect — server replays stored events
       events.value = []
       pendingEvents = []
       pendingStatuses = {}
@@ -145,11 +144,6 @@ export function useSSE(executionId: string, options?: SSEOptions) {
       pendingIterations = {}
       pendingOutputEntries = {}
       pendingPipelineUpdates = {}
-      stepStatuses.value = {}
-      stepVolumes.value = {}
-      stepIterations.value = {}
-      stepOutputHistory.value = {}
-      stepPipelineProgress.value = {}
       pendingFinished = false
       connected.value = true
     })
@@ -157,36 +151,28 @@ export function useSSE(executionId: string, options?: SSEOptions) {
     eventSource.addEventListener('step.started', (e) => {
       const event: WorkflowEvent = JSON.parse(e.data)
       pendingEvents.push(event)
-      if (event.step_id) {
-        pendingStatuses[event.step_id] = 'running'
-      }
+      if (event.step_id) pendingStatuses[event.step_id] = 'running'
       scheduleFlush()
     })
 
     eventSource.addEventListener('step.completed', (e) => {
       const event: WorkflowEvent = JSON.parse(e.data)
       pendingEvents.push(event)
-      if (event.step_id) {
-        pendingStatuses[event.step_id] = 'success'
-      }
+      if (event.step_id) pendingStatuses[event.step_id] = 'success'
       scheduleFlush()
     })
 
     eventSource.addEventListener('step.failed', (e) => {
       const event: WorkflowEvent = JSON.parse(e.data)
       pendingEvents.push(event)
-      if (event.step_id) {
-        pendingStatuses[event.step_id] = 'failed'
-      }
+      if (event.step_id) pendingStatuses[event.step_id] = 'failed'
       scheduleFlush()
     })
 
     eventSource.addEventListener('step.skipped', (e) => {
       const event: WorkflowEvent = JSON.parse(e.data)
       pendingEvents.push(event)
-      if (event.step_id) {
-        pendingStatuses[event.step_id] = 'skipped'
-      }
+      if (event.step_id) pendingStatuses[event.step_id] = 'skipped'
       scheduleFlush()
     })
 
@@ -271,11 +257,9 @@ export function useSSE(executionId: string, options?: SSEOptions) {
       pendingEvents.push(event)
       if (event.step_id) {
         const iteration = (event.data?.iteration as number) || 2
-        // Set iteration for ALL body steps (not just the goto step)
         const body = (event.data?.body as string[]) || []
         for (const bid of body) {
           pendingIterations[bid] = iteration
-          pendingStatuses[bid] = 'pending'
         }
       }
       scheduleFlush()

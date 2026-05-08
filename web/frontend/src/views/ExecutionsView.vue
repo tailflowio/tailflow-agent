@@ -4,17 +4,19 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useWorkflowApi, type Execution, type Graph } from '@/composables/useWorkflowApi'
 import { useGlobalEvents } from '@/composables/useGlobalEvents'
+import { fmtDur, fmtAgo, statusDot } from '@/composables/useFormat'
+import StatusBadge from '@/components/primitives/StatusBadge.vue'
+import Icon from '@/components/primitives/Icon.vue'
 
-const { t, locale } = useI18n()
-
+const { t } = useI18n()
 const router = useRouter()
 const api = useWorkflowApi()
 
-const PAGE_SIZE = 20
+const PAGE_SIZE = 30
 
-const statusFilter = ref<string[]>([])
-const sortBy = ref<'date' | 'duration'>('date')
-const sortOrder = ref<'desc' | 'asc'>('desc')
+const filter = ref<'all' | 'success' | 'failed' | 'cancelled' | 'running' | 'waiting'>('all')
+const search = ref('')
+const compareIds = ref<string[]>([])
 const graph = ref<Graph | null>(null)
 const executions = ref<Execution[]>([])
 const total = ref(0)
@@ -22,32 +24,14 @@ const offset = ref(0)
 const hasMore = computed(() => offset.value < total.value)
 const loading = ref(false)
 
-const statuses = [
-  { key: 'running', label: 'executions.filterRunning' },
-  { key: 'success', label: 'executions.filterSuccess' },
-  { key: 'failed', label: 'executions.filterFailed' },
-  { key: 'cancelled', label: 'executions.filterCancelled' },
-  { key: 'waiting', label: 'executions.filterWaiting' },
+const filterChips: Array<{ key: 'all' | 'success' | 'failed' | 'cancelled' | 'running' | 'waiting'; label: string }> = [
+  { key: 'all', label: 'all' },
+  { key: 'success', label: 'success' },
+  { key: 'failed', label: 'failed' },
+  { key: 'cancelled', label: 'cancelled' },
+  { key: 'running', label: 'running' },
+  { key: 'waiting', label: 'waiting' },
 ]
-
-function toggleStatus(s: string) {
-  const idx = statusFilter.value.indexOf(s)
-  if (idx >= 0) statusFilter.value.splice(idx, 1)
-  else statusFilter.value.push(s)
-}
-
-function clearFilters() {
-  statusFilter.value = []
-}
-
-function toggleSort(field: 'date' | 'duration') {
-  if (sortBy.value === field) {
-    sortOrder.value = sortOrder.value === 'desc' ? 'asc' : 'desc'
-  } else {
-    sortBy.value = field
-    sortOrder.value = 'desc'
-  }
-}
 
 async function fetchPage(reset = false) {
   if (loading.value) return
@@ -58,247 +42,269 @@ async function fetchPage(reset = false) {
       offset.value = 0
       executions.value = []
     }
-    const resp = await api.listExecutions({
-      status: statusFilter.value.length ? statusFilter.value : undefined,
-      sort: sortBy.value,
-      order: sortOrder.value,
-      limit: PAGE_SIZE,
-      offset: offset.value,
-    })
+    const status = filter.value === 'all' ? undefined : [filter.value]
+    const resp = await api.listExecutions({ status, sort: 'date', order: 'desc', limit: PAGE_SIZE, offset: offset.value })
     if (reset) executions.value = resp.items
     else executions.value.push(...resp.items)
     total.value = resp.total
     offset.value += resp.items.length
-  } catch {
-    // ignore
   } finally {
     loading.value = false
   }
 }
 
-// Re-fetch on filter/sort change
-watch([statusFilter, sortBy, sortOrder], () => fetchPage(true), { deep: true })
+watch([filter], () => fetchPage(true))
 
 onMounted(() => {
   fetchPage(true)
   api.getWorkflowGraph().then(g => { graph.value = g }).catch(() => {})
 })
 
-// SSE: refresh current view (debounced)
 useGlobalEvents(() => fetchPage(true))
 
-// Infinite scroll sentinel
 const sentinel = ref<HTMLElement>()
 let observer: IntersectionObserver | null = null
-
 onMounted(() => {
   nextTick(() => {
     observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting && hasMore.value && !loading.value) fetchPage()
-      },
+      ([entry]) => { if (entry.isIntersecting && hasMore.value && !loading.value) fetchPage() },
       { rootMargin: '200px' }
     )
     if (sentinel.value) observer.observe(sentinel.value)
   })
 })
-
 onUnmounted(() => observer?.disconnect())
 
+const filtered = computed(() => {
+  const s = search.value.toLowerCase().trim()
+  if (!s) return executions.value
+  return executions.value.filter(e => {
+    if (e.id.toLowerCase().includes(s)) return true
+    const params = e.params ? Object.entries(e.params).map(([k, v]) => `${k}=${v}`).join(' ') : ''
+    return params.toLowerCase().includes(s)
+  })
+})
 
-function stepDot(s: string) {
-  if (s === 'success') return 'bg-emerald-400'
-  if (s === 'failed') return 'bg-red-400'
-  if (s === 'running') return 'bg-g-11 animate-pulse'
-  if (s === 'waiting') return 'bg-amber-400 animate-pulse'
-  if (s === 'skipped') return 'bg-g-6'
+function toggleCompare(id: string) {
+  const idx = compareIds.value.indexOf(id)
+  if (idx >= 0) compareIds.value.splice(idx, 1)
+  else if (compareIds.value.length >= 2) compareIds.value = [compareIds.value[1], id]
+  else compareIds.value.push(id)
+}
+
+const showCompare = computed(() => compareIds.value.length === 2)
+const compareA = computed(() => executions.value.find(r => r.id === compareIds.value[0]))
+const compareB = computed(() => executions.value.find(r => r.id === compareIds.value[1]))
+
+function execDuration(e: Execution): number | null {
+  if (e.finished_at && e.started_at) return new Date(e.finished_at).getTime() - new Date(e.started_at).getTime()
+  return null
+}
+
+function compareDelta(): string {
+  const a = compareA.value, b = compareB.value
+  if (!a || !b) return ''
+  const da = execDuration(a), db = execDuration(b)
+  if (da == null || db == null) return ''
+  const delta = db - da
+  const sign = delta >= 0 ? '+' : ''
+  return `duration ${sign}${fmtDur(Math.abs(delta))}`
+}
+
+function paramsLabel(e: Execution): string {
+  if (!e.params || Object.keys(e.params).length === 0) return ''
+  return Object.entries(e.params).map(([k, v]) => `${k}=${v}`).join(' ')
+}
+
+function stepCells(exec: Execution): string[] {
+  if (!exec.steps) return []
+  if (graph.value) return graph.value.nodes.filter(n => exec.steps![n.id]).map(n => exec.steps![n.id].status)
+  return Object.values(exec.steps).map(s => s.status)
+}
+
+function stepCellClass(status: string): string {
+  if (status === 'success') return 'bg-emerald-400'
+  if (status === 'failed') return 'bg-red-400'
+  if (status === 'running') return 'bg-amber-400 animate-pulse'
+  if (status === 'waiting') return 'bg-amber-400 animate-pulse'
+  if (status === 'skipped') return 'bg-g-6'
+  if (status === 'cancelled') return 'bg-orange-400'
   return 'bg-g-5'
 }
-function badge(s: string) {
-  if (s === 'success') return 'bg-emerald-400/15 text-emerald-400'
-  if (s === 'failed') return 'bg-red-400/15 text-red-400'
-  if (s === 'cancelled') return 'bg-orange-400/15 text-orange-400'
-  if (s === 'running') return 'bg-amber-400/15 text-amber-400'
-  if (s === 'waiting') return 'bg-amber-400/15 text-amber-400'
-  if (s === 'pending') return 'bg-violet-400/15 text-violet-400'
-  return 'bg-g-7/20 text-g-9'
-}
-function isAnimated(s: string) {
-  return s === 'running' || s === 'waiting'
-}
-function hashCode(str: string): number {
-  let hash = 0
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0
+
+const counts = computed(() => {
+  const all = executions.value
+  return {
+    total: total.value,
+    success: all.filter(e => e.status === 'success').length,
+    failed: all.filter(e => e.status === 'failed').length,
+    cancelled: all.filter(e => e.status === 'cancelled').length,
   }
-  return Math.abs(hash)
-}
-function execGradient(id: string): string {
-  const h1 = hashCode(id) % 360
-  const h2 = (h1 + 40 + (hashCode(id + 'x') % 80)) % 360
-  return `linear-gradient(135deg, hsl(${h1}, 70%, 60%), hsl(${h2}, 70%, 50%))`
-}
-
-function formatDate(d: string) {
-  return new Date(d).toLocaleString(locale.value, {
-    day: '2-digit', month: '2-digit', year: 'numeric',
-    hour: '2-digit', minute: '2-digit', second: '2-digit'
-  })
-}
-
-function duration(exec: Execution) {
-  if (!exec.finished_at) return '...'
-  const ms = new Date(exec.finished_at).getTime() - new Date(exec.started_at).getTime()
-  if (ms < 1000) return `${ms}ms`
-  return `${(ms / 1000).toFixed(1)}s`
-}
-
-function stepProgress(exec: Execution): { done: number; total: number } | null {
-  if (!exec.steps || Object.keys(exec.steps).length === 0) return null
-  const entries = Object.values(exec.steps)
-  const total = entries.length
-  const done = entries.filter(s => s.status === 'success' || s.status === 'failed' || s.status === 'skipped').length
-  return { done, total }
-}
-
-function sortArrow(field: 'date' | 'duration') {
-  if (sortBy.value !== field) return ''
-  return sortOrder.value === 'desc' ? '\u2193' : '\u2191'
-}
-
-function orderedSteps(exec: Execution): [string, { status: string; started_at?: string }][] {
-  if (!exec.steps) return []
-  if (graph.value) {
-    // Use DAG node order
-    return graph.value.nodes
-      .filter(n => exec.steps![n.id])
-      .map(n => [n.id, exec.steps![n.id]] as [string, { status: string; started_at?: string }])
-  }
-  // Fallback: sort by started_at
-  return Object.entries(exec.steps)
-    .sort(([, a], [, b]) => {
-      const ta = a.started_at ? new Date(a.started_at).getTime() : Infinity
-      const tb = b.started_at ? new Date(b.started_at).getTime() : Infinity
-      return ta - tb
-    })
-}
+})
 </script>
 
 <template>
-  <div>
-    <div class="mb-5">
-      <h2 class="text-lg font-semibold text-g-14">{{ t('executions.title') }}</h2>
-      <p class="text-sm text-g-8 mt-0.5">{{ t('executions.description') }}</p>
-    </div>
-
-    <!-- Toolbar: filters + sort -->
-    <div class="flex flex-wrap items-center gap-2 mb-4">
-      <!-- Status filter pills -->
-      <button
-        @click="clearFilters"
-        :class="[
-          'px-3 py-1.5 rounded-md text-[12px] font-medium transition-colors',
-          statusFilter.length === 0
-            ? 'bg-g-6 text-g-14'
-            : 'bg-g-3 text-g-9 hover:bg-g-4'
-        ]"
-      >{{ t('executions.all') }}</button>
-      <button
-        v-for="s in statuses"
-        :key="s.key"
-        @click="toggleStatus(s.key)"
-        :class="[
-          'px-3 py-1.5 rounded-md text-[12px] font-medium transition-colors',
-          statusFilter.includes(s.key)
-            ? 'bg-g-6 text-g-14'
-            : 'bg-g-3 text-g-9 hover:bg-g-4'
-        ]"
-      >{{ t(s.label) }}</button>
-
-      <span class="flex-1" />
-
-      <!-- Sort controls -->
-      <div class="flex rounded-md overflow-hidden border border-g-5">
+  <div class="px-8 py-6">
+    <!-- Header -->
+    <div class="flex items-center justify-between mb-5">
+      <div>
+        <h1 class="text-[20px] font-semibold text-g-14">{{ t('executions.title') }}</h1>
+        <p class="text-[12px] text-g-10 mt-0.5">{{ counts.total }} total · {{ counts.success }} success · {{ counts.failed }} failed · {{ counts.cancelled }} cancelled</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <span v-if="compareIds.length > 0" class="text-[11px] font-mono text-g-10">{{ compareIds.length }}/2 selected</span>
         <button
-          @click="toggleSort('date')"
-          :class="[
-            'px-3 py-1.5 text-[12px] font-medium transition-colors',
-            sortBy === 'date' ? 'bg-g-5 text-g-14' : 'bg-g-2 text-g-9 hover:bg-g-3'
-          ]"
-        >{{ t('executions.sortDate') }} {{ sortArrow('date') }}</button>
-        <button
-          @click="toggleSort('duration')"
-          :class="[
-            'px-3 py-1.5 text-[12px] font-medium transition-colors border-l border-g-5',
-            sortBy === 'duration' ? 'bg-g-5 text-g-14' : 'bg-g-2 text-g-9 hover:bg-g-3'
-          ]"
-        >{{ t('executions.sortDuration') }} {{ sortArrow('duration') }}</button>
+          v-if="showCompare"
+          class="h-8 px-3 rounded text-[12px] font-medium bg-g-14 text-g-1 hover:bg-g-15"
+          @click="router.push({ name: 'execution', params: { id: compareIds[0] } })"
+        >Open A ↗</button>
       </div>
     </div>
 
-    <!-- Empty state -->
-    <div v-if="!loading && executions.length === 0" class="bg-g-2 border border-g-5 rounded-lg py-16 text-center text-g-9 text-sm lm-card">
-      {{ t('executions.none') }}
+    <!-- Compare panel -->
+    <div
+      v-if="showCompare && compareA && compareB"
+      class="bg-g-2 border border-g-6 rounded mb-4 overflow-hidden anim-enter"
+    >
+      <div class="flex items-center justify-between px-4 py-2 border-b border-g-5">
+        <div class="flex items-center gap-2">
+          <span class="text-[11px] font-mono uppercase tracking-wider text-g-9">Compare</span>
+        </div>
+        <button @click="compareIds = []" class="text-g-9 hover:text-g-12">
+          <Icon name="x" class-name="w-4 h-4" />
+        </button>
+      </div>
+      <div class="grid grid-cols-2 divide-x divide-g-5">
+        <div class="p-4">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-[10px] uppercase font-mono text-g-8">A</span>
+            <span class="font-mono text-[12px] text-g-13">{{ compareA.id }}</span>
+            <StatusBadge :status="compareA.status" />
+            <span class="font-mono text-[11px] text-g-9 ml-auto tabular-nums">{{ execDuration(compareA) ? fmtDur(execDuration(compareA)!) : '—' }}</span>
+          </div>
+          <div class="flex gap-1 mb-2">
+            <div
+              v-for="(s, i) in stepCells(compareA)"
+              :key="i"
+              :class="['flex-1 h-2 rounded-sm', stepCellClass(s)]"
+            />
+          </div>
+          <div class="font-mono text-[11px] text-g-9 leading-relaxed">
+            <div>started <span class="text-g-12">{{ fmtAgo(compareA.started_at) }}</span></div>
+            <div v-if="paramsLabel(compareA)">params <span class="text-g-12">{{ paramsLabel(compareA) }}</span></div>
+            <div v-if="compareA.error" class="text-red-400/90 mt-1">{{ compareA.error }}</div>
+          </div>
+        </div>
+        <div class="p-4">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-[10px] uppercase font-mono text-g-8">B</span>
+            <span class="font-mono text-[12px] text-g-13">{{ compareB.id }}</span>
+            <StatusBadge :status="compareB.status" />
+            <span class="font-mono text-[11px] text-g-9 ml-auto tabular-nums">{{ execDuration(compareB) ? fmtDur(execDuration(compareB)!) : '—' }}</span>
+          </div>
+          <div class="flex gap-1 mb-2">
+            <div
+              v-for="(s, i) in stepCells(compareB)"
+              :key="i"
+              :class="['flex-1 h-2 rounded-sm', stepCellClass(s)]"
+            />
+          </div>
+          <div class="font-mono text-[11px] text-g-9 leading-relaxed">
+            <div>started <span class="text-g-12">{{ fmtAgo(compareB.started_at) }}</span></div>
+            <div v-if="paramsLabel(compareB)">params <span class="text-g-12">{{ paramsLabel(compareB) }}</span></div>
+            <div v-if="compareB.error" class="text-red-400/90 mt-1">{{ compareB.error }}</div>
+          </div>
+        </div>
+      </div>
+      <div class="px-4 py-2 border-t border-g-5 flex items-center gap-2 bg-g-1">
+        <span class="text-[10px] font-mono text-g-8 uppercase tracking-wider">Δ</span>
+        <span class="font-mono text-[11px] text-amber-400">{{ compareDelta() }}</span>
+      </div>
+    </div>
+
+    <!-- Filters + search -->
+    <div class="flex items-center gap-2 mb-4">
+      <div class="flex items-center bg-g-2 border border-g-5 rounded">
+        <button
+          v-for="s in filterChips"
+          :key="s.key"
+          @click="filter = s.key"
+          :class="['px-3 py-1.5 text-[11px] font-mono', filter === s.key ? 'bg-g-4 text-g-14' : 'text-g-9 hover:text-g-12']"
+        >
+          {{ s.label }}
+          <span v-if="filter === s.key && s.key === 'all'" class="text-g-8">· {{ counts.total }}</span>
+        </button>
+      </div>
+      <div class="flex-1" />
+      <div class="flex items-center gap-2 bg-g-2 border border-g-5 rounded px-2.5 h-8">
+        <Icon name="search" class-name="w-3.5 h-3.5 text-g-8" />
+        <input
+          v-model="search"
+          placeholder="exe_… or group=…"
+          class="bg-transparent outline-none text-[12px] font-mono text-g-12 placeholder:text-g-7 w-56"
+        />
+      </div>
+      <button
+        class="h-8 px-3 rounded text-[11px] font-mono text-g-10 bg-g-2 border border-g-5 hover:bg-g-3 flex items-center gap-1.5"
+        @click="fetchPage(true)"
+      >
+        <Icon name="refresh" class-name="w-3.5 h-3.5" />
+        replay
+      </button>
     </div>
 
     <!-- Table -->
-    <div v-else class="bg-g-2 border border-g-5 rounded-lg overflow-hidden lm-card">
-      <!-- Header -->
-      <div class="grid grid-cols-[7rem_10rem_1fr_5rem_10rem] gap-3 px-5 py-2.5 border-b border-g-5 text-[12px] font-medium text-g-9 uppercase tracking-wider">
-        <span>{{ t('executions.status') }}</span>
-        <span>ID</span>
-        <span>{{ t('executions.steps') }}</span>
-        <span class="text-right">{{ t('executions.duration') }}</span>
-        <span class="text-right">{{ t('executions.date') }}</span>
+    <div v-if="filtered.length === 0 && !loading" class="bg-g-2 border border-g-5 rounded-lg py-16 text-center text-g-9 text-sm">
+      {{ t('executions.none') }}
+    </div>
+    <div v-else class="bg-g-2 border border-g-5 rounded overflow-hidden">
+      <div class="grid grid-cols-[24px_24px_140px_90px_80px_1fr_140px_80px_80px] gap-3 px-3 py-2 border-t border-g-4 text-[10px] uppercase tracking-wider text-g-8 font-mono">
+        <div></div>
+        <div></div>
+        <div>id</div>
+        <div>status</div>
+        <div>duration</div>
+        <div>params / error</div>
+        <div>steps</div>
+        <div>trigger</div>
+        <div>started</div>
       </div>
-      <!-- Rows -->
-      <div>
-        <div
-          v-for="exec in executions"
-          :key="exec.id"
-          @click="router.push({ name: 'execution', params: { id: exec.id } })"
-          class="grid grid-cols-[7rem_10rem_1fr_5rem_10rem] gap-3 items-center px-5 py-3 cursor-pointer hover:bg-g-3 transition-colors border-b border-g-5 last:border-b-0"
-        >
-          <span :class="['inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium w-fit', badge(exec.status)]">
-            <span :class="['w-1.5 h-1.5 rounded-full bg-current', isAnimated(exec.status) ? 'pulse-dot' : 'opacity-50']" />
-            {{ exec.status }}
-          </span>
-          <span class="inline-flex items-center gap-1.5">
-            <span class="w-3 h-3 rounded-sm shrink-0" :style="{ background: execGradient(exec.id) }" />
-            <span class="text-[11px] text-g-10 font-mono">{{ exec.id.slice(0, 8) }}</span>
-          </span>
-          <div class="flex items-center gap-2">
-            <template v-if="stepProgress(exec)">
-              <div class="flex gap-[3px]">
-                <span
-                  v-for="[sid, step] in orderedSteps(exec)"
-                  :key="sid"
-                  :class="['w-[14px] h-[5px] rounded-sm', stepDot(step.status)]"
-                  :title="`${sid}: ${step.status}`"
-                />
-              </div>
-              <span class="text-[11px] text-g-8 font-mono tabular-nums">
-                {{ stepProgress(exec)!.done }}/{{ stepProgress(exec)!.total }}
-              </span>
-            </template>
-            <span v-else class="text-[11px] text-g-7 font-mono">-</span>
-          </div>
-          <span class="text-[12px] text-g-10 font-mono tabular-nums text-right">{{ duration(exec) }}</span>
-          <span class="text-[12px] text-g-9 whitespace-nowrap text-right">{{ formatDate(exec.started_at) }}</span>
+      <div
+        v-for="r in filtered"
+        :key="r.id"
+        :class="[
+          'grid grid-cols-[24px_24px_140px_90px_80px_1fr_140px_80px_80px] gap-3 px-3 py-2 hover:bg-g-3 border-t border-g-4 items-center',
+          compareIds.includes(r.id) ? 'bg-g-3' : ''
+        ]"
+      >
+        <input
+          type="checkbox"
+          :checked="compareIds.includes(r.id)"
+          @change="toggleCompare(r.id)"
+          class="cursor-pointer"
+        />
+        <span :class="['w-1.5 h-1.5 rounded-full', statusDot(r.status)]" />
+        <span
+          @click="router.push({ name: 'execution', params: { id: r.id } })"
+          class="font-mono text-[12px] text-g-12 cursor-pointer hover:text-g-14 truncate"
+        >{{ r.id }}</span>
+        <StatusBadge :status="r.status" />
+        <span class="font-mono text-[12px] text-g-11 tabular-nums">{{ execDuration(r) ? fmtDur(execDuration(r)!) : '—' }}</span>
+        <span v-if="r.error" class="font-mono text-[11px] text-red-400/90 truncate">{{ typeof r.error === 'string' ? r.error : (r.error as any).message }}</span>
+        <span v-else class="font-mono text-[11px] text-g-9 truncate">{{ paramsLabel(r) }}</span>
+        <div class="flex gap-[2px]">
+          <div
+            v-for="(s, i) in stepCells(r)"
+            :key="i"
+            :class="['w-2.5 h-3 rounded-sm', stepCellClass(s)]"
+          />
         </div>
-      </div>
-
-      <!-- Footer: showing count + loading -->
-      <div v-if="executions.length > 0" class="px-5 py-2.5 border-t border-g-5 text-[12px] text-g-8 flex items-center gap-3">
-        <span>{{ t('executions.showing', { count: executions.length, total }) }}</span>
-        <div v-if="loading" class="w-3.5 h-3.5 border-2 border-g-7 border-t-g-12 rounded-full animate-spin" />
+        <span class="font-mono text-[11px] text-g-9">{{ (r as any).trigger || 'manual' }}</span>
+        <span class="font-mono text-[11px] text-g-8 tabular-nums">{{ fmtAgo(r.started_at) }}</span>
       </div>
     </div>
 
-    <!-- Infinite scroll sentinel -->
     <div ref="sentinel" class="h-1" />
-
-    <!-- Initial loading -->
     <div v-if="loading && executions.length === 0" class="flex items-center justify-center py-16">
       <div class="w-5 h-5 border-2 border-g-7 border-t-g-12 rounded-full animate-spin" />
     </div>

@@ -5,26 +5,35 @@ import { useI18n } from 'vue-i18n'
 import { useWorkflowApi, type Graph, type Execution } from '@/composables/useWorkflowApi'
 import { useGlobalEvents } from '@/composables/useGlobalEvents'
 import { useRunTrigger } from '@/composables/useRunTrigger'
+import { fmtDur, fmtAgo, statusDot } from '@/composables/useFormat'
+import { useStepInspector } from '@/composables/useStepInspector'
+import StatusBadge from '@/components/primitives/StatusBadge.vue'
+import Icon from '@/components/primitives/Icon.vue'
+import Kbd from '@/components/primitives/Kbd.vue'
+import WorkflowDAGCustom from '@/components/WorkflowDAGCustom.vue'
 
 const { t } = useI18n()
-
 const router = useRouter()
 const api = useWorkflowApi()
-const { workflowReady, workflowName, workflowParams } = useRunTrigger()
+const { showRunDialog, workflowReady, workflowName, workflowParams } = useRunTrigger()
+const stepInspector = useStepInspector()
 
 const workflow = ref<Record<string, unknown> | null>(null)
 const graph = ref<Graph | null>(null)
 const executions = ref<Execution[]>([])
+const stepMetrics = ref<Record<string, { total_executions: number; success_count: number; failure_count: number; avg_duration_ms: number }>>({})
 
 async function load() {
-  const [wf, gr, ex] = await Promise.all([
+  const [wf, gr, ex, sm] = await Promise.all([
     api.getWorkflow().catch(() => null),
     api.getWorkflowGraph().catch(() => null),
     api.listExecutions().then(r => r.items).catch(() => [] as Execution[]),
+    api.getAllStepMetrics().catch(() => ({})),
   ])
   if (wf) workflow.value = wf
   if (gr) graph.value = gr
   executions.value = ex
+  stepMetrics.value = sm
   if (wf) {
     workflowReady.value = true
     workflowName.value = (wf as any).name || ''
@@ -34,7 +43,6 @@ async function load() {
 
 onMounted(load)
 
-// Global SSE with step tracking (hydrates from /api/workflow/activity on mount)
 const { stepCounts, sysMetrics } = useGlobalEvents(() => {
   api.listExecutions().then(r => { executions.value = r.items }).catch(() => {})
 })
@@ -76,33 +84,51 @@ watch(nextRunLabel, (v) => {
   }
 })
 
-// Global metrics computed from executions
 const metrics = computed(() => {
   const all = executions.value
   const total = all.length
   const success = all.filter(e => e.status === 'success').length
   const failed = all.filter(e => e.status === 'failed').length
   const running = all.filter(e => e.status === 'running' || e.status === 'waiting').length
-
-  let totalMs = 0
-  let counted = 0
+  let totalMs = 0, counted = 0
   for (const e of all) {
     if (e.finished_at && e.started_at) {
       totalMs += new Date(e.finished_at).getTime() - new Date(e.started_at).getTime()
       counted++
     }
   }
-  const avgMs = counted > 0 ? Math.round(totalMs / counted) : 0
-
-  return { total, success, failed, running, avgMs }
+  return { total, success, failed, running, avgMs: counted > 0 ? Math.round(totalMs / counted) : 0 }
 })
 
-function fmtMs(ms: number) {
-  if (ms < 1000) return ms + 'ms'
-  return (ms / 1000).toFixed(1) + 's'
-}
+const successPct = computed(() => metrics.value.total > 0 ? ((metrics.value.success / metrics.value.total) * 100).toFixed(1) : '0')
+const failPct = computed(() => metrics.value.total > 0 ? ((metrics.value.failed / metrics.value.total) * 100).toFixed(1) : '0')
 
-// System metrics via SSE (pushed by backend every 1s)
+// Pipeline DAG preview: reflect the latest run only.
+//
+// Steps absent from latest.steps are intentionally left unset (pending). We
+// used to fall back to historical metrics here, but that painted not-yet-run
+// steps as success during an in-progress run, which is misleading.
+const pipelineStatuses = computed<Record<string, string>>(() => {
+  const out: Record<string, string> = {}
+  const latest = executions.value[0]
+  if (latest?.steps) {
+    for (const [id, s] of Object.entries(latest.steps)) {
+      if (s.status) out[id] = s.status
+    }
+  }
+  return out
+})
+
+const pipelineDurations = computed<Record<string, number>>(() => {
+  const out: Record<string, number> = {}
+  for (const id in stepMetrics.value) {
+    const m = stepMetrics.value[id]
+    if (m.avg_duration_ms > 0) out[id] = m.avg_duration_ms
+  }
+  return out
+})
+
+// System metrics history for sparklines
 const MAX_HISTORY = 30
 const cpuHistory = ref<number[]>([])
 const memHistory = ref<number[]>([])
@@ -125,18 +151,24 @@ watch(sysMetrics, (m) => {
   pushHistory(netRxHistory.value, rxDelta)
 })
 
-function sparklinePath(data: number[], w: number, h: number): string {
+function sparkAreaPath(data: number[], w = 200, h = 36): string {
   if (data.length < 2) return ''
   const max = Math.max(...data, 1)
   const min = Math.min(...data, 0)
   const range = max - min || 1
-  const stepX = w / (MAX_HISTORY - 1)
-  const points = data.map((v, i) => {
-    const x = i * stepX
-    const y = h - ((v - min) / range) * h
-    return `${x.toFixed(1)},${y.toFixed(1)}`
-  })
+  const stepX = w / (Math.max(data.length - 1, 1))
+  const points = data.map((v, i) => `${(i * stepX).toFixed(1)},${(h - ((v - min) / range) * h).toFixed(1)}`)
   return `M${points.join(' L')} L${((data.length - 1) * stepX).toFixed(1)},${h} L0,${h} Z`
+}
+
+function sparkLinePath(data: number[], w = 200, h = 36): string {
+  if (data.length < 2) return ''
+  const max = Math.max(...data, 1)
+  const min = Math.min(...data, 0)
+  const range = max - min || 1
+  const stepX = w / (Math.max(data.length - 1, 1))
+  const points = data.map((v, i) => `${(i * stepX).toFixed(1)},${(h - ((v - min) / range) * h).toFixed(1)}`)
+  return `M${points.join(' L')}`
 }
 
 function fmtBytes(bytes: number): string {
@@ -160,44 +192,27 @@ function cpuColor(pct: number): string {
   return 'text-emerald-400'
 }
 
-function dot(s: string) {
-  if (s === 'success') return 'bg-emerald-400'
-  if (s === 'failed') return 'bg-red-400'
-  if (s === 'cancelled') return 'bg-g-9'
-  if (s === 'running') return 'bg-g-12 animate-pulse'
-  if (s === 'waiting') return 'bg-amber-400 animate-pulse'
-  return 'bg-g-8'
+function execDuration(e: Execution): number | null {
+  if (e.finished_at && e.started_at) return new Date(e.finished_at).getTime() - new Date(e.started_at).getTime()
+  return null
 }
-function badge(s: string) {
-  if (s === 'success') return 'bg-emerald-400/15 text-emerald-400'
-  if (s === 'failed') return 'bg-red-400/15 text-red-400'
-  if (s === 'cancelled') return 'bg-g-5 text-g-9'
-  if (s === 'running') return 'bg-amber-400/15 text-amber-400'
-  if (s === 'waiting') return 'bg-amber-400/15 text-amber-400'
-  return 'bg-g-5 text-g-9'
+
+function paramsLabel(e: Execution): string {
+  if (!e.params || Object.keys(e.params).length === 0) return ''
+  return Object.entries(e.params).map(([k, v]) => `${k}=${v}`).join(' ')
 }
-function stepDot(s: string) {
-  if (s === 'success') return 'bg-emerald-400'
-  if (s === 'failed') return 'bg-red-400'
-  if (s === 'running') return 'bg-g-11 animate-pulse'
-  if (s === 'waiting') return 'bg-amber-400 animate-pulse'
-  if (s === 'skipped') return 'bg-g-6'
-  return 'bg-g-5'
-}
-function ago(d: string) {
-  if (!d) return ''
-  const s = Math.floor((Date.now() - new Date(d).getTime()) / 1000)
-  if (s < 5) return 'now'
-  if (s < 60) return s + 's'
-  if (s < 3600) return Math.floor(s / 60) + 'm'
-  if (s < 86400) return Math.floor(s / 3600) + 'h'
-  return Math.floor(s / 86400) + 'd'
+
+const tags = computed<string[]>(() => ((workflow.value as any)?.tags) || [])
+const trigger = computed(() => (workflow.value as any)?.trigger)
+
+function openRun() {
+  if (workflowReady.value) showRunDialog.value = true
 }
 </script>
 
 <template>
-  <div v-if="workflow">
-    <!-- Shared sparkline gradient (transparent top → 10% bottom) -->
+  <div v-if="workflow" class="px-8 py-6">
+    <!-- Sparkline gradient defs -->
     <svg class="absolute w-0 h-0 overflow-hidden text-g-12" aria-hidden="true">
       <defs>
         <linearGradient id="spark-grad" x1="0" y1="0" x2="0" y2="1">
@@ -208,211 +223,194 @@ function ago(d: string) {
     </svg>
 
     <!-- Header -->
-    <div class="flex items-start justify-between mb-6">
+    <div class="flex items-start justify-between mb-5">
       <div>
-        <h1 class="text-lg font-semibold text-g-14 mb-1 tracking-tight">{{ workflow.name }}</h1>
-        <p v-if="workflow.description" class="text-sm text-g-10 leading-relaxed">{{ workflow.description }}</p>
+        <div class="flex items-center gap-3 mb-1.5">
+          <h1 class="text-[22px] font-semibold text-g-14 tracking-tight">{{ workflow.name }}</h1>
+          <StatusBadge v-if="totalActive > 0" status="running" />
+          <StatusBadge v-else status="success" />
+        </div>
+        <p v-if="workflow.description" class="text-[13px] text-g-10">{{ workflow.description }}</p>
+        <div class="flex flex-wrap items-center gap-2 mt-3">
+          <span
+            v-for="tag in tags"
+            :key="tag"
+            class="text-[11px] font-mono px-2 py-0.5 rounded bg-g-3 border border-g-5 text-g-10"
+          >{{ tag }}</span>
+          <span
+            v-if="trigger?.http"
+            class="text-[11px] font-mono px-2 py-0.5 rounded bg-g-3 border border-g-5 text-g-10 flex items-center gap-1.5"
+          >
+            <Icon name="globe" class-name="w-3 h-3 text-g-8" />
+            {{ trigger.http.method }} {{ trigger.http.path }}
+          </span>
+          <span
+            v-else-if="trigger?.webhook"
+            class="text-[11px] font-mono px-2 py-0.5 rounded bg-g-3 border border-g-5 text-g-10 flex items-center gap-1.5"
+          >
+            <Icon name="bolt" class-name="w-3 h-3 text-g-8" />
+            webhook {{ trigger.webhook.path }}
+          </span>
+          <span
+            v-else-if="trigger?.schedule"
+            class="text-[11px] font-mono px-2 py-0.5 rounded bg-g-3 border border-g-5 text-g-10 flex items-center gap-1.5"
+          >
+            <Icon name="history" class-name="w-3 h-3 text-g-8" />
+            cron · {{ trigger.schedule.cron }}
+          </span>
+          <span
+            v-if="nextRunLabel"
+            class="text-[11px] font-mono text-g-9 flex items-center gap-1.5"
+          >
+            <Icon name="history" class-name="w-3 h-3 text-g-8" />
+            {{ nextRunLabel }}
+          </span>
+          <span
+            v-if="(workflow as any).recovery"
+            class="text-[11px] font-mono text-emerald-400 flex items-center gap-1.5"
+          >
+            <span class="w-1.5 h-1.5 bg-emerald-400 rounded-full pulse-dot" />
+            recovery on
+          </span>
+        </div>
+      </div>
+      <div class="flex items-center gap-2">
+        <button
+          @click="openRun"
+          :disabled="!workflowReady"
+          class="h-8 px-3 rounded text-[12px] font-medium bg-g-14 text-g-1 hover:bg-g-15 disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
+        >
+          <Icon name="play" class-name="w-3.5 h-3.5" />
+          {{ t('nav.run') }}
+          <span class="ml-1 flex gap-0.5"><Kbd>⌘</Kbd><Kbd>↵</Kbd></span>
+        </button>
       </div>
     </div>
 
-    <!-- Tags + Trigger + Active count -->
-    <div class="flex flex-wrap items-center gap-2 mb-5">
-      <span
-        v-for="tag in (workflow.tags as string[])"
-        :key="tag"
-        class="text-[12px] px-2.5 py-1 rounded-md bg-g-4 text-g-9 font-mono"
-      >
-        {{ tag }}
-      </span>
-      <span
-        v-if="(workflow as any).trigger?.http"
-        class="text-[12px] font-mono font-medium text-g-11 bg-g-5 px-2.5 py-1 rounded-md flex items-center gap-1.5"
-      >
-        <svg class="w-3 h-3 text-g-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101" />
-          <path stroke-linecap="round" stroke-linejoin="round" d="M10.172 13.828a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.102 1.101" />
+    <!-- Agent metrics row -->
+    <h2 class="text-[11px] font-semibold uppercase tracking-wider text-g-9 mb-2.5">{{ t('dashboard.systemMetrics') }}</h2>
+    <div v-if="sysMetrics?.available !== false" class="grid grid-cols-6 gap-2 mb-5">
+      <div class="bg-g-2 border border-g-5 rounded p-3 relative overflow-hidden">
+        <svg v-if="cpuHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2 text-g-12" preserveAspectRatio="none" viewBox="0 0 200 36">
+          <path :d="sparkAreaPath(cpuHistory, 200, 36)" class="sparkline-fill" />
+          <path :d="sparkLinePath(cpuHistory, 200, 36)" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3" />
         </svg>
-        {{ (workflow as any).trigger.http.method }} {{ (workflow as any).trigger.http.path }}
-      </span>
-      <span
-        v-else-if="(workflow as any).trigger?.webhook"
-        class="text-[12px] font-mono font-medium text-g-11 bg-g-5 px-2.5 py-1 rounded-md flex items-center gap-1.5"
-      >
-        <svg class="w-3 h-3 text-g-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101" />
-          <path stroke-linecap="round" stroke-linejoin="round" d="M10.172 13.828a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.102 1.101" />
-        </svg>
-        webhook {{ (workflow as any).trigger.webhook.path }}
-      </span>
-      <span
-        v-else-if="(workflow as any).trigger?.schedule"
-        class="text-[12px] font-mono font-medium text-g-11 bg-g-5 px-2.5 py-1 rounded-md flex items-center gap-1.5"
-      >
-        <svg class="w-3 h-3 text-g-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="10" />
-          <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6l4 2" />
-        </svg>
-        cron {{ (workflow as any).trigger.schedule.cron }}
-      </span>
-      <span
-        v-if="nextRunLabel"
-        class="text-[12px] font-mono text-g-9 flex items-center gap-1.5"
-      >
-        <svg class="w-3 h-3 text-g-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
-        {{ nextRunLabel }}
-      </span>
-      <span v-if="totalActive > 0" class="ml-2 flex items-center gap-1.5 text-[12px] font-mono text-g-12">
-        <span class="w-1.5 h-1.5 bg-g-12 rounded-full animate-pulse" />
-        {{ t('dashboard.active', { count: totalActive }) }}
-      </span>
-    </div>
-
-    <!-- System metrics -->
-    <div v-if="sysMetrics" class="mb-6">
-      <h2 class="text-sm font-medium text-g-12 mb-3">{{ t('dashboard.systemMetrics') }}</h2>
-      <div v-if="sysMetrics.available" class="grid grid-cols-5 gap-3">
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden anim-enter">
-          <svg v-if="cpuHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" preserveAspectRatio="none">
-            <path :d="sparklinePath(cpuHistory, 200, 80)" fill="url(#spark-grad)" />
-          </svg>
-          <div class="relative">
-            <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.cpu') }}</p>
-            <p :class="['text-2xl font-semibold font-mono tabular-nums', cpuColor(sysMetrics.cpu_percent)]">{{ sysMetrics.cpu_percent?.toFixed(1) ?? '0' }}%</p>
-          </div>
-        </div>
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden anim-enter delay-1">
-          <svg v-if="memHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" preserveAspectRatio="none">
-            <path :d="sparklinePath(memHistory, 200, 80)" fill="url(#spark-grad)" />
-          </svg>
-          <div class="relative">
-            <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.memory') }}</p>
-            <p class="text-2xl font-semibold text-g-14 font-mono tabular-nums">{{ fmtBytes(sysMetrics.memory_bytes) }}</p>
-          </div>
-        </div>
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden anim-enter delay-2">
-          <svg v-if="goroutineHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" preserveAspectRatio="none">
-            <path :d="sparklinePath(goroutineHistory, 200, 80)" fill="url(#spark-grad)" />
-          </svg>
-          <div class="relative">
-            <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.goroutines') }}</p>
-            <p class="text-2xl font-semibold text-g-14 font-mono tabular-nums">{{ sysMetrics.goroutines }}</p>
-          </div>
-        </div>
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden anim-enter delay-3">
-          <svg v-if="netRxHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" preserveAspectRatio="none">
-            <path :d="sparklinePath(netRxHistory, 200, 80)" fill="url(#spark-grad)" />
-          </svg>
-          <div class="relative">
-            <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.network') }}</p>
-            <p class="text-base font-semibold text-g-14 font-mono tabular-nums leading-tight">
-              <span class="text-g-9">&darr;</span> {{ fmtBytes(sysMetrics.net_rx_bytes) }}
-              <br>
-              <span class="text-g-9">&uarr;</span> {{ fmtBytes(sysMetrics.net_tx_bytes) }}
-            </p>
-          </div>
-        </div>
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card">
-          <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.uptime') }}</p>
-          <p class="text-2xl font-semibold text-g-14 font-mono tabular-nums">{{ fmtUptime(sysMetrics.uptime_s) }}</p>
+        <div class="relative">
+          <p class="text-[10px] uppercase tracking-wider text-g-8 mb-1 font-mono">cpu</p>
+          <p :class="['text-[18px] font-semibold font-mono tabular-nums', cpuColor(sysMetrics?.cpu_percent || 0)]">{{ sysMetrics?.cpu_percent?.toFixed(1) ?? '0' }}%</p>
         </div>
       </div>
-      <div v-else class="grid grid-cols-5 gap-3">
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden anim-enter">
-          <svg v-if="goroutineHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" preserveAspectRatio="none">
-            <path :d="sparklinePath(goroutineHistory, 200, 80)" fill="url(#spark-grad)" />
-          </svg>
-          <div class="relative">
-            <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.goroutines') }}</p>
-            <p class="text-2xl font-semibold text-g-14 font-mono tabular-nums">{{ sysMetrics.goroutines }}</p>
-          </div>
+      <div class="bg-g-2 border border-g-5 rounded p-3 relative overflow-hidden">
+        <svg v-if="memHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2 text-g-12" preserveAspectRatio="none" viewBox="0 0 200 36">
+          <path :d="sparkAreaPath(memHistory, 200, 36)" class="sparkline-fill" />
+          <path :d="sparkLinePath(memHistory, 200, 36)" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3" />
+        </svg>
+        <div class="relative">
+          <p class="text-[10px] uppercase tracking-wider text-g-8 mb-1 font-mono">memory</p>
+          <p class="text-[18px] font-semibold text-g-14 font-mono tabular-nums">{{ sysMetrics ? fmtBytes(sysMetrics.memory_bytes) : '—' }}</p>
         </div>
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card relative overflow-hidden anim-enter delay-1">
-          <svg v-if="memHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2" preserveAspectRatio="none">
-            <path :d="sparklinePath(memHistory, 200, 80)" fill="url(#spark-grad)" />
-          </svg>
-          <div class="relative">
-            <p class="text-xs text-g-9 mb-1.5">Heap</p>
-            <p class="text-2xl font-semibold text-g-14 font-mono tabular-nums">{{ sysMetrics.heap_mb?.toFixed(1) ?? '0' }} MB</p>
-          </div>
+      </div>
+      <div class="bg-g-2 border border-g-5 rounded p-3 relative overflow-hidden">
+        <svg v-if="goroutineHistory.length > 1" class="absolute bottom-0 left-0 w-full h-1/2 text-g-12" preserveAspectRatio="none" viewBox="0 0 200 36">
+          <path :d="sparkAreaPath(goroutineHistory, 200, 36)" class="sparkline-fill" />
+          <path :d="sparkLinePath(goroutineHistory, 200, 36)" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3" />
+        </svg>
+        <div class="relative">
+          <p class="text-[10px] uppercase tracking-wider text-g-8 mb-1 font-mono">goroutines</p>
+          <p class="text-[18px] font-semibold text-g-14 font-mono tabular-nums">{{ sysMetrics?.goroutines ?? '—' }}</p>
         </div>
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card anim-enter delay-2">
-          <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.uptime') }}</p>
-          <p class="text-2xl font-semibold text-g-14 font-mono tabular-nums">{{ fmtUptime(sysMetrics.uptime_s) }}</p>
+      </div>
+      <div class="bg-g-2 border border-g-5 rounded p-3 relative overflow-hidden">
+        <div class="relative">
+          <p class="text-[10px] uppercase tracking-wider text-g-8 mb-1 font-mono">net rx</p>
+          <p class="text-[18px] font-semibold text-g-14 font-mono tabular-nums">{{ sysMetrics ? fmtBytes(sysMetrics.net_rx_bytes) : '—' }}</p>
+          <p v-if="sysMetrics" class="text-[10px] text-g-8 font-mono mt-0.5">↑ {{ fmtBytes(sysMetrics.net_tx_bytes) }}</p>
         </div>
-        <div class="col-span-2 bg-g-2 border border-g-5 rounded-lg p-4 flex items-center lm-card anim-enter delay-3">
-          <span class="text-sm text-g-8">{{ t('dashboard.metricsUnavailable') }}</span>
-        </div>
+      </div>
+      <div class="bg-g-2 border border-g-5 rounded p-3">
+        <p class="text-[10px] uppercase tracking-wider text-g-8 mb-1 font-mono">uptime</p>
+        <p class="text-[18px] font-semibold text-g-14 font-mono tabular-nums">{{ sysMetrics ? fmtUptime(sysMetrics.uptime_s) : '—' }}</p>
+      </div>
+      <div class="bg-g-2 border border-g-5 rounded p-3">
+        <p class="text-[10px] uppercase tracking-wider text-g-8 mb-1 font-mono">version</p>
+        <p class="text-[18px] font-semibold text-g-14 font-mono tabular-nums">agent</p>
       </div>
     </div>
 
-    <!-- Workflow metrics -->
-    <div class="mb-6">
-      <h2 class="text-sm font-medium text-g-12 mb-3">{{ t('dashboard.workflowMetrics') }}</h2>
-      <div class="grid grid-cols-5 gap-3">
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card">
-          <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.total') }}</p>
-          <p class="text-2xl font-semibold text-g-14 font-mono tabular-nums">{{ metrics.total }}</p>
+    <!-- Workflow metrics row -->
+    <h2 class="text-[11px] font-semibold uppercase tracking-wider text-g-9 mb-2.5">{{ t('dashboard.workflowMetrics') }} · last 30 days</h2>
+    <div class="grid grid-cols-5 gap-2 mb-5">
+      <div class="bg-g-2 border border-g-5 rounded p-3">
+        <p class="text-[10px] uppercase tracking-wider text-g-8 mb-1 font-mono">{{ t('dashboard.total') }}</p>
+        <p class="text-[20px] font-semibold text-g-14 font-mono tabular-nums">{{ metrics.total }}</p>
+      </div>
+      <div class="bg-g-2 border border-g-5 rounded p-3">
+        <p class="text-[10px] uppercase tracking-wider text-g-8 mb-1 font-mono">{{ t('dashboard.success') }}</p>
+        <p class="text-[20px] font-semibold text-emerald-400 font-mono tabular-nums">{{ metrics.success }}</p>
+        <p class="text-[10px] text-g-8 font-mono mt-0.5">{{ successPct }}%</p>
+      </div>
+      <div class="bg-g-2 border border-g-5 rounded p-3">
+        <p class="text-[10px] uppercase tracking-wider text-g-8 mb-1 font-mono">{{ t('dashboard.failed') }}</p>
+        <p class="text-[20px] font-semibold text-red-400 font-mono tabular-nums">{{ metrics.failed }}</p>
+        <p class="text-[10px] text-g-8 font-mono mt-0.5">{{ failPct }}%</p>
+      </div>
+      <div class="bg-g-2 border border-g-5 rounded p-3">
+        <p class="text-[10px] uppercase tracking-wider text-g-8 mb-1 font-mono">{{ t('dashboard.running') }}</p>
+        <div class="flex items-baseline gap-1.5">
+          <p class="text-[20px] font-semibold text-amber-400 font-mono tabular-nums">{{ metrics.running }}</p>
+          <span v-if="metrics.running > 0" class="w-1.5 h-1.5 bg-amber-400 rounded-full pulse-dot" />
         </div>
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card">
-          <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.success') }}</p>
-          <p class="text-2xl font-semibold text-emerald-400 font-mono tabular-nums">{{ metrics.success }}</p>
-        </div>
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card">
-          <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.failed') }}</p>
-          <p class="text-2xl font-semibold text-red-400 font-mono tabular-nums">{{ metrics.failed }}</p>
-        </div>
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card">
-          <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.running') }}</p>
-          <div class="flex items-baseline gap-1.5">
-            <p class="text-2xl font-semibold text-g-14 font-mono tabular-nums">{{ metrics.running }}</p>
-            <span v-if="metrics.running > 0" class="w-1.5 h-1.5 bg-g-12 rounded-full animate-pulse" />
-          </div>
-        </div>
-        <div class="bg-g-2 border border-g-5 rounded-lg p-4 lm-card">
-          <p class="text-xs text-g-9 mb-1.5">{{ t('dashboard.avgDuration') }}</p>
-          <p class="text-2xl font-semibold text-g-14 font-mono tabular-nums">{{ metrics.avgMs ? fmtMs(metrics.avgMs) : '-' }}</p>
-        </div>
+        <p v-if="metrics.running > 0" class="text-[10px] text-g-8 font-mono mt-0.5">live</p>
+      </div>
+      <div class="bg-g-2 border border-g-5 rounded p-3">
+        <p class="text-[10px] uppercase tracking-wider text-g-8 mb-1 font-mono">{{ t('dashboard.avgDuration') }}</p>
+        <p class="text-[20px] font-semibold text-g-14 font-mono tabular-nums">{{ metrics.avgMs ? fmtDur(metrics.avgMs) : '—' }}</p>
       </div>
     </div>
 
-    <!-- Recent executions -->
-    <div class="flex items-baseline justify-between mb-3">
-      <h2 class="text-sm font-medium text-g-12">{{ t('dashboard.recentExecs') }}</h2>
-      <RouterLink to="/executions" class="text-xs text-g-9 hover:text-g-12 transition-colors">{{ t('dashboard.viewAll') }}</RouterLink>
+    <!-- Pipeline preview (DAG) -->
+    <div v-if="graph" class="flex items-baseline justify-between mb-2.5">
+      <h2 class="text-[11px] font-semibold uppercase tracking-wider text-g-9">Pipeline</h2>
+      <RouterLink to="/executions" class="text-[11px] text-g-9 hover:text-g-13 font-mono">open history →</RouterLink>
+    </div>
+    <div v-if="graph" class="bg-g-2 border border-g-5 rounded p-3 mb-5 overflow-hidden">
+      <WorkflowDAGCustom
+        :graph="graph"
+        :step-statuses="pipelineStatuses"
+        :step-durations="pipelineDurations"
+        :show-stages="true"
+        :height="320"
+        @node-click="(id: string) => stepInspector.inspect(id)"
+      />
     </div>
 
-    <div v-if="executions.length === 0" class="bg-g-2 border border-g-5 rounded-lg py-10 text-center text-g-9 text-sm lm-card">
+    <!-- Recent runs table -->
+    <div class="flex items-baseline justify-between mb-2.5">
+      <h2 class="text-[11px] font-semibold uppercase tracking-wider text-g-9">{{ t('dashboard.recentExecs') }}</h2>
+      <RouterLink to="/executions" class="text-[11px] text-g-9 hover:text-g-13 font-mono">{{ t('dashboard.viewAll') }} →</RouterLink>
+    </div>
+    <div v-if="executions.length === 0" class="bg-g-2 border border-g-5 rounded py-10 text-center text-g-9 text-sm">
       {{ t('dashboard.noExecs') }}
     </div>
-    <div v-else class="bg-g-2 border border-g-5 rounded-lg overflow-hidden lm-card">
+    <div v-else class="bg-g-2 border border-g-5 rounded overflow-hidden">
+      <div class="grid grid-cols-[20px_140px_90px_80px_1fr_80px_80px] gap-3 px-3 py-2 border-t border-g-4 text-[10px] uppercase tracking-wider text-g-8 font-mono">
+        <div></div><div>id</div><div>status</div><div>duration</div><div>params</div><div>trigger</div><div>started</div>
+      </div>
       <div
-        v-for="e in executions.slice(0, 10)" :key="e.id"
-        @click="router.push({ name: 'execution', params: { id: e.id } })"
-        class="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-g-3 transition-colors border-b border-g-5 last:border-b-0"
+        v-for="r in executions.slice(0, 8)"
+        :key="r.id"
+        @click="router.push({ name: 'execution', params: { id: r.id } })"
+        class="grid grid-cols-[20px_140px_90px_80px_1fr_80px_80px] gap-3 px-3 py-2 hover:bg-g-3 cursor-pointer border-t border-g-4 items-center"
       >
-        <span :class="['w-[7px] h-[7px] rounded-full flex-shrink-0', dot(e.status)]" />
-        <span :class="['text-[12px] font-mono px-2 py-0.5 rounded', badge(e.status)]">{{ e.status }}</span>
-        <template v-if="e.steps && Object.keys(e.steps).length > 0 && graph">
-          <div class="flex items-center gap-1.5 ml-1">
-            <div class="flex gap-[2px]">
-              <span
-                v-for="n in graph.nodes"
-                :key="n.id"
-                v-show="e.steps[n.id]"
-                :class="['w-[12px] h-[4px] rounded-sm', stepDot(e.steps[n.id]?.status || 'pending')]"
-                :title="`${n.id}: ${e.steps[n.id]?.status || 'pending'}`"
-              />
-            </div>
-          </div>
-        </template>
-        <span class="flex-1" />
-        <span class="text-[12px] text-g-8 font-mono tabular-nums">{{ ago(e.started_at) }}</span>
-        <span class="text-[12px] text-g-7 font-mono">{{ e.id.slice(0, 8) }}</span>
+        <span :class="['w-1.5 h-1.5 rounded-full', statusDot(r.status)]" />
+        <span class="font-mono text-[12px] text-g-12 truncate">{{ r.id }}</span>
+        <StatusBadge :status="r.status" />
+        <span class="font-mono text-[12px] text-g-11 tabular-nums">{{ execDuration(r) ? fmtDur(execDuration(r)!) : '— running —' }}</span>
+        <span class="font-mono text-[11px] text-g-9 truncate">{{ paramsLabel(r) }}</span>
+        <span class="font-mono text-[11px] text-g-9">{{ (r as any).trigger || 'manual' }}</span>
+        <span class="font-mono text-[11px] text-g-8 tabular-nums">{{ fmtAgo(r.started_at) }}</span>
       </div>
     </div>
-
   </div>
 
   <div v-else-if="api.loading.value" class="flex items-center justify-center py-32">

@@ -289,6 +289,29 @@ func (e *Executor) resolveParams(wf *parser.Workflow, params map[string]any) (ma
 		}
 	}
 
+	ctx := map[string]any{"params": resolved}
+
+	for _, p := range wf.Params {
+		if p.Default == nil {
+			continue
+		}
+
+		if _, ok := params[p.Name]; ok {
+			continue
+		}
+
+		s, ok := resolved[p.Name].(string)
+		if !ok || !strings.Contains(s, "{{") {
+			continue
+		}
+
+		val, err := e.eval.Eval(strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(s, "{{"), "}}")), ctx)
+		if err == nil {
+			resolved[p.Name] = val
+			ctx["params"] = resolved
+		}
+	}
+
 	for _, p := range wf.Params {
 		if p.Pattern == "" {
 			continue
@@ -813,6 +836,7 @@ func (e *Executor) newPrintEmitter(stepID string, execCtx *runtime.ExecutionCont
 			ExecutionID: execCtx.ExecutionID,
 			StepID:      stepID,
 			Message:     msg,
+			Data:        map[string]any{"print": true},
 		})
 	}
 }

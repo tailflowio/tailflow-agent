@@ -39,6 +39,8 @@ export default {
         emerald: { 400: 'rgb(var(--c-green) / <alpha-value>)' },
         red: { 400: 'rgb(var(--c-red) / <alpha-value>)' },
         amber: { 400: 'rgb(var(--c-amber) / <alpha-value>)' },
+        violet: { 400: 'rgb(var(--c-violet) / <alpha-value>)' },
+        orange: { 400: 'rgb(var(--c-orange) / <alpha-value>)' },
       },
     },
   },

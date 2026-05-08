@@ -1,4 +1,4 @@
-package export
+package saas
 
 import (
 	"context"
@@ -50,7 +50,7 @@ func (s *ExporterCoverageSuite) TestNew_DefaultIntervals() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: "http://localhost",
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -68,7 +68,7 @@ func (s *ExporterCoverageSuite) TestNew_CustomIntervals() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL:         "http://localhost",
 		EventBus:          bus,
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -95,7 +95,7 @@ func (s *ExporterCoverageSuite) TestShutdown_WaitsForGoroutines() {
 	defer bus.Close()
 
 	cfg := newTestConfig(srv.URL, bus)
-	exp := New(cfg)
+	exp := NewExporter(cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	exp.Start(ctx)
@@ -133,7 +133,7 @@ func (s *ExporterCoverageSuite) TestTryRegister_InvalidJSON() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -153,7 +153,7 @@ func (s *ExporterCoverageSuite) TestTryRegister_EmptyAgentID() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -172,7 +172,7 @@ func (s *ExporterCoverageSuite) TestTryRegister_HTTPError() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -201,7 +201,7 @@ func (s *ExporterCoverageSuite) TestRegister_ContextCancelDuringBackoff() {
 	registerInitialBackoff = 10 * time.Millisecond
 	registerMaxBackoff = 50 * time.Millisecond
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -264,7 +264,7 @@ func (s *ExporterCoverageSuite) TestRegister_BackoffCapsAtMax() {
 	registerInitialBackoff = 5 * time.Millisecond
 	registerMaxBackoff = 20 * time.Millisecond
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -286,7 +286,7 @@ func (s *ExporterCoverageSuite) TestFlushBatch_EmptyBatch() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: "http://localhost",
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -301,7 +301,7 @@ func (s *ExporterCoverageSuite) TestFlushBatch_NotRegistered() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: "http://localhost",
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -325,7 +325,7 @@ func (s *ExporterCoverageSuite) TestFlushBatch_IngestError() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -364,7 +364,7 @@ func (s *ExporterCoverageSuite) TestFlushBatch_Chunking() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -413,7 +413,7 @@ func (s *ExporterCoverageSuite) TestFlushBatch_ChunkingSecondChunkFails() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -448,7 +448,7 @@ func (s *ExporterCoverageSuite) TestFinalFlush_DrainsChannel() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -480,7 +480,7 @@ func (s *ExporterCoverageSuite) TestFinalFlush_SkipsMetricsEvents() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -506,7 +506,7 @@ func (s *ExporterCoverageSuite) TestFinalFlush_EmptyBatchNoOp() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: "http://localhost",
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -529,7 +529,7 @@ func (s *ExporterCoverageSuite) TestFinalFlush_ClosedChannel() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -557,7 +557,7 @@ func (s *ExporterCoverageSuite) TestAwaitRegistrationThenFlush_AlreadyRegistered
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -580,7 +580,7 @@ func (s *ExporterCoverageSuite) TestAwaitRegistrationThenFlush_Timeout() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: "http://localhost:0",
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -617,7 +617,7 @@ func (s *ExporterCoverageSuite) TestAwaitRegistrationThenFlush_RegistersDuringWa
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -661,7 +661,7 @@ func (s *ExporterCoverageSuite) TestBatchLoop_BufferOverflow() {
 
 	cfg := newTestConfig(srv.URL, bus)
 	cfg.FlushInterval = 10 * time.Second // long interval so we can fill buffer
-	exp := New(cfg)
+	exp := NewExporter(cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	exp.Start(ctx)
@@ -703,7 +703,7 @@ func (s *ExporterCoverageSuite) TestBatchLoop_ChannelClose() {
 	bus := event.NewBus()
 
 	cfg := newTestConfig(srv.URL, bus)
-	exp := New(cfg)
+	exp := NewExporter(cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -748,7 +748,7 @@ func (s *ExporterCoverageSuite) TestBatchLoop_IntervalChange() {
 
 	cfg := newTestConfig(srv.URL, bus)
 	cfg.FlushInterval = 50 * time.Millisecond
-	exp := New(cfg)
+	exp := NewExporter(cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -792,7 +792,7 @@ func (s *ExporterCoverageSuite) TestBatchLoop_MetricsEventStored() {
 	defer bus.Close()
 
 	cfg := newTestConfig(srv.URL, bus)
-	exp := New(cfg)
+	exp := NewExporter(cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -828,7 +828,7 @@ func (s *ExporterCoverageSuite) TestApplyServerConfig_EmptyBody() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: "http://localhost",
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -845,7 +845,7 @@ func (s *ExporterCoverageSuite) TestApplyServerConfig_InvalidJSON() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: "http://localhost",
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -859,7 +859,7 @@ func (s *ExporterCoverageSuite) TestApplyServerConfig_NoChanges() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: "http://localhost",
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -875,7 +875,7 @@ func (s *ExporterCoverageSuite) TestApplyServerConfig_SameValues() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL:         "http://localhost",
 		EventBus:          bus,
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -898,7 +898,7 @@ func (s *ExporterCoverageSuite) TestApplyServerConfig_OnlyHeartbeatChanges() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL:         "http://localhost",
 		EventBus:          bus,
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -921,7 +921,7 @@ func (s *ExporterCoverageSuite) TestApplyServerConfig_OnlyFlushChanges() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL:         "http://localhost",
 		EventBus:          bus,
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -944,7 +944,7 @@ func (s *ExporterCoverageSuite) TestApplyServerConfig_FlushBelowMinimum() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL:     "http://localhost",
 		EventBus:      bus,
 		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -965,7 +965,7 @@ func (s *ExporterCoverageSuite) TestApplyServerConfig_HeartbeatBelowMinimum() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL:         "http://localhost",
 		EventBus:          bus,
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -987,7 +987,7 @@ func (s *ExporterCoverageSuite) TestPost_InvalidURL() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: "://invalid-url",
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -1002,7 +1002,7 @@ func (s *ExporterCoverageSuite) TestPost_UnmarshalablePayload() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: "http://localhost",
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -1018,7 +1018,7 @@ func (s *ExporterCoverageSuite) TestPost_ConnectionError() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: "http://127.0.0.1:1", // port that won't be listening
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -1038,7 +1038,7 @@ func (s *ExporterCoverageSuite) TestPost_Non2xxStatus() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -1061,7 +1061,7 @@ func (s *ExporterCoverageSuite) TestPost_NoAPIKey() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -1085,7 +1085,7 @@ func (s *ExporterCoverageSuite) TestPost_WithAPIKey() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -1107,7 +1107,7 @@ func (s *ExporterCoverageSuite) TestPost_CancelledContext() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -1137,7 +1137,7 @@ func (s *ExporterCoverageSuite) TestFinalFlush_TriggersAwaitRegistration() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -1188,7 +1188,7 @@ func (s *ExporterCoverageSuite) TestBatchLoop_ContextCancelTriggersFinalFlush() 
 
 	cfg := newTestConfig(srv.URL, bus)
 	cfg.FlushInterval = 10 * time.Second // Don't flush via ticker
-	exp := New(cfg)
+	exp := NewExporter(cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	exp.Start(ctx)
@@ -1226,7 +1226,7 @@ func (s *ExporterCoverageSuite) TestFinalFlush_TracksWorkflowStarted() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: srv.URL,
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -1262,7 +1262,7 @@ func (s *ExporterCoverageSuite) TestBatchLoop_OverflowDropsOldest() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL:         srv.URL,
 		EventBus:          bus,
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -1311,7 +1311,7 @@ func (s *ExporterCoverageSuite) TestPost_ReadBodyError() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL: "http://localhost",
 		EventBus:  bus,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -1330,7 +1330,7 @@ func (s *ExporterCoverageSuite) TestApplyServerConfig_IntervalChangeChannelFull(
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(Config{
+	exp := NewExporter(Config{
 		ExportURL:     "http://localhost",
 		EventBus:      bus,
 		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),

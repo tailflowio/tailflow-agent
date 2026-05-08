@@ -32,13 +32,17 @@ params:
     default: "staging"
 env:
   API_URL: "https://api.example.com"
+stages:
+  - name: default
 steps:
   - id: step1
+    stage: default
     action: log
     title: "Log something"
     config:
       message: "hello"
   - id: step2
+    stage: default
     action: exec
     title: "Run command"
     depends_on: [step1]
@@ -77,8 +81,11 @@ trigger:
   http:
     method: POST
     path: /api/users
+stages:
+  - name: default
 steps:
   - id: handle
+    stage: default
     action: js
     config:
       script: "return 'ok'"
@@ -100,8 +107,11 @@ trigger:
     path: /webhooks/github
     secret: "my-secret"
     filter: "trigger.body.ref == 'refs/heads/main'"
+stages:
+  - name: default
 steps:
   - id: deploy
+    stage: default
     action: exec
     config:
       command: ["./deploy.sh"]
@@ -118,8 +128,11 @@ func (s *ParserTestSuite) TestParseBytes_WithOnError() {
 	yaml := `
 version: "2.0"
 name: "error-handling"
+stages:
+  - name: default
 steps:
   - id: deploy
+    stage: default
     action: exec
     config:
       command: ["kubectl", "apply"]
@@ -160,38 +173,50 @@ func (s *ParserTestSuite) TestValidate_NoSteps() {
 }
 
 func (s *ParserTestSuite) TestValidate_MissingStepID() {
-	w := &Workflow{Version: "2.0", Name: "test", Steps: []Step{{Action: "log"}}}
+	w := &Workflow{Version: "2.0", Name: "test",
+		Stages: []Stage{{Name: "default"}},
+		Steps:  []Step{{Stage: "default", Action: "log"}},
+	}
 	err := Validate(w)
 	s.ErrorContains(err, "must have an id")
 }
 
 func (s *ParserTestSuite) TestValidate_DuplicateStepID() {
-	w := &Workflow{Version: "2.0", Name: "test", Steps: []Step{
-		{ID: "s1", Action: "log"},
-		{ID: "s1", Action: "exec"},
-	}}
+	w := &Workflow{Version: "2.0", Name: "test",
+		Stages: []Stage{{Name: "default"}},
+		Steps: []Step{
+			{ID: "s1", Stage: "default", Action: "log"},
+			{ID: "s1", Stage: "default", Action: "exec"},
+		}}
 	err := Validate(w)
 	s.ErrorContains(err, "duplicate step id")
 }
 
 func (s *ParserTestSuite) TestValidate_MissingAction() {
-	w := &Workflow{Version: "2.0", Name: "test", Steps: []Step{{ID: "s1"}}}
+	w := &Workflow{Version: "2.0", Name: "test",
+		Stages: []Stage{{Name: "default"}},
+		Steps:  []Step{{ID: "s1", Stage: "default"}},
+	}
 	err := Validate(w)
 	s.ErrorContains(err, "must have an action")
 }
 
 func (s *ParserTestSuite) TestValidate_UnknownDependency() {
-	w := &Workflow{Version: "2.0", Name: "test", Steps: []Step{
-		{ID: "s1", Action: "log", DependsOn: []string{"nonexistent"}},
-	}}
+	w := &Workflow{Version: "2.0", Name: "test",
+		Stages: []Stage{{Name: "default"}},
+		Steps: []Step{
+			{ID: "s1", Stage: "default", Action: "log", DependsOn: []string{"nonexistent"}},
+		}}
 	err := Validate(w)
 	s.ErrorContains(err, "unknown step")
 }
 
 func (s *ParserTestSuite) TestValidate_SelfDependency() {
-	w := &Workflow{Version: "2.0", Name: "test", Steps: []Step{
-		{ID: "s1", Action: "log", DependsOn: []string{"s1"}},
-	}}
+	w := &Workflow{Version: "2.0", Name: "test",
+		Stages: []Stage{{Name: "default"}},
+		Steps: []Step{
+			{ID: "s1", Stage: "default", Action: "log", DependsOn: []string{"s1"}},
+		}}
 	err := Validate(w)
 	s.ErrorContains(err, "cannot depend on itself")
 }
@@ -199,7 +224,8 @@ func (s *ParserTestSuite) TestValidate_SelfDependency() {
 func (s *ParserTestSuite) TestValidate_InvalidParamType() {
 	w := &Workflow{Version: "2.0", Name: "test",
 		Params: []Param{{Name: "p", Type: "unknown"}},
-		Steps:  []Step{{ID: "s1", Action: "log"}},
+		Stages: []Stage{{Name: "default"}},
+		Steps:  []Step{{ID: "s1", Stage: "default", Action: "log"}},
 	}
 	err := Validate(w)
 	s.ErrorContains(err, "unsupported type")
@@ -211,7 +237,8 @@ func (s *ParserTestSuite) TestValidate_BothTriggers() {
 			HTTP:    &HTTPTrigger{Method: "GET", Path: "/test"},
 			Webhook: &WebhookTrigger{Path: "/hook"},
 		},
-		Steps: []Step{{ID: "s1", Action: "log"}},
+		Stages: []Stage{{Name: "default"}},
+		Steps:  []Step{{ID: "s1", Stage: "default", Action: "log"}},
 	}
 	err := Validate(w)
 	s.ErrorContains(err, "only have one trigger")
@@ -219,18 +246,22 @@ func (s *ParserTestSuite) TestValidate_BothTriggers() {
 
 func (s *ParserTestSuite) TestValidate_ErrorPolicyValid() {
 	for _, policy := range []string{"", "stop", "continue", "ignore"} {
-		w := &Workflow{Version: "2.0", Name: "test", Steps: []Step{
-			{ID: "s1", Action: "log", ErrorPolicy: policy},
-		}}
+		w := &Workflow{Version: "2.0", Name: "test",
+			Stages: []Stage{{Name: "default"}},
+			Steps: []Step{
+				{ID: "s1", Stage: "default", Action: "log", ErrorPolicy: policy},
+			}}
 		err := Validate(w)
 		s.NoError(err, "policy %q should be valid", policy)
 	}
 }
 
 func (s *ParserTestSuite) TestValidate_ErrorPolicyInvalid() {
-	w := &Workflow{Version: "2.0", Name: "test", Steps: []Step{
-		{ID: "s1", Action: "log", ErrorPolicy: "retry"},
-	}}
+	w := &Workflow{Version: "2.0", Name: "test",
+		Stages: []Stage{{Name: "default"}},
+		Steps: []Step{
+			{ID: "s1", Stage: "default", Action: "log", ErrorPolicy: "retry"},
+		}}
 	err := Validate(w)
 	s.ErrorContains(err, "invalid error_policy")
 }
@@ -240,7 +271,8 @@ func (s *ParserTestSuite) TestValidate_ScheduleTrigger() {
 		Version: "2.0",
 		Name:    "test",
 		Trigger: &Trigger{Schedule: &ScheduleTrigger{Cron: "*/5 * * * *"}},
-		Steps:   []Step{{ID: "s1", Action: "log"}},
+		Stages:  []Stage{{Name: "default"}},
+		Steps:   []Step{{ID: "s1", Stage: "default", Action: "log"}},
 	}
 	err := Validate(w)
 	s.NoError(err)
@@ -251,7 +283,8 @@ func (s *ParserTestSuite) TestValidate_ScheduleTriggerEmptyCron() {
 		Version: "2.0",
 		Name:    "test",
 		Trigger: &Trigger{Schedule: &ScheduleTrigger{Cron: ""}},
-		Steps:   []Step{{ID: "s1", Action: "log"}},
+		Stages:  []Stage{{Name: "default"}},
+		Steps:   []Step{{ID: "s1", Stage: "default", Action: "log"}},
 	}
 	err := Validate(w)
 	s.ErrorContains(err, "cron expression")
@@ -265,7 +298,8 @@ func (s *ParserTestSuite) TestValidate_MultipleTriggers() {
 			HTTP:     &HTTPTrigger{Method: "GET", Path: "/test"},
 			Schedule: &ScheduleTrigger{Cron: "*/5 * * * *"},
 		},
-		Steps: []Step{{ID: "s1", Action: "log"}},
+		Stages: []Stage{{Name: "default"}},
+		Steps:  []Step{{ID: "s1", Stage: "default", Action: "log"}},
 	}
 	err := Validate(w)
 	s.ErrorContains(err, "only have one trigger")
@@ -276,8 +310,11 @@ func (s *ParserTestSuite) TestParse_ValidFile() {
 	tmpFile := s.T().TempDir() + "/test.yaml"
 	content := `version: "2.0"
 name: "file-test"
+stages:
+  - name: default
 steps:
   - id: step1
+    stage: default
     action: log
     config:
       message: "hello"
@@ -330,7 +367,8 @@ func (s *ParserTestSuite) TestValidate_HTTPTriggerMissingPath() {
 		Version: "2.0",
 		Name:    "test",
 		Trigger: &Trigger{HTTP: &HTTPTrigger{Method: "GET"}},
-		Steps:   []Step{{ID: "s1", Action: "log"}},
+		Stages:  []Stage{{Name: "default"}},
+		Steps:   []Step{{ID: "s1", Stage: "default", Action: "log"}},
 	}
 	err := Validate(w)
 	s.ErrorContains(err, "path")
@@ -341,7 +379,8 @@ func (s *ParserTestSuite) TestValidate_HTTPTriggerMissingMethod() {
 		Version: "2.0",
 		Name:    "test",
 		Trigger: &Trigger{HTTP: &HTTPTrigger{Path: "/test"}},
-		Steps:   []Step{{ID: "s1", Action: "log"}},
+		Stages:  []Stage{{Name: "default"}},
+		Steps:   []Step{{ID: "s1", Stage: "default", Action: "log"}},
 	}
 	err := Validate(w)
 	s.ErrorContains(err, "method")
@@ -352,7 +391,8 @@ func (s *ParserTestSuite) TestValidate_WebhookTriggerMissingPath() {
 		Version: "2.0",
 		Name:    "test",
 		Trigger: &Trigger{Webhook: &WebhookTrigger{}},
-		Steps:   []Step{{ID: "s1", Action: "log"}},
+		Stages:  []Stage{{Name: "default"}},
+		Steps:   []Step{{ID: "s1", Stage: "default", Action: "log"}},
 	}
 	err := Validate(w)
 	s.ErrorContains(err, "path")
@@ -363,7 +403,8 @@ func (s *ParserTestSuite) TestValidate_RabbitMQTriggerMissingURL() {
 		Version: "2.0",
 		Name:    "test",
 		Trigger: &Trigger{RabbitMQ: &RabbitMQTrigger{Queue: "q1"}},
-		Steps:   []Step{{ID: "s1", Action: "log"}},
+		Stages:  []Stage{{Name: "default"}},
+		Steps:   []Step{{ID: "s1", Stage: "default", Action: "log"}},
 	}
 	err := Validate(w)
 	s.ErrorContains(err, "url")
@@ -374,7 +415,8 @@ func (s *ParserTestSuite) TestValidate_RabbitMQTriggerMissingQueue() {
 		Version: "2.0",
 		Name:    "test",
 		Trigger: &Trigger{RabbitMQ: &RabbitMQTrigger{URL: "amqp://localhost"}},
-		Steps:   []Step{{ID: "s1", Action: "log"}},
+		Stages:  []Stage{{Name: "default"}},
+		Steps:   []Step{{ID: "s1", Stage: "default", Action: "log"}},
 	}
 	err := Validate(w)
 	s.ErrorContains(err, "queue")
@@ -385,7 +427,8 @@ func (s *ParserTestSuite) TestValidate_ParamMissingName() {
 		Version: "2.0",
 		Name:    "test",
 		Params:  []Param{{Type: "string"}},
-		Steps:   []Step{{ID: "s1", Action: "log"}},
+		Stages:  []Stage{{Name: "default"}},
+		Steps:   []Step{{ID: "s1", Stage: "default", Action: "log"}},
 	}
 	err := Validate(w)
 	s.ErrorContains(err, "must have a name")
@@ -396,7 +439,8 @@ func (s *ParserTestSuite) TestValidate_ParamMissingType() {
 		Version: "2.0",
 		Name:    "test",
 		Params:  []Param{{Name: "p"}},
-		Steps:   []Step{{ID: "s1", Action: "log"}},
+		Stages:  []Stage{{Name: "default"}},
+		Steps:   []Step{{ID: "s1", Stage: "default", Action: "log"}},
 	}
 	err := Validate(w)
 	s.ErrorContains(err, "must have a type")
@@ -406,8 +450,10 @@ func (s *ParserTestSuite) TestValidate_OnError_MissingID() {
 	w := &Workflow{
 		Version: "2.0",
 		Name:    "test",
+		Stages:  []Stage{{Name: "default"}},
 		Steps: []Step{{
 			ID:     "s1",
+			Stage:  "default",
 			Action: "log",
 			OnError: []Step{{Action: "log"}},
 		}},
@@ -421,8 +467,10 @@ func (s *ParserTestSuite) TestValidate_OnError_MissingAction() {
 	w := &Workflow{
 		Version: "2.0",
 		Name:    "test",
+		Stages:  []Stage{{Name: "default"}},
 		Steps: []Step{{
 			ID:     "s1",
+			Stage:  "default",
 			Action: "log",
 			OnError: []Step{{ID: "err1"}},
 		}},
@@ -436,7 +484,8 @@ func (s *ParserTestSuite) TestValidate_WorkflowOnError_MissingID() {
 	w := &Workflow{
 		Version: "2.0",
 		Name:    "test",
-		Steps:   []Step{{ID: "s1", Action: "log"}},
+		Stages:  []Stage{{Name: "default"}},
+		Steps:   []Step{{ID: "s1", Stage: "default", Action: "log"}},
 		OnError: []Step{{Action: "log"}},
 	}
 	err := Validate(w)
@@ -448,7 +497,8 @@ func (s *ParserTestSuite) TestValidate_WorkflowOnError_MissingAction() {
 	w := &Workflow{
 		Version: "2.0",
 		Name:    "test",
-		Steps:   []Step{{ID: "s1", Action: "log"}},
+		Stages:  []Stage{{Name: "default"}},
+		Steps:   []Step{{ID: "s1", Stage: "default", Action: "log"}},
 		OnError: []Step{{ID: "err1"}},
 	}
 	err := Validate(w)
@@ -460,8 +510,11 @@ func (s *ParserTestSuite) TestParseBytes_WithTesting() {
 	yaml := `
 version: "2.0"
 name: "test-wf"
+stages:
+  - name: default
 steps:
   - id: step1
+    stage: default
     action: log
     config:
       message: "hello"
@@ -510,8 +563,9 @@ steps:
 func (s *ParserTestSuite) TestValidate_TestingNameRequired() {
 	w := &Workflow{
 		Version: "2.0", Name: "test",
+		Stages: []Stage{{Name: "default"}},
 		Steps: []Step{{
-			ID: "s1", Action: "log",
+			ID: "s1", Stage: "default", Action: "log",
 			Testing: []TestCase{{Output: map[string]any{"ok": true}}},
 		}},
 	}
@@ -522,8 +576,9 @@ func (s *ParserTestSuite) TestValidate_TestingNameRequired() {
 func (s *ParserTestSuite) TestValidate_TestingDuplicateName() {
 	w := &Workflow{
 		Version: "2.0", Name: "test",
+		Stages: []Stage{{Name: "default"}},
 		Steps: []Step{{
-			ID: "s1", Action: "log",
+			ID: "s1", Stage: "default", Action: "log",
 			Testing: []TestCase{
 				{Name: "case1", Output: "a"},
 				{Name: "case1", Output: "b"},
@@ -537,8 +592,9 @@ func (s *ParserTestSuite) TestValidate_TestingDuplicateName() {
 func (s *ParserTestSuite) TestValidate_TestingOutputAndError() {
 	w := &Workflow{
 		Version: "2.0", Name: "test",
+		Stages: []Stage{{Name: "default"}},
 		Steps: []Step{{
-			ID: "s1", Action: "log",
+			ID: "s1", Stage: "default", Action: "log",
 			Testing: []TestCase{
 				{Name: "bad", Output: "x", Error: &TestCaseError{Message: "err"}},
 			},
@@ -551,8 +607,9 @@ func (s *ParserTestSuite) TestValidate_TestingOutputAndError() {
 func (s *ParserTestSuite) TestValidate_TestingInvalidExpectStatus() {
 	w := &Workflow{
 		Version: "2.0", Name: "test",
+		Stages: []Stage{{Name: "default"}},
 		Steps: []Step{{
-			ID: "s1", Action: "log",
+			ID: "s1", Stage: "default", Action: "log",
 			Testing: []TestCase{
 				{Name: "bad", Expect: &TestCaseExpect{Status: "unknown"}},
 			},
@@ -566,8 +623,9 @@ func (s *ParserTestSuite) TestValidate_TestingValidExpectStatuses() {
 	for _, status := range []string{"success", "failed", "skipped"} {
 		w := &Workflow{
 			Version: "2.0", Name: "test",
+			Stages: []Stage{{Name: "default"}},
 			Steps: []Step{{
-				ID: "s1", Action: "log",
+				ID: "s1", Stage: "default", Action: "log",
 				Testing: []TestCase{
 					{Name: "ok", Expect: &TestCaseExpect{Status: status}},
 				},
@@ -586,12 +644,16 @@ params:
   - name: customer_id
     type: string
     required: true
+stages:
+  - name: default
 steps:
   - id: tag-customer
+    stage: default
     action: group
     config:
       key: "customer-{{ params.customer_id }}"
   - id: step1
+    stage: default
     action: log
     depends_on: [tag-customer]
     config:
@@ -607,25 +669,31 @@ func (s *ParserTestSuite) TestParseBytes_OnRecoveryValues() {
 	yaml := `
 version: "2.0"
 name: test-on-recovery
+stages:
+  - name: default
 steps:
   - id: step-retry
+    stage: default
     action: http
     on_recovery: retry
     config:
       url: http://example.com
   - id: step-skip
+    stage: default
     action: http
     on_recovery: skip
     depends_on: [step-retry]
     config:
       url: http://example.com
   - id: step-fail
+    stage: default
     action: http
     on_recovery: fail
     depends_on: [step-skip]
     config:
       url: http://example.com
   - id: step-default
+    stage: default
     action: log
     depends_on: [step-fail]
     config:
@@ -643,8 +711,11 @@ func (s *ParserTestSuite) TestParseBytes_OnRecoveryInvalidValue() {
 	yaml := `
 version: "2.0"
 name: test-invalid-recovery
+stages:
+  - name: default
 steps:
   - id: step1
+    stage: default
     action: http
     on_recovery: explode
     config:
@@ -664,8 +735,11 @@ trigger:
     method: POST
     path: /api/test
     idempotency_key: "{{ trigger.body.customer_id }}"
+stages:
+  - name: default
 steps:
   - id: step1
+    stage: default
     action: log
     config:
       message: hello
@@ -683,8 +757,11 @@ trigger:
   http:
     method: POST
     path: /api/test
+stages:
+  - name: default
 steps:
   - id: step1
+    stage: default
     action: log
     config:
       message: hello
@@ -697,8 +774,9 @@ steps:
 func (s *ParserTestSuite) TestValidate_TestingValidCases() {
 	w := &Workflow{
 		Version: "2.0", Name: "test",
+		Stages: []Stage{{Name: "default"}},
 		Steps: []Step{{
-			ID: "s1", Action: "log",
+			ID: "s1", Stage: "default", Action: "log",
 			Testing: []TestCase{
 				{Name: "mock-output", Output: map[string]any{"ok": true}},
 				{Name: "mock-error", Error: &TestCaseError{Message: "fail"}},

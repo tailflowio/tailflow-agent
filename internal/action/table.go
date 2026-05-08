@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // TableAction formats an array of items as an ASCII table and logs it.
@@ -88,16 +89,20 @@ func sortRows(rows [][]string, columns []tableColumn, config map[string]any) {
 	})
 }
 
+func displayWidth(s string) int {
+	return utf8.RuneCountInString(s)
+}
+
 func computeColumnWidths(columns []tableColumn, rows [][]string) []int {
 	widths := make([]int, len(columns))
 	for j, col := range columns {
-		widths[j] = len(col.Header)
+		widths[j] = displayWidth(col.Header)
 	}
 
 	for _, row := range rows {
 		for j, cell := range row {
-			if len(cell) > widths[j] {
-				widths[j] = len(cell)
+			if w := displayWidth(cell); w > widths[j] {
+				widths[j] = w
 			}
 		}
 	}
@@ -215,7 +220,7 @@ func writeRow(sb *strings.Builder, widths []int, cells []string) {
 	for j, cell := range cells {
 		sb.WriteByte(' ')
 		sb.WriteString(cell)
-		sb.WriteString(strings.Repeat(" ", widths[j]-len(cell)))
+		sb.WriteString(strings.Repeat(" ", widths[j]-displayWidth(cell)))
 		sb.WriteString(" |")
 	}
 

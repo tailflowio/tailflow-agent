@@ -15,9 +15,9 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/suite"
-	"github.com/tailflow/tailflow/internal/action"
 	"github.com/tailflow/tailflow/internal/engine"
 	"github.com/tailflow/tailflow/internal/event"
+	"github.com/tailflow/tailflow/internal/export/saas"
 	"github.com/tailflow/tailflow/internal/parser"
 	"github.com/tailflow/tailflow/internal/runtime"
 	"github.com/tailflow/tailflow/internal/store"
@@ -182,101 +182,6 @@ func (s *ServerTestSuite) TestCancelScheduledTimers_StopsAllTimers() {
 	srv.cancelScheduledTimers()
 
 	s.Nil(srv.scheduledTimers)
-}
-
-func (s *ServerTestSuite) TestStartExporter_NoExportURL_Noop() {
-	srv := newTestServer(s.T())
-	srv.config.ExportURL = ""
-	srv.startExporter(context.Background())
-	s.Nil(srv.exporter)
-}
-
-func (s *ServerTestSuite) TestStartExporter_HTTPTrigger() {
-	srv := newTestServerWithWorkflow(s.T(), `version: "2.0"
-name: "test"
-trigger:
-  http:
-    method: GET
-    path: /test
-steps:
-  - id: greet
-    action: log
-    config:
-      message: "hello"
-`)
-	srv.config.ExportURL = "http://localhost:9999"
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	srv.startExporter(ctx)
-	s.NotNil(srv.exporter)
-}
-
-func (s *ServerTestSuite) TestStartExporter_WebhookTrigger() {
-	srv := newTestServerWithWorkflow(s.T(), `version: "2.0"
-name: "test"
-trigger:
-  webhook:
-    path: /hook
-steps:
-  - id: greet
-    action: log
-    config:
-      message: "hello"
-`)
-	srv.config.ExportURL = "http://localhost:9999"
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	srv.startExporter(ctx)
-	s.NotNil(srv.exporter)
-}
-
-func (s *ServerTestSuite) TestStartExporter_ScheduleTrigger() {
-	srv := newTestServerWithWorkflow(s.T(), `version: "2.0"
-name: "test"
-trigger:
-  schedule:
-    cron: "* * * * *"
-steps:
-  - id: greet
-    action: log
-    config:
-      message: "hello"
-`)
-	srv.config.ExportURL = "http://localhost:9999"
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	srv.startExporter(ctx)
-	s.NotNil(srv.exporter)
-}
-
-func (s *ServerTestSuite) TestStartExporter_RabbitMQTrigger() {
-	srv := newTestServerWithWorkflow(s.T(), `version: "2.0"
-name: "test"
-trigger:
-  rabbitmq:
-    url: "amqp://localhost:5672"
-    queue: "test"
-steps:
-  - id: greet
-    action: log
-    config:
-      message: "hello"
-`)
-	srv.config.ExportURL = "http://localhost:9999"
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	srv.startExporter(ctx)
-	s.NotNil(srv.exporter)
-}
-
-func (s *ServerTestSuite) TestStartExporter_NilTrigger() {
-	srv := newTestServer(s.T())
-	srv.config.Workflow.Trigger = nil
-	srv.config.ExportURL = "http://localhost:9999"
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	srv.startExporter(ctx)
-	s.NotNil(srv.exporter)
 }
 
 func (s *ServerTestSuite) TestStartCronScheduler_NilTrigger() {
@@ -639,33 +544,6 @@ func (s *ServerTestSuite) TestStartMetricsRefresh_PublishesMetrics() {
 	s.True(metricsReceived)
 }
 
-func newTestServerWithWorkflow(t *testing.T, yaml string) *Server {
-	t.Helper()
-
-	wf, err := parser.ParseBytes([]byte(yaml))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	bus := event.NewBus()
-	t.Cleanup(bus.Close)
-
-	reg := action.NewRegistry()
-	action.RegisterBuiltins(reg)
-
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	exec := engine.NewExecutor(reg, bus, logger, nil, nil, nil)
-
-	return New(Config{
-		Port:           0,
-		Executor:       exec,
-		Workflow:       wf,
-		ExecutionStore: store.NewExecutionStore(10),
-		EventBus:       bus,
-		Logger:         logger,
-	})
-}
-
 func (s *ServerTestSuite) TestStartCronScheduler_CronCallbackFires() {
 	srv := newTestServer(s.T())
 	srv.config.Workflow.Trigger = &parser.Trigger{
@@ -830,12 +708,14 @@ func (s *ServerTestSuite) TestRecoverExecutions_ResumesIncompleteExecutions() {
 		w.Header().Set("Content-Type", "application/json")
 
 		now := time.Now().Format(time.RFC3339)
-		_, _ = fmt.Fprintf(w, `[{"execution_id":"exec-recovered","workflow_name":"test-workflow","status":"running","params":{"env":"staging"},"steps":{"greet":{"status":"success","started_at":"%s","finished_at":"%s"}}}]`, now, now)
+		// params is wire-encoded as a JSON-string field per RecoveredExecution.RawParams.
+		_, _ = fmt.Fprintf(w, `[{"execution_id":"exec-recovered","workflow_name":"test-workflow","status":"running","params":"{\"env\":\"staging\"}","steps":{"greet":{"status":"success","started_at":"%s","finished_at":"%s"}}}]`, now, now)
 	}))
 	defer mockSaaS.Close()
 
 	srv := newTestServer(s.T())
-	srv.config.ExportURL = mockSaaS.URL
+	srv.config.Workflow.Recovery = true
+	srv.config.Recoverer = saas.NewRecoveryClient(mockSaaS.URL, "")
 	srv.config.ExporterName = "test-agent"
 	srv.ctx = context.Background()
 
@@ -865,7 +745,8 @@ func (s *ServerTestSuite) TestRecoverExecutions_SkipsUnknownWorkflow() {
 	defer mockSaaS.Close()
 
 	srv := newTestServer(s.T())
-	srv.config.ExportURL = mockSaaS.URL
+	srv.config.Workflow.Recovery = true
+	srv.config.Recoverer = saas.NewRecoveryClient(mockSaaS.URL, "")
 	srv.config.ExporterName = "test-agent"
 	srv.ctx = context.Background()
 
@@ -877,9 +758,9 @@ func (s *ServerTestSuite) TestRecoverExecutions_SkipsUnknownWorkflow() {
 	}
 }
 
-func (s *ServerTestSuite) TestRecoverExecutions_NoopWhenNoExportURL() {
+func (s *ServerTestSuite) TestRecoverExecutions_NoopWhenRecoveryDisabled() {
 	srv := newTestServer(s.T())
-	srv.config.ExportURL = ""
+	srv.config.Workflow.Recovery = false
 	srv.ctx = context.Background()
 
 	srv.recoverExecutions(context.Background())

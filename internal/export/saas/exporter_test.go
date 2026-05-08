@@ -1,4 +1,4 @@
-package export
+package saas
 
 import (
 	"context"
@@ -99,7 +99,7 @@ func (s *ExporterTestSuite) TestRegistration_AssignsAgentID() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	exp := New(newTestConfig(srv.URL, bus))
+	exp := NewExporter(newTestConfig(srv.URL, bus))
 	exp.Start(ctx)
 
 	// Wait for the registration request to arrive
@@ -147,7 +147,7 @@ func (s *ExporterTestSuite) TestBatchFlush() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	exp := New(newTestConfig(srv.URL, bus))
+	exp := NewExporter(newTestConfig(srv.URL, bus))
 	exp.Start(ctx)
 
 	// Wait for registration first
@@ -206,7 +206,7 @@ func (s *ExporterTestSuite) TestMetricsFiltered() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	exp := New(newTestConfig(srv.URL, bus))
+	exp := NewExporter(newTestConfig(srv.URL, bus))
 	exp.Start(ctx)
 
 	// Wait for registration first
@@ -266,7 +266,7 @@ func (s *ExporterTestSuite) TestHeartbeat_SendsAgentStatus() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	exp := New(newTestConfig(srv.URL, bus))
+	exp := NewExporter(newTestConfig(srv.URL, bus))
 	exp.Start(ctx)
 
 	// Wait for a heartbeat request to arrive
@@ -299,7 +299,7 @@ func (s *ExporterTestSuite) TestActiveExecutionTracking() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(newTestConfig("http://localhost:0", bus))
+	exp := NewExporter(newTestConfig("http://localhost:0", bus))
 
 	exp.trackExecution(event.Event{
 		Type:        event.WorkflowStarted,
@@ -358,7 +358,7 @@ func (s *ExporterTestSuite) TestRetryOnError() {
 	defer cancel()
 
 	cfg := newTestConfig(srv.URL, bus)
-	exp := New(cfg)
+	exp := NewExporter(cfg)
 	exp.Start(ctx)
 
 	// Wait for at least 3 attempts and successful registration
@@ -427,7 +427,7 @@ func (s *ExporterTestSuite) TestServerConfigPush() {
 	cfg := newTestConfig(srv.URL, bus)
 	cfg.HeartbeatInterval = 2 * time.Second
 	cfg.FlushInterval = 2 * time.Second
-	exp := New(cfg)
+	exp := NewExporter(cfg)
 	exp.Start(ctx)
 
 	// Wait for the config to be applied (intervals updated after first heartbeat)
@@ -472,7 +472,7 @@ func (s *ExporterTestSuite) TestApplyServerConfigMinimums() {
 	bus := event.NewBus()
 	defer bus.Close()
 
-	exp := New(newTestConfig("http://localhost:0", bus))
+	exp := NewExporter(newTestConfig("http://localhost:0", bus))
 
 	tooFast := 0.1
 	body, _ := json.Marshal(serverConfig{HeartbeatIntervalS: &tooFast})
@@ -549,7 +549,7 @@ func (s *ExporterTestSuite) TestBufferingBeforeRegistration() {
 
 	cfg := newTestConfig(srv.URL, bus)
 	cfg.FlushInterval = 50 * time.Millisecond
-	exp := New(cfg)
+	exp := NewExporter(cfg)
 	exp.Start(ctx)
 
 	// Publish events BEFORE registration succeeds

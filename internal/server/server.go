@@ -33,13 +33,17 @@ type Config struct {
 	Executor       *engine.Executor
 	Workflow       *parser.Workflow
 	FilePath       string
+	EditorEnabled  bool
 	ExecutionStore store.ExecutionStore
 	EventBus       *event.Bus
 	Logger         *slog.Logger
-	ExportURL      string
-	APIKey         string
 	ExporterName   string
 	Version        string
+	// Exporter, Claimer, Recoverer are the SaaS-side ports. Default to noop
+	// implementations when nil — see export.NewNoop*.
+	Exporter  export.EventExporter
+	Claimer   export.IdempotencyClaimer
+	Recoverer export.ExecutionRecoverer
 }
 
 // Server is the HTTP server for the API and embedded UI.
@@ -58,11 +62,20 @@ type Server struct {
 	scheduledTimers []*time.Timer
 	timerMu         sync.Mutex
 	metrics         *metrics.Collector
-	exporter        *export.Exporter
 	sensitive       *engine.SensitiveRegistry
 }
 
 func New(config Config) *Server {
+	if config.Exporter == nil {
+		config.Exporter = export.NewNoopExporter()
+	}
+	if config.Claimer == nil {
+		config.Claimer = export.NewNoopClaimer()
+	}
+	if config.Recoverer == nil {
+		config.Recoverer = export.NewNoopRecoverer()
+	}
+
 	var kvStore runtime.KVStore
 
 	redisURL := os.Getenv("REDIS_URL")
@@ -144,53 +157,17 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) startExporter(ctx context.Context) {
-	if s.config.ExportURL == "" {
-		return
-	}
-
-	var triggerType string
-
-	t := s.config.Workflow.Trigger
-	if t != nil {
-		switch {
-		case t.HTTP != nil:
-			triggerType = "http"
-		case t.Webhook != nil:
-			triggerType = "webhook"
-		case t.Schedule != nil:
-			triggerType = "schedule"
-		case t.RabbitMQ != nil:
-			triggerType = "rabbitmq"
-		}
-	}
-
-	s.exporter = export.New(export.Config{
-		ExportURL:           s.config.ExportURL,
-		APIKey:              s.config.APIKey,
-		AgentName:           s.config.ExporterName,
-		EventBus:            s.config.EventBus,
-		Logger:              s.config.Logger,
-		WorkflowName:        s.config.Workflow.Name,
-		WorkflowDescription: s.config.Workflow.Description,
-		WorkflowTags:        s.config.Workflow.Tags,
-		TriggerType:         triggerType,
-		StepsCount:          len(s.config.Workflow.Steps),
-		Version:             s.config.Version,
-		Revision:            s.config.Workflow.Revision,
-	})
-	s.exporter.Start(ctx)
+	s.config.Exporter.Start(ctx)
 }
 
 func (s *Server) recoverExecutions(ctx context.Context) {
-	if s.config.ExportURL == "" || !s.config.Workflow.Recovery {
+	if !s.config.Workflow.Recovery {
 		return
 	}
 
 	s.config.Logger.Info("recovery: checking for recoverable executions", "agent", s.config.ExporterName)
 
-	recoveryClient := export.NewRecoveryClient(s.config.ExportURL, s.config.APIKey)
-
-	recovered, err := recoveryClient.RecoverExecutions(ctx, s.config.ExporterName)
+	recovered, err := s.config.Recoverer.RecoverExecutions(ctx, s.config.ExporterName)
 	if err != nil {
 		s.config.Logger.Error("recovery: failed to fetch executions", "error", err)
 		return
@@ -337,9 +314,7 @@ func (s *Server) shutdownServices(cronSched *CronScheduler, rmqConsumer *RabbitM
 
 	s.cancelScheduledTimers()
 
-	if s.exporter != nil {
-		s.exporter.Shutdown()
-	}
+	s.config.Exporter.Shutdown()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()

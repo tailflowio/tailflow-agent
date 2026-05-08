@@ -44,9 +44,13 @@ trigger:
     method: POST
     path: /users
 
+stages:
+  - name: default
+
 steps:
   - id: echo
     action: js
+    stage: default
     title: "Echo trigger body"
     config:
       script: |
@@ -54,6 +58,7 @@ steps:
 
   - id: respond
     action: response
+    stage: default
     title: "Send response"
     depends_on: [echo]
     config:

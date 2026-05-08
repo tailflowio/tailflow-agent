@@ -18,6 +18,8 @@ import (
 	"github.com/tailflow/tailflow/internal/action"
 	"github.com/tailflow/tailflow/internal/engine"
 	"github.com/tailflow/tailflow/internal/event"
+	"github.com/tailflow/tailflow/internal/export"
+	"github.com/tailflow/tailflow/internal/export/saas"
 	"github.com/tailflow/tailflow/internal/parser"
 	"github.com/tailflow/tailflow/internal/runtime"
 	"github.com/tailflow/tailflow/internal/store"
@@ -45,9 +47,12 @@ params:
   - name: env
     type: string
     default: "staging"
+stages:
+  - name: default
 steps:
   - id: greet
     action: log
+    stage: default
     title: "Log greeting"
     config:
       message: "Hello from test"
@@ -85,9 +90,12 @@ description: "A cron workflow"
 trigger:
   schedule:
     cron: "*/5 * * * *"
+stages:
+  - name: default
 steps:
   - id: greet
     action: log
+    stage: default
     title: "Log greeting"
     config:
       message: "Hello from cron"
@@ -126,9 +134,12 @@ trigger:
   http:
     method: POST
     path: /submit
+stages:
+  - name: default
 steps:
   - id: echo
     action: log
+    stage: default
     title: "Echo"
     config:
       message: "trigger received"
@@ -168,9 +179,12 @@ trigger:
     method: POST
     path: /async-submit
     async: true
+stages:
+  - name: default
 steps:
   - id: echo
     action: log
+    stage: default
     title: "Echo"
     config:
       message: "async trigger received"
@@ -208,9 +222,12 @@ description: "Webhook triggered workflow"
 trigger:
   webhook:
     path: /hook
+stages:
+  - name: default
 steps:
   - id: echo
     action: log
+    stage: default
     title: "Echo"
     config:
       message: "webhook received"
@@ -245,13 +262,17 @@ func newTestServerGraph(t *testing.T) *Server {
 	yaml := `version: "2.0"
 name: "graph-workflow"
 description: "Graph test"
+stages:
+  - name: default
 steps:
   - id: step_a
     action: log
+    stage: default
     config:
       message: "a"
   - id: step_b
     action: log
+    stage: default
     title: "Step B"
     depends_on: [step_a]
     when: 'steps.step_a.status == "success"'
@@ -263,6 +284,7 @@ steps:
       max_iterations: 3
   - id: step_loop
     action: loop
+    stage: default
     title: "Loop Step"
     depends_on: [step_a]
     config:
@@ -2124,7 +2146,7 @@ func (s *HandlersTestSuite) TestGetVersion_ReturnsVersion() {
 	s.Equal(http.StatusOK, w.Code)
 	s.Contains(w.Header().Get("Content-Type"), "application/json")
 
-	var resp map[string]string
+	var resp map[string]any
 	err := json.Unmarshal(w.Body.Bytes(), &resp)
 	s.Require().NoError(err)
 	s.Equal("1.2.3", resp["version"])
@@ -2141,7 +2163,7 @@ func (s *HandlersTestSuite) TestGetVersion_EmptyVersion() {
 
 	s.Equal(http.StatusOK, w.Code)
 
-	var resp map[string]string
+	var resp map[string]any
 	err := json.Unmarshal(w.Body.Bytes(), &resp)
 	s.Require().NoError(err)
 	s.Equal("", resp["version"])
@@ -2197,9 +2219,12 @@ trigger:
 params:
   - name: order_id
     type: string
+stages:
+  - name: default
 steps:
   - id: process
     action: log
+    stage: default
     config:
       message: "processing"
 `
@@ -2217,6 +2242,11 @@ steps:
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	exec := engine.NewExecutor(reg, bus, logger, nil, nil, nil)
 
+	var claimer export.IdempotencyClaimer = export.NewNoopClaimer()
+	if saasURL != "" {
+		claimer = saas.NewClaimClient(saasURL, "test-key")
+	}
+
 	return New(Config{
 		Port:           0,
 		Executor:       exec,
@@ -2224,8 +2254,7 @@ steps:
 		ExecutionStore: store.NewExecutionStore(10),
 		EventBus:       bus,
 		Logger:         logger,
-		ExportURL:      saasURL,
-		APIKey:         "test-key",
+		Claimer:        claimer,
 	})
 }
 
@@ -2294,7 +2323,6 @@ func (s *HandlersTestSuite) TestPublicTrigger_NoIdempotencyKeyNoExportURL() {
 
 func (s *HandlersTestSuite) TestPublicTrigger_IdempotencyNoExportURL() {
 	srv := newTestServerIdempotent(s.T(), "")
-	srv.config.ExportURL = ""
 
 	req := httptest.NewRequest("POST", "/api/public/submit", strings.NewReader(`{"order_id":"ord-789"}`))
 	req.Header.Set("Content-Type", "application/json")
