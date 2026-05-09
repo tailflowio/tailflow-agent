@@ -77,13 +77,15 @@ func (s *ExecutionStoreTestSuite) TestNewExecutionStore_MariaDBPropagatesConnect
 	s.Contains(err.Error(), "mariadb")
 }
 
-func (s *ExecutionStoreTestSuite) TestNewExecutionStore_ClickHouseNotYetImplemented() {
+func (s *ExecutionStoreTestSuite) TestNewExecutionStore_ClickHousePropagatesConnectError() {
+	// Bogus DSN points at a port nothing listens on; clickhouse.New must
+	// fail fast (Ping) and surface the error through the fx provider.
 	_, err := NewExecutionStore(ExecutionStoreIn{
 		Config: Config{MaxExecs: 100},
 		Workflow: &parser.Workflow{
 			Persistence: &parser.Persistence{
 				Type:       parser.PersistenceClickHouse,
-				ClickHouse: &parser.ClickHousePersistence{DSN: "clickhouse://localhost:9000/tailflow"},
+				ClickHouse: &parser.ClickHousePersistence{DSN: "clickhouse://127.0.0.1:1/tailflow?dial_timeout=200ms"},
 			},
 		},
 	})

@@ -6,6 +6,7 @@ import (
 
 	"github.com/tailflow/tailflow/internal/parser"
 	"github.com/tailflow/tailflow/internal/store"
+	"github.com/tailflow/tailflow/internal/store/clickhouse"
 	"github.com/tailflow/tailflow/internal/store/mariadb"
 	uberfx "go.uber.org/fx"
 )
@@ -40,7 +41,7 @@ func NewExecutionStore(in ExecutionStoreIn) (ExecutionStoreOut, error) {
 		return newMariaDBStore(in)
 
 	case cfg.Type == parser.PersistenceClickHouse:
-		return ExecutionStoreOut{}, fmt.Errorf("persistence: clickhouse backend not yet implemented (Phase 2)")
+		return newClickHouseStore(in)
 
 	default:
 		return ExecutionStoreOut{}, fmt.Errorf("persistence: unknown backend %q", cfg.Type)
@@ -53,6 +54,25 @@ func newMariaDBStore(in ExecutionStoreIn) (ExecutionStoreOut, error) {
 	cfg := in.Workflow.Persistence.MariaDB
 
 	s, err := mariadb.New(context.Background(), cfg.DSN, cfg.TablePrefix)
+	if err != nil {
+		return ExecutionStoreOut{}, err
+	}
+
+	if in.Lifecycle != nil {
+		in.Lifecycle.Append(uberfx.Hook{
+			OnStop: func(_ context.Context) error { return s.Close() },
+		})
+	}
+
+	return ExecutionStoreOut{Store: s}, nil
+}
+
+// newClickHouseStore opens the ClickHouse-backed store and registers a
+// shutdown hook so connections are released cleanly on app stop.
+func newClickHouseStore(in ExecutionStoreIn) (ExecutionStoreOut, error) {
+	cfg := in.Workflow.Persistence.ClickHouse
+
+	s, err := clickhouse.New(context.Background(), cfg.DSN, cfg.TablePrefix)
 	if err != nil {
 		return ExecutionStoreOut{}, err
 	}
