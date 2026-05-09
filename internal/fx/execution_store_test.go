@@ -60,13 +60,15 @@ func (s *ExecutionStoreTestSuite) TestNewExecutionStore_MemoryMaxExecutionsOverr
 	s.Equal(7, memoryCapacityFor(mem))
 }
 
-func (s *ExecutionStoreTestSuite) TestNewExecutionStore_MariaDBNotYetImplemented() {
+func (s *ExecutionStoreTestSuite) TestNewExecutionStore_MariaDBPropagatesConnectError() {
+	// Bogus DSN points at a port nothing listens on; mariadb.New must fail
+	// fast (Ping) and surface the error through the fx provider.
 	_, err := NewExecutionStore(ExecutionStoreIn{
 		Config: Config{MaxExecs: 100},
 		Workflow: &parser.Workflow{
 			Persistence: &parser.Persistence{
 				Type:    parser.PersistenceMariaDB,
-				MariaDB: &parser.MariaDBPersistence{DSN: "user@/db"},
+				MariaDB: &parser.MariaDBPersistence{DSN: "tailflow:nope@tcp(127.0.0.1:1)/tailflow?timeout=200ms"},
 			},
 		},
 	})

@@ -385,6 +385,12 @@ func (s *MemoryExecutionStore) RefreshStepMetrics() {
 	s.metricsMu.Unlock()
 }
 
+// ComputeStepMetrics aggregates StepMetrics from a slice of executions.
+// Exported so out-of-package backends (mariadb, clickhouse) can reuse it.
+func ComputeStepMetrics(execs []*Execution) map[string]*StepMetrics {
+	return computeStepMetrics(execs)
+}
+
 func computeStepMetrics(execs []*Execution) map[string]*StepMetrics {
 	metrics := make(map[string]*StepMetrics)
 
