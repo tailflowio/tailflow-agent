@@ -108,6 +108,12 @@ type MemoryExecutionStore struct {
 	stepMetrics map[string]*StepMetrics // stepID -> cached metrics
 }
 
+// Capacity returns the configured ring-buffer capacity. Useful for tests
+// that need to assert which cap was applied (CLI flag vs YAML override).
+func (s *MemoryExecutionStore) Capacity() int {
+	return s.capacity
+}
+
 // NewExecutionStore returns a new in-memory ExecutionStore with the given
 // ring-buffer capacity. A non-positive capacity falls back to 100.
 func NewExecutionStore(capacity int) *MemoryExecutionStore {

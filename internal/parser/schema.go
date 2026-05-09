@@ -15,9 +15,47 @@ type Workflow struct {
 	Sensitive   []string          `json:"sensitive,omitempty"   yaml:"sensitive,omitempty"`
 	Trigger     *Trigger          `json:"trigger,omitempty"     yaml:"trigger,omitempty"`
 	Recovery    bool              `json:"recovery,omitempty"    yaml:"recovery,omitempty"`
+	Persistence *Persistence      `json:"persistence,omitempty" yaml:"persistence,omitempty"`
 	Stages      []Stage           `json:"stages"                yaml:"stages"`
 	OnError     []Step            `json:"on_error,omitempty"    yaml:"on_error,omitempty"`
 	Steps       []Step            `json:"steps"                 yaml:"steps"`
+}
+
+// Supported persistence backend identifiers for Workflow.Persistence.Type.
+const (
+	PersistenceMemory     = "memory"
+	PersistenceMariaDB    = "mariadb"
+	PersistenceClickHouse = "clickhouse"
+)
+
+// Persistence configures the execution-history backend. When omitted the
+// agent defaults to in-memory storage with the CLI --max-executions cap.
+// The Type discriminates which sub-block must be populated.
+type Persistence struct {
+	Type       string                 `json:"type"                 yaml:"type"`
+	Memory     *MemoryPersistence     `json:"memory,omitempty"     yaml:"memory,omitempty"`
+	MariaDB    *MariaDBPersistence    `json:"mariadb,omitempty"    yaml:"mariadb,omitempty"`
+	ClickHouse *ClickHousePersistence `json:"clickhouse,omitempty" yaml:"clickhouse,omitempty"`
+}
+
+// MemoryPersistence configures the in-memory ring-buffer backend. When set,
+// MaxExecutions overrides the --max-executions CLI flag.
+type MemoryPersistence struct {
+	MaxExecutions int `json:"max_executions,omitempty" yaml:"max_executions,omitempty"`
+}
+
+// MariaDBPersistence configures the MariaDB / MySQL backend. The DSN supports
+// ${VAR} env interpolation so secrets stay out of versioned YAML.
+type MariaDBPersistence struct {
+	DSN         string `json:"dsn"                     yaml:"dsn"`
+	TablePrefix string `json:"table_prefix,omitempty"  yaml:"table_prefix,omitempty"`
+}
+
+// ClickHousePersistence configures the ClickHouse backend. The DSN supports
+// ${VAR} env interpolation so secrets stay out of versioned YAML.
+type ClickHousePersistence struct {
+	DSN         string `json:"dsn"                    yaml:"dsn"`
+	TablePrefix string `json:"table_prefix,omitempty" yaml:"table_prefix,omitempty"`
 }
 
 type Stage struct {
