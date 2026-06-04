@@ -45,8 +45,8 @@ type MemoryPersistence struct {
 // MariaDBPersistence configures the MariaDB / MySQL backend. The DSN supports
 // ${VAR} env interpolation so secrets stay out of versioned YAML.
 type MariaDBPersistence struct {
-	DSN         string `json:"dsn"                     yaml:"dsn"`
-	TablePrefix string `json:"table_prefix,omitempty"  yaml:"table_prefix,omitempty"`
+	DSN         string `json:"dsn"                    yaml:"dsn"`
+	TablePrefix string `json:"table_prefix,omitempty" yaml:"table_prefix,omitempty"`
 }
 
 type Stage struct {

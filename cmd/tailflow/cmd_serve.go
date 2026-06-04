@@ -32,7 +32,7 @@ func serveCmd(otelEndpoint, otelServiceName *string) *cobra.Command {
 	}
 	cmd.Flags().IntVarP(&port, "port", "P", 8080, "Server port")
 	cmd.Flags().IntVar(&maxExecs, "max-executions", 100, "Max executions to keep in memory")
-	cmd.Flags().BoolVar(&unsafe, "unsafe", false, "Disable the default action allowlist: allow exec, js and file.* actions (use only on trusted self-hosted instances)")
+	cmd.Flags().BoolVar(&unsafe, "unsafe", false, "Allow exec/js/file.* actions (disables the default allowlist; trusted hosts only)")
 	cmd.Flags().BoolVar(&editor, "editor", false, "Enable workflow editor: persist YAML changes via PUT /api/workflow/raw")
 
 	return cmd

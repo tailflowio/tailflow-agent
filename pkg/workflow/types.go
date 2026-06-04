@@ -57,20 +57,20 @@ type PipelineAction struct {
 
 // GraphNode represents a node in the DAG visualization.
 type GraphNode struct {
-	ID         string           `json:"id"`
-	Label      string           `json:"label"`
-	Action     string           `json:"action"`
-	Type       string           `json:"type"`
-	Pipeline   []PipelineAction `json:"pipeline,omitempty"`
-	When       string           `json:"when,omitempty"`
-	OnRecovery string           `json:"on_recovery,omitempty"`
-	Depth      int              `json:"depth"`
-	ParentID   string           `json:"parent_id,omitempty"`
-	IsLast     bool             `json:"is_last"`
-	GotoTarget string           `json:"goto_target,omitempty"`
-	GotoMax    int              `json:"goto_max,omitempty"`
-	InLoop     bool             `json:"in_loop,omitempty"`
-	IsLoopStart bool            `json:"is_loop_start,omitempty"`
+	ID          string           `json:"id"`
+	Label       string           `json:"label"`
+	Action      string           `json:"action"`
+	Type        string           `json:"type"`
+	Pipeline    []PipelineAction `json:"pipeline,omitempty"`
+	When        string           `json:"when,omitempty"`
+	OnRecovery  string           `json:"on_recovery,omitempty"`
+	Depth       int              `json:"depth"`
+	ParentID    string           `json:"parent_id,omitempty"`
+	IsLast      bool             `json:"is_last"`
+	GotoTarget  string           `json:"goto_target,omitempty"`
+	GotoMax     int              `json:"goto_max,omitempty"`
+	InLoop      bool             `json:"in_loop,omitempty"`
+	IsLoopStart bool             `json:"is_loop_start,omitempty"`
 }
 
 // GraphEdge represents an edge in the DAG visualization.

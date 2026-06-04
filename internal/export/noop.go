@@ -18,7 +18,7 @@ func NewNoopRecoverer() ExecutionRecoverer { return noopRecoverer{} }
 type noopExporter struct{}
 
 func (noopExporter) Start(context.Context) {}
-func (noopExporter) Shutdown()              {}
+func (noopExporter) Shutdown()             {}
 
 type noopClaimer struct{}
 

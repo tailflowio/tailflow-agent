@@ -171,11 +171,9 @@ func encodeJSON(v any) ([]byte, error) {
 
 	rv := reflect.ValueOf(v)
 
-	switch rv.Kind() {
-	case reflect.Map, reflect.Slice:
-		if rv.IsNil() || rv.Len() == 0 {
-			return nil, nil
-		}
+	isCollection := rv.Kind() == reflect.Map || rv.Kind() == reflect.Slice
+	if isCollection && (rv.IsNil() || rv.Len() == 0) {
+		return nil, nil
 	}
 
 	return json.Marshal(v)
