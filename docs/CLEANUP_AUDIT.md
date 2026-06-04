@@ -1,7 +1,7 @@
 # tailflow-agent — cleanup audit (pre-stable)
 
 Branch: `chore/cleanup-pre-stable` · forked from `feat/execution-timeline` (uncommitted modifs).
-Latest commit: `51a0f85 save`. Decision: viz d'exécution = `StepTimeline` only; `WorkflowDAGCustom`, `WorkflowGraph`, `StepNode` à supprimer (process séparé).
+Latest commit: `51a0f85 save`. Decision (D3, BRANCHE A — actée): la viz d'exécution officielle est `WorkflowDAGCustom` (custom SVG pan/zoom). `StepTimeline` n'a jamais été câblé et n'existe plus dans l'arbre ; `WorkflowGraph` et `StepNode` ont été supprimés. Aucun recâblage prévu.
 
 ---
 
@@ -56,13 +56,13 @@ Latest commit: `51a0f85 save`. Decision: viz d'exécution = `StepTimeline` only;
 
 | Vue | Role | Routee | Status |
 |---|---|---|---|
-| `DashboardView.vue` (431 l) | Home : workflow header, agent metrics, pipeline DAG mini, recent runs | `/` | WIP utilise `WorkflowDAGCustom` — a recabler sur `StepTimeline` (ou retirer le DAG mini). |
-| `ExecutionView.vue` (403 l) | Vue d'une execution : ActiveRunsStrip + DAG + LogsDock | `/executions/:id` | WIP utilise `WorkflowDAGCustom` — a remplacer par `StepTimeline`. |
+| `DashboardView.vue` (431 l) | Home : workflow header, agent metrics, pipeline DAG mini, recent runs | `/` | OK stable — utilise `WorkflowDAGCustom` (viz officielle, D3 BRANCHE A). |
+| `ExecutionView.vue` (403 l) | Vue d'une execution : ActiveRunsStrip + DAG + LogsDock | `/executions/:id` | OK stable — utilise `WorkflowDAGCustom` (viz officielle, D3 BRANCHE A). |
 | `ExecutionsView.vue` (312 l) | Historique : filtres, table, compare | `/executions` | OK stable |
-| `EditorView.vue` (811 l) | Palette + DAG editable + form step + YAML CodeMirror | `/editor` | WIP utilise `WorkflowDAGCustom` (mode edition). Decision viz simplifiee ne devrait pas casser l'editeur — confirmer si l'edition garde un DAG ou pas. |
+| `EditorView.vue` (811 l) | Palette + DAG editable + form step + YAML CodeMirror | `/editor` | OK stable — utilise `WorkflowDAGCustom` en mode edition (viz officielle, D3 BRANCHE A). |
 | `DocsView.vue` (669 l) | Docs embarquees avec TOC | `/docs` | OK stable |
-| `StepDetailView.vue` (307 l) | Vue detail d'un step | `/steps/:id` | KILL a virer — aucune nav ne pointe dessus (`StepInspector` joue ce role dans un slide-in). |
-| `WorkflowView.vue` (122 l) | Vue workflow (graphe + liste) | `/workflow` (redirige vers `/`) | KILL a virer — la route est un redirect, la vue est inutilisee. |
+| `StepDetailView.vue` | Vue detail d'un step | `/steps/:id` | SUPPRIME (DONE) — `StepInspector` joue ce role dans un slide-in. |
+| `WorkflowView.vue` | Vue workflow (graphe + liste) | `/workflow` (redirect) | SUPPRIME (DONE) — la route redirect et la vue ont ete retirees. |
 
 ### Composants — `web/frontend/src/components/*.vue`
 
@@ -79,12 +79,12 @@ Latest commit: `51a0f85 save`. Decision: viz d'exécution = `StepTimeline` only;
 | `YamlEditor.vue` (89 l) | `EditorView` | OK stable |
 | `ParamForm.vue` (97 l) | `App.vue` (run modal) | OK stable |
 | `ActiveRunsStrip.vue` (157 l) | `ExecutionView` | OK stable |
-| `StepTimeline.vue` (468 l) | **aucun import direct** | WIP a cabler — c'est la viz cible mais aucune vue ne l'instancie. Modifie (uncommitted). |
-| `WorkflowDAGCustom.vue` (578 l) | `Dashboard`, `Execution`, `Editor` | KILL a virer (decide) |
-| `WorkflowGraph.vue` (209 l) | **aucun** | KILL a virer (decide) |
-| `StepNode.vue` (141 l) | `WorkflowGraph` uniquement | KILL a virer (decide) |
-| `JsonView.vue` (268 l) | **aucun** (`JsonView` consomme est importe depuis `@tailflow/shared`) | KILL doublon mort a virer |
-| `ExecutionList.vue` (163 l) | **aucun** | KILL a virer |
+| `WorkflowDAGCustom.vue` | `Dashboard`, `Execution`, `Editor` | OK stable — viz d'execution officielle (D3 BRANCHE A). |
+| `StepTimeline.vue` | — | SUPPRIME (DONE) — jamais câblé, retiré de l'arbre (D3 BRANCHE A retient `WorkflowDAGCustom`). |
+| `WorkflowGraph.vue` | — | SUPPRIME (DONE). |
+| `StepNode.vue` | — | SUPPRIME (DONE). |
+| `JsonView.vue` | — | SUPPRIME (DONE) — doublon de `@tailflow/shared`. |
+| `ExecutionList.vue` | — | SUPPRIME (DONE). |
 | `primitives/Icon.vue` | partout | OK stable |
 | `primitives/Kbd.vue` | partout | OK stable |
 | `primitives/StatusBadge.vue` | Dashboard, Execution(s) | OK stable |
@@ -98,7 +98,7 @@ Latest commit: `51a0f85 save`. Decision: viz d'exécution = `StepTimeline` only;
 | `useGlobalEvents.ts` (196 l) | Sidebar, Dashboard, ExecutionsView, ActiveRunsStrip | OK stable |
 | `useStepInspector.ts` (22 l) | App, Dashboard, Execution, Editor | OK stable |
 | `useFormat.ts` (37 l) | Sidebar, Dashboard, ExecutionView, ExecutionsView, CommandPalette, StepInspector | OK stable |
-| `useSettings.ts` (43 l) | Sidebar, SettingsPanel, WorkflowDAGCustom | OK stable (sera nettoye apres suppr. DAG) |
+| `useSettings.ts` (43 l) | Sidebar, SettingsPanel, WorkflowDAGCustom | OK stable (DAG conserve, D3 BRANCHE A). |
 | `useShortcuts.ts` (59 l) | App | OK stable |
 | `useTheme.ts` (29 l) | App | OK stable |
 | `useRunTrigger.ts` (10 l) | App, Dashboard, WorkflowView, CommandPalette | WIP tres mince ; verifier qu'il a une vraie raison d'exister vs inline. |
@@ -146,12 +146,12 @@ KILL **vide.** `createPinia()` est appele dans `main.ts` mais aucun store n'est 
 
 ## 4. Recommandations cleanup (top 10, par impact)
 
-1. **Recabler `StepTimeline` dans `ExecutionView`/`DashboardView`/`EditorView`** — le composant existe (468 l, modifs en cours) mais n'est importe nulle part ; sans ca, la suppression du DAG cassera l'app.
+1. **DONE — Viz d'execution actee** : `WorkflowDAGCustom` est la viz officielle (D3 BRANCHE A). `StepTimeline` n'a jamais ete câblé et a ete retire ; aucun recâblage prevu.
 2. **Commit ou stash le WIP existant** avant cleanup : 30 fichiers modifies non commites sur `chore/cleanup-pre-stable`, on travaille sur du sable.
-3. **Supprimer `WorkflowDAGCustom.vue`, `WorkflowGraph.vue`, `StepNode.vue`** + dependances dagre/`useSettings.dag*` une fois `StepTimeline` cable (process separe deja prevu — coordonner le merge).
-4. **Supprimer les composants/vues morts** : `components/JsonView.vue` (doublon de `@tailflow/shared`), `components/ExecutionList.vue`, `views/StepDetailView.vue` et la route `/steps/:id`, `views/WorkflowView.vue` et la route `/workflow` (redirect inutile).
+3. **DONE — `WorkflowGraph.vue` et `StepNode.vue` supprimes** (composants vue-flow morts). `WorkflowDAGCustom.vue` est conserve comme viz officielle (D3 BRANCHE A).
+4. **DONE — Composants/vues morts supprimes** : `components/JsonView.vue` (doublon de `@tailflow/shared`), `components/ExecutionList.vue`, `views/StepDetailView.vue` (+ route `/steps/:id`), `views/WorkflowView.vue` (+ route `/workflow`).
 5. **Trancher Pinia** : soit creer les stores reels (`useGlobalEvents`, `useSSE`, settings persistes), soit retirer `createPinia` de `main.ts` et la dependance.
-6. **Decouper `internal/server/handlers.go` (1746 lignes)** : `wf.go`, `executions.go`, `events.go`, `triggers_public.go`, `wait.go` — ramene handlers <500 l et facilite les tests.
+6. **DONE — `internal/server/handlers.go` decoupe** : eclate en `handlers_{capture,executions,graph,response,steps,tree,triggers,wait,wf}.go` — handlers <500 l, tests facilites.
 7. **Trancher `internal/fx`** : module uber-fx present mais le `cmd/tailflow/main.go` assemble manuellement -> soit on migre vers fx, soit on supprime le module pour eviter la double source de verite.
 8. **Trancher `internal/export`** : path SaaS, verifier qu'il n'est jamais active en self-hosted par defaut, sinon retirer du build agent stable et le remettre derriere un build tag.
 9. **Nettoyer i18n des cles mortes** (`nav.workflow`, `workflow.graph`, `workflow.list`, `steps.*` cote liste) apres suppression de `WorkflowView` et `StepDetailView`.

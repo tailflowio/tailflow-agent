@@ -473,6 +473,16 @@ The [`examples/`](./examples) directory contains ready-to-run workflows:
 
 ---
 
+<a id="saas-export"></a>
+
+## SaaS Export (roadmap, not available in v1)
+
+TailFlow v1 ships **self-hosted and mono-instance**. There is no remote SaaS backend to export to: the event exporter is a built-in noop, so workflow execution never depends on an external service and never blocks on one.
+
+The export seam is kept dormant for a future managed offering. Internally, three ports live in `internal/export` (`EventExporter`, `IdempotencyClaimer`, `ExecutionRecoverer`). In v1 only the exporter is noop — **idempotency and recovery are implemented locally**, store-backed (in-memory map or the MariaDB `UNIQUE` constraint for claims, lock-free boot scan for recovery). When the SaaS offering lands, a real `EventExporter` implementation can be wired behind the same interface without touching the engine or server core.
+
+---
+
 ## Architecture
 
 ```mermaid
@@ -482,7 +492,7 @@ graph TD
     DAG --> EVT["Event Bus<br/><i>real-time SSE stream</i>"]
     DAG --> SVC["Services<br/><i>DB pool, KV store,<br/>locks, wait</i>"]
     EVT --> UI["Web UI<br/><i>embedded SPA</i>"]
-    EVT --> EXP["SaaS Exporter<br/><i>optional</i>"]
+    EVT --> EXP["Event Exporter<br/><i>noop in v1 (SaaS roadmap)</i>"]
 ```
 
 ### Key design decisions
@@ -490,7 +500,7 @@ graph TD
 - **Single binary**: The web UI is embedded. No Node.js, no Docker, no external services required.
 - **DAG execution**: Steps run in parallel when dependencies allow. Semaphore limits concurrency to CPU count.
 - **Event-driven**: Every step emits events streamed via SSE to the UI in real-time.
-- **Non-blocking export**: The SaaS exporter runs independently. Failures never affect local execution.
+- **Non-blocking export**: The event exporter is a noop in v1 (SaaS export is roadmap, not available — see [SaaS Export](#saas-export)). Idempotency and recovery are implemented locally, store-backed (in-memory or MariaDB), so they never depend on a remote service.
 - **Extensible services**: Interfaces for `Locker`, `DBPool`, `KVStore` allow plugging in Redis/PostgreSQL for multi-instance deployments.
 
 ---
