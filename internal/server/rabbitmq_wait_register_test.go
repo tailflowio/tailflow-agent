@@ -22,6 +22,17 @@ func (s *RabbitMQWaitTestSuite) TestRegister_DialError_ClosesChannel() {
 	s.False(ok, "channel should be closed on dial error")
 }
 
+func (s *RabbitMQWaitTestSuite) TestRegister_DialError_CleanupIsNoOp() {
+	mgr := NewRabbitMQWaitManager(s.logger)
+	mgr.dial = func(url string) (amqpConn, error) {
+		return nil, errors.New("dial failed")
+	}
+
+	_, cleanup := mgr.Register("amqp://bad:5672", "q1", "id", "123", context.Background())
+
+	s.NotPanics(cleanup, "cleanup returned on dial error must be callable without panic")
+}
+
 func (s *RabbitMQWaitTestSuite) TestRegister_ChannelError_ClosesChannel() {
 	mgr := NewRabbitMQWaitManager(s.logger)
 	mockConn := &mockAMQPConn{
@@ -38,6 +49,22 @@ func (s *RabbitMQWaitTestSuite) TestRegister_ChannelError_ClosesChannel() {
 
 	_, ok := <-ch
 	s.False(ok, "channel should be closed on channel error")
+}
+
+func (s *RabbitMQWaitTestSuite) TestRegister_ChannelError_CleanupIsNoOp() {
+	mgr := NewRabbitMQWaitManager(s.logger)
+	mockConn := &mockAMQPConn{
+		channelFn: func() (amqpChan, error) {
+			return nil, errors.New("channel failed")
+		},
+	}
+	mgr.dial = func(url string) (amqpConn, error) {
+		return mockConn, nil
+	}
+
+	_, cleanup := mgr.Register("amqp://host:5672", "q1", "id", "123", context.Background())
+
+	s.NotPanics(cleanup, "cleanup returned on channel error must be callable without panic")
 }
 
 func (s *RabbitMQWaitTestSuite) TestRegister_Success_ReceivesMatchingMessage() {

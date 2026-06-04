@@ -325,3 +325,79 @@ func (s *ExecutionStoreTestSuite) TestUpdateStep_NilStepsMap() {
 	s.Equal(runtime.StatusRunning, got.Steps["step1"].Status)
 }
 
+func (s *ExecutionStoreTestSuite) TestCapacity() {
+	st := NewExecutionStore(42)
+	s.Equal(42, st.Capacity())
+}
+
+func (s *ExecutionStoreTestSuite) TestGetEventsPaginated_Normal() {
+	st := NewExecutionStore(10)
+
+	for i := 0; i < 5; i++ {
+		ev := event.Event{Type: event.StepStarted, ExecutionID: "exec-1", StepID: fmt.Sprintf("step%d", i)}
+		s.Require().NoError(st.AppendEvent(s.ctx, "exec-1", ev))
+	}
+
+	evts, total, err := st.GetEventsPaginated(s.ctx, "exec-1", 1, 2)
+	s.Require().NoError(err)
+	s.Equal(5, total)
+	s.Len(evts, 2)
+	s.Equal("step1", evts[0].StepID)
+	s.Equal("step2", evts[1].StepID)
+}
+
+func (s *ExecutionStoreTestSuite) TestGetEventsPaginated_OffsetBeyondTotal() {
+	st := NewExecutionStore(10)
+
+	s.Require().NoError(st.AppendEvent(s.ctx, "exec-1", event.Event{Type: event.StepStarted, ExecutionID: "exec-1"}))
+
+	evts, total, err := st.GetEventsPaginated(s.ctx, "exec-1", 10, 5)
+	s.Require().NoError(err)
+	s.Equal(1, total)
+	s.Nil(evts)
+}
+
+func (s *ExecutionStoreTestSuite) TestGetEventsPaginated_LimitClampedToEnd() {
+	st := NewExecutionStore(10)
+
+	for i := 0; i < 3; i++ {
+		s.Require().NoError(st.AppendEvent(s.ctx, "exec-1", event.Event{
+			Type:        event.StepStarted,
+			ExecutionID: "exec-1",
+			StepID:      fmt.Sprintf("step%d", i),
+		}))
+	}
+
+	evts, total, err := st.GetEventsPaginated(s.ctx, "exec-1", 2, 100)
+	s.Require().NoError(err)
+	s.Equal(3, total)
+	s.Len(evts, 1)
+	s.Equal("step2", evts[0].StepID)
+}
+
+func (s *ExecutionStoreTestSuite) TestComputeStepMetrics_ExportedWrapper() {
+	now := time.Now()
+	started := now.Add(-50 * time.Millisecond)
+
+	execs := []*Execution{
+		{
+			ID:           "exec-1",
+			WorkflowName: "test",
+			Status:       runtime.StatusSuccess,
+			StartedAt:    now,
+			Steps: map[string]*runtime.StepResult{
+				"step1": {
+					Status:     runtime.StatusSuccess,
+					StartedAt:  &started,
+					FinishedAt: &now,
+				},
+			},
+		},
+	}
+
+	metrics := ComputeStepMetrics(execs)
+	s.Require().NotNil(metrics["step1"])
+	s.Equal(1, metrics["step1"].TotalExecutions)
+	s.Equal(1, metrics["step1"].SuccessCount)
+}
+

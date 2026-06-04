@@ -68,6 +68,28 @@ func (s *ParserTestSuite) TestValidate_PersistenceUnknownType() {
 	s.Contains(err.Error(), "not supported")
 }
 
+func (s *ParserTestSuite) TestValidate_PersistenceMemoryTypeWithMariaDBSubBlockRejected() {
+	w := newValidPersistenceWorkflow()
+	w.Persistence = &Persistence{
+		Type:    PersistenceMemory,
+		MariaDB: &MariaDBPersistence{DSN: "user@/db"},
+	}
+	err := Validate(w)
+	s.Require().Error(err)
+	s.Contains(err.Error(), "must not declare other backend sub-blocks")
+}
+
+func (s *ParserTestSuite) TestValidate_PersistenceDefaultTypeWithMariaDBSubBlockRejected() {
+	w := newValidPersistenceWorkflow()
+	w.Persistence = &Persistence{
+		Type:    "",
+		MariaDB: &MariaDBPersistence{DSN: "user@/db"},
+	}
+	err := Validate(w)
+	s.Require().Error(err)
+	s.Contains(err.Error(), "must not declare other backend sub-blocks")
+}
+
 func (s *ParserTestSuite) TestValidate_PersistenceMariaDBWithExtraSubBlockRejected() {
 	w := newValidPersistenceWorkflow()
 	w.Persistence = &Persistence{

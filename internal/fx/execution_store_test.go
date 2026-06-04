@@ -1,11 +1,15 @@
 package fx
 
 import (
+	"context"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/suite"
 	"github.com/tailflow/tailflow/internal/parser"
 	"github.com/tailflow/tailflow/internal/store"
+	"github.com/tailflow/tailflow/internal/store/mariadb"
+	uberfx "go.uber.org/fx"
 )
 
 type ExecutionStoreTestSuite struct {
@@ -97,6 +101,92 @@ func (s *ExecutionStoreTestSuite) TestNewExecutionStore_UnknownBackendRejected()
 
 	s.Require().Error(err)
 	s.Contains(err.Error(), "unknown backend")
+}
+
+func (s *ExecutionStoreTestSuite) TestNewMariaDBStore_SuccessWithLifecycleHook() {
+	db, _, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	s.Require().NoError(err)
+
+	defer func() { _ = db.Close() }()
+
+	st, stErr := mariadb.NewWithDB(db, "tf_")
+	s.Require().NoError(stErr)
+
+	original := mariaDBNewFn
+	mariaDBNewFn = func(_ context.Context, _, _ string) (*mariadb.Store, error) {
+		return st, nil
+	}
+
+	defer func() { mariaDBNewFn = original }()
+
+	stopCalled := false
+
+	lc := &fakeLifecycle{
+		onAppend: func(hook uberfx.Hook) {
+			if hook.OnStop != nil {
+				stopCalled = true
+				_ = hook.OnStop(context.Background())
+			}
+		},
+	}
+
+	out, execErr := newMariaDBStore(ExecutionStoreIn{
+		Config:    Config{MaxExecs: 10},
+		Lifecycle: lc,
+		Workflow: &parser.Workflow{
+			Persistence: &parser.Persistence{
+				Type:    parser.PersistenceMariaDB,
+				MariaDB: &parser.MariaDBPersistence{DSN: "fake"},
+			},
+		},
+	})
+
+	s.Require().NoError(execErr)
+	s.Same(st, out.Store)
+	s.True(stopCalled, "lifecycle OnStop hook must be registered and called")
+}
+
+func (s *ExecutionStoreTestSuite) TestNewMariaDBStore_SuccessWithNilLifecycle() {
+	db, _, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	s.Require().NoError(err)
+
+	defer func() { _ = db.Close() }()
+
+	st, stErr := mariadb.NewWithDB(db, "tf_")
+	s.Require().NoError(stErr)
+
+	original := mariaDBNewFn
+	mariaDBNewFn = func(_ context.Context, _, _ string) (*mariadb.Store, error) {
+		return st, nil
+	}
+
+	defer func() { mariaDBNewFn = original }()
+
+	out, execErr := newMariaDBStore(ExecutionStoreIn{
+		Config:    Config{MaxExecs: 10},
+		Lifecycle: nil,
+		Workflow: &parser.Workflow{
+			Persistence: &parser.Persistence{
+				Type:    parser.PersistenceMariaDB,
+				MariaDB: &parser.MariaDBPersistence{DSN: "fake"},
+			},
+		},
+	})
+
+	s.Require().NoError(execErr)
+	s.Same(st, out.Store)
+}
+
+// fakeLifecycle is a minimal uberfx.Lifecycle stub for tests that need to
+// inspect registered hooks without starting a full fx app.
+type fakeLifecycle struct {
+	onAppend func(hook uberfx.Hook)
+}
+
+func (f *fakeLifecycle) Append(hook uberfx.Hook) {
+	if f.onAppend != nil {
+		f.onAppend(hook)
+	}
 }
 
 // memoryCapacityFor exposes the unexported capacity field for assertion only.

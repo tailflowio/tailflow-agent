@@ -147,3 +147,70 @@ func (s *BusTestSuite) TestCloseIdempotent() {
 	}, "calling Close() a second time should not panic")
 }
 
+func (s *BusTestSuite) TestSubscribeBlocking_ReceivesEvent() {
+	bus := NewBus()
+	defer bus.Close()
+
+	ch := bus.SubscribeBlocking(10)
+
+	e := NewEvent(StepStarted, "exec-1", "step1", "blocking subscriber")
+	bus.Publish(e)
+
+	select {
+	case received := <-ch:
+		s.Equal(StepStarted, received.Type)
+		s.Equal("exec-1", received.ExecutionID)
+	case <-time.After(time.Second):
+		s.T().Fatal("timeout waiting for event on blocking subscriber")
+	}
+}
+
+func (s *BusTestSuite) TestSubscribeBlocking_WaitsWhenFull() {
+	bus := NewBus()
+	defer bus.Close()
+
+	// Buffer of 0 forces Publish to block until a reader is ready.
+	ch := bus.SubscribeBlocking(0)
+
+	published := make(chan struct{})
+	go func() {
+		bus.Publish(NewEvent(StepLog, "exec-1", "step1", "blocking"))
+		close(published)
+	}()
+
+	// Drain the blocking channel so the goroutine can finish.
+	select {
+	case received := <-ch:
+		s.Equal(StepLog, received.Type)
+	case <-time.After(time.Second):
+		s.T().Fatal("timeout draining blocking subscriber channel")
+	}
+
+	select {
+	case <-published:
+	case <-time.After(time.Second):
+		s.T().Fatal("Publish did not return after channel was drained")
+	}
+}
+
+func (s *BusTestSuite) TestDropped_CountsDroppedEvents() {
+	bus := NewBus()
+	defer bus.Close()
+
+	// Buffer of 1: first event lands, subsequent ones are dropped.
+	ch := bus.Subscribe(1)
+
+	for i := 0; i < 5; i++ {
+		bus.Publish(NewEvent(StepLog, "exec-1", "step1", "log"))
+	}
+
+	dropped := bus.Dropped()
+	s.GreaterOrEqual(dropped, uint64(1), "at least one event should have been dropped")
+
+	// Drain to avoid goroutine leak on Close.
+	select {
+	case <-ch:
+	default:
+	}
+}
+

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os/exec"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -344,4 +345,60 @@ func (s *ExecActionTestSuite) TestStreamingStderrPipeError() {
 	_, err := a.executeStreaming(ctx, cmd)
 	s.Error(err)
 	s.Contains(err.Error(), "stderr pipe")
+}
+
+// errReader yields data then returns a non-EOF error on the next Read call.
+type errReader struct {
+	data []byte
+	sent bool
+}
+
+func (r *errReader) Read(p []byte) (int, error) {
+	if !r.sent && len(r.data) > 0 {
+		r.sent = true
+		n := copy(p, r.data)
+
+		return n, nil
+	}
+
+	return 0, io.ErrUnexpectedEOF
+}
+
+func (s *ExecActionTestSuite) TestCaptureStreams_ScannerError() {
+	var mu sync.Mutex
+	var logs []string
+
+	ctx := &ActionContext{
+		Context: context.Background(),
+		Config:  map[string]any{},
+		ExecCtx: runtime.NewExecutionContext("test-exec", "test-wf", nil, nil),
+		StepID:  "test-step",
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		EmitLog: func(msg string) {
+			mu.Lock()
+			defer mu.Unlock()
+			logs = append(logs, msg)
+		},
+	}
+
+	// errReader triggers scanner.Err() != nil inside captureStreams.
+	stdoutReader := &errReader{data: []byte("line1\n")}
+	stderrReader := &errReader{}
+
+	captureStreams(ctx, stdoutReader, stderrReader)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	found := false
+
+	for _, l := range logs {
+		if strings.Contains(l, "stream error") {
+			found = true
+
+			break
+		}
+	}
+
+	s.True(found, "expected a 'stream error' log entry from the errReader")
 }

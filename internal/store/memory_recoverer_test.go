@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -9,6 +10,13 @@ import (
 
 	"github.com/tailflow/tailflow/internal/runtime"
 )
+
+// failingLister implements executionLister and always returns an error.
+type failingLister struct{}
+
+func (f *failingLister) List(_ context.Context) ([]*Execution, error) {
+	return nil, errors.New("list failed")
+}
 
 type MemoryRecovererTestSuite struct {
 	suite.Suite
@@ -129,4 +137,12 @@ func (s *MemoryRecovererTestSuite) TestRecoverExecutions_PreservesNewestFirst() 
 	s.Require().Len(recovered, 2)
 	s.Equal("exec-new", recovered[0].ExecutionID)
 	s.Equal("exec-old", recovered[1].ExecutionID)
+}
+
+func (s *MemoryRecovererTestSuite) TestRecoverExecutions_WhenListFails() {
+	recoverer := &MemoryRecoverer{store: &failingLister{}}
+
+	recovered, err := recoverer.RecoverExecutions(s.context, "")
+	s.Error(err)
+	s.Nil(recovered)
 }

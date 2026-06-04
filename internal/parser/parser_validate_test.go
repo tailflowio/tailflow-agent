@@ -209,3 +209,58 @@ func (s *ParserTestSuite) TestValidate_WorkflowOnError_MissingAction() {
 	s.ErrorContains(err, "workflow on_error")
 	s.ErrorContains(err, "must have an action")
 }
+
+func (s *ParserTestSuite) TestValidate_NoStages() {
+	w := &Workflow{
+		Version: "2.0",
+		Name:    "test",
+		Stages:  []Stage{},
+		Steps:   []Step{{ID: "s1", Stage: "default", Action: "log"}},
+	}
+	err := Validate(w)
+	s.ErrorContains(err, "at least one stage is required")
+}
+
+func (s *ParserTestSuite) TestValidate_StageWithNoName() {
+	w := &Workflow{
+		Version: "2.0",
+		Name:    "test",
+		Stages:  []Stage{{Name: ""}},
+		Steps:   []Step{{ID: "s1", Stage: "default", Action: "log"}},
+	}
+	err := Validate(w)
+	s.ErrorContains(err, "must have a name")
+}
+
+func (s *ParserTestSuite) TestValidate_DuplicateStageName() {
+	w := &Workflow{
+		Version: "2.0",
+		Name:    "test",
+		Stages:  []Stage{{Name: "default"}, {Name: "default"}},
+		Steps:   []Step{{ID: "s1", Stage: "default", Action: "log"}},
+	}
+	err := Validate(w)
+	s.ErrorContains(err, "duplicate stage name")
+}
+
+func (s *ParserTestSuite) TestValidate_StepWithNoStage() {
+	w := &Workflow{
+		Version: "2.0",
+		Name:    "test",
+		Stages:  []Stage{{Name: "default"}},
+		Steps:   []Step{{ID: "s1", Action: "log"}},
+	}
+	err := Validate(w)
+	s.ErrorContains(err, "must have a stage")
+}
+
+func (s *ParserTestSuite) TestValidate_StepReferencesUnknownStage() {
+	w := &Workflow{
+		Version: "2.0",
+		Name:    "test",
+		Stages:  []Stage{{Name: "default"}},
+		Steps:   []Step{{ID: "s1", Stage: "unknown", Action: "log"}},
+	}
+	err := Validate(w)
+	s.ErrorContains(err, "references unknown stage")
+}

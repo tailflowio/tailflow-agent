@@ -103,6 +103,43 @@ func (s *RabbitMQShovelWrappersTestSuite) TestShovelDialFn_Default_DialFails() {
 	s.Require().Error(err)
 }
 
+func (s *RabbitMQShovelWrappersTestSuite) TestShovelDialFn_RawDialError_PropagatesError() {
+	original := shovelRawDialFn
+	defer func() { shovelRawDialFn = original }()
+
+	shovelRawDialFn = func(_ string) (shovelAMQPConn, error) {
+		return nil, fmt.Errorf("raw dial refused")
+	}
+
+	_, err := shovelDialFn("amqp://any")
+	s.Require().Error(err)
+	s.Contains(err.Error(), "raw dial refused")
+}
+
+func (s *RabbitMQShovelWrappersTestSuite) TestShovelDialFn_RawDialSuccess_ReturnsConnector() {
+	original := shovelRawDialFn
+	defer func() { shovelRawDialFn = original }()
+
+	conn := &mockAMQPConnection{
+		channelFn: func() (*amqp.Channel, error) { return nil, nil },
+		closeFn:   func() error { return nil },
+	}
+
+	shovelRawDialFn = func(_ string) (shovelAMQPConn, error) {
+		return conn, nil
+	}
+
+	connector, err := shovelDialFn("amqp://any")
+	s.Require().NoError(err)
+	s.NotNil(connector)
+}
+
+func (s *RabbitMQShovelWrappersTestSuite) TestShovelRawDialFn_DialError_NoNetwork() {
+	c, err := shovelRawDialFn("not://invalid")
+	s.Require().Error(err)
+	s.Nil(c)
+}
+
 type mockAMQPConnection struct {
 	channelFn func() (*amqp.Channel, error)
 	closeFn   func() error
