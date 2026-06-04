@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,6 +15,36 @@ import (
 	"github.com/tailflow/tailflow/internal/parser"
 	"github.com/tailflow/tailflow/internal/runtime"
 )
+
+// eventCollector accumulates values emitted on the event bus from a subscriber
+// goroutine while letting the test body read them safely. The mutex guards the
+// slice against the goroutine still appending later events when the body reads.
+type eventCollector[T any] struct {
+	mu    sync.Mutex
+	items []T
+	count atomic.Int32
+}
+
+func (c *eventCollector[T]) add(item T) {
+	c.mu.Lock()
+	c.items = append(c.items, item)
+	c.mu.Unlock()
+	c.count.Add(1)
+}
+
+func (c *eventCollector[T]) load() int32 {
+	return c.count.Load()
+}
+
+func (c *eventCollector[T]) snapshot() []T {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	out := make([]T, len(c.items))
+	copy(out, c.items)
+
+	return out
+}
 
 func newTestExecutor() (*Executor, *event.Bus) {
 	bus := event.NewBus()
@@ -241,15 +272,13 @@ func (s *EngineTestSuite) TestDAGDependencies() {
 	defer bus.Close()
 
 	// Track execution order
-	var order []string
-	var orderMu atomic.Int32
+	var order eventCollector[string]
 
 	ch := bus.Subscribe(100)
 	go func() {
 		for ev := range ch {
 			if ev.Type == event.StepCompleted {
-				order = append(order, ev.StepID)
-				orderMu.Add(1)
+				order.add(ev.StepID)
 			}
 		}
 	}()
@@ -270,12 +299,12 @@ func (s *EngineTestSuite) TestDAGDependencies() {
 
 	// Wait for all 3 StepCompleted events to be collected
 	s.Eventually(func() bool {
-		return orderMu.Load() >= 3
+		return order.load() >= 3
 	}, 2*time.Second, 10*time.Millisecond)
 
 	// a must come before b, b before c
 	aIdx, bIdx, cIdx := -1, -1, -1
-	for i, id := range order {
+	for i, id := range order.snapshot() {
 		switch id {
 		case "a":
 			aIdx = i
@@ -1615,15 +1644,13 @@ func (s *EngineTestSuite) TestExecute_RecoverySkipsCompletedSteps() {
 	exec, bus := newTestExecutor()
 	defer bus.Close()
 
-	var executedSteps []string
-	var count atomic.Int32
+	var executedSteps eventCollector[string]
 
 	ch := bus.Subscribe(100)
 	go func() {
 		for ev := range ch {
 			if ev.Type == event.StepStarted {
-				executedSteps = append(executedSteps, ev.StepID)
-				count.Add(1)
+				executedSteps.add(ev.StepID)
 			}
 		}
 	}()
@@ -1656,30 +1683,29 @@ func (s *EngineTestSuite) TestExecute_RecoverySkipsCompletedSteps() {
 	s.Equal(runtime.StatusSuccess, result.Status)
 
 	s.Eventually(func() bool {
-		return count.Load() >= 2
+		return executedSteps.load() >= 2
 	}, 2*time.Second, 10*time.Millisecond)
 
-	for _, stepID := range executedSteps {
+	steps := executedSteps.snapshot()
+	for _, stepID := range steps {
 		s.NotEqual("step1", stepID, "step1 should have been skipped")
 	}
 
-	s.Contains(executedSteps, "step2")
-	s.Contains(executedSteps, "step3")
+	s.Contains(steps, "step2")
+	s.Contains(steps, "step3")
 }
 
 func (s *EngineTestSuite) TestExecute_RecoveryOnRecoverySkip() {
 	exec, bus := newTestExecutor()
 	defer bus.Close()
 
-	var executedSteps []string
-	var count atomic.Int32
+	var executedSteps eventCollector[string]
 
 	ch := bus.Subscribe(100)
 	go func() {
 		for ev := range ch {
 			if ev.Type == event.StepStarted {
-				executedSteps = append(executedSteps, ev.StepID)
-				count.Add(1)
+				executedSteps.add(ev.StepID)
 			}
 		}
 	}()
@@ -1709,14 +1735,15 @@ func (s *EngineTestSuite) TestExecute_RecoveryOnRecoverySkip() {
 	s.Equal(runtime.StatusSuccess, result.Status)
 
 	s.Eventually(func() bool {
-		return count.Load() >= 1
+		return executedSteps.load() >= 1
 	}, 2*time.Second, 10*time.Millisecond)
 
-	for _, stepID := range executedSteps {
+	steps := executedSteps.snapshot()
+	for _, stepID := range steps {
 		s.NotEqual("send-email", stepID, "send-email should have been skipped (on_recovery=skip)")
 	}
 
-	s.Contains(executedSteps, "next-step")
+	s.Contains(steps, "next-step")
 }
 
 func (s *EngineTestSuite) TestExecute_RecoveryOnRecoveryFail() {
@@ -1751,15 +1778,13 @@ func (s *EngineTestSuite) TestExecute_RecoveryOnRecoveryRetryDefault() {
 	exec, bus := newTestExecutor()
 	defer bus.Close()
 
-	var executedSteps []string
-	var count atomic.Int32
+	var executedSteps eventCollector[string]
 
 	ch := bus.Subscribe(100)
 	go func() {
 		for ev := range ch {
 			if ev.Type == event.StepStarted {
-				executedSteps = append(executedSteps, ev.StepID)
-				count.Add(1)
+				executedSteps.add(ev.StepID)
 			}
 		}
 	}()
@@ -1789,25 +1814,71 @@ func (s *EngineTestSuite) TestExecute_RecoveryOnRecoveryRetryDefault() {
 	s.Equal(runtime.StatusSuccess, result.Status)
 
 	s.Eventually(func() bool {
-		return count.Load() >= 2
+		return executedSteps.load() >= 2
 	}, 2*time.Second, 10*time.Millisecond)
 
-	s.Contains(executedSteps, "create-account")
+	s.Contains(executedSteps.snapshot(), "create-account")
+}
+
+func (s *EngineTestSuite) TestExecute_RecoveryWaitingStepFallsThrough() {
+	exec, bus := newTestExecutor()
+	defer bus.Close()
+
+	var executedSteps eventCollector[string]
+
+	ch := bus.Subscribe(100)
+	go func() {
+		for ev := range ch {
+			if ev.Type == event.StepStarted {
+				executedSteps.add(ev.StepID)
+			}
+		}
+	}()
+
+	wf := &parser.Workflow{
+		Version: "2.0",
+		Name:    "test-recovery-waiting",
+		Steps: []parser.Step{
+			{ID: "await", Action: "log", OnRecovery: "skip", Config: map[string]any{"message": "await"}},
+			{ID: "next", Action: "log", DependsOn: []string{"await"}, Config: map[string]any{"message": "next"}},
+		},
+	}
+
+	now := time.Now()
+	recoveredSteps := map[string]*runtime.StepResult{
+		"await": {
+			Status:    runtime.StatusWaiting,
+			StartedAt: &now,
+		},
+	}
+
+	result, err := exec.Execute(context.Background(), wf, nil, ExecuteOptions{
+		Resumed:        true,
+		RecoveredSteps: recoveredSteps,
+	})
+	s.Require().NoError(err)
+	s.Equal(runtime.StatusSuccess, result.Status)
+
+	s.Eventually(func() bool {
+		return executedSteps.load() >= 2
+	}, 2*time.Second, 10*time.Millisecond)
+
+	steps := executedSteps.snapshot()
+	s.Contains(steps, "await")
+	s.Contains(steps, "next")
 }
 
 func (s *EngineTestSuite) TestExecute_GroupActionEmitsGroupEvent() {
 	exec, bus := newTestExecutor()
 	defer bus.Close()
 
-	var groupEvents []event.Event
-	var count atomic.Int32
+	var groupEvents eventCollector[event.Event]
 
 	ch := bus.Subscribe(100)
 	go func() {
 		for ev := range ch {
 			if ev.Type == event.ExecutionGroup {
-				groupEvents = append(groupEvents, ev)
-				count.Add(1)
+				groupEvents.add(ev)
 			}
 		}
 	}()
@@ -1831,20 +1902,20 @@ func (s *EngineTestSuite) TestExecute_GroupActionEmitsGroupEvent() {
 	s.Equal(runtime.StatusSuccess, result.Status)
 
 	s.Eventually(func() bool {
-		return count.Load() >= 1
+		return groupEvents.load() >= 1
 	}, 2*time.Second, 10*time.Millisecond)
 
-	s.Require().NotEmpty(groupEvents)
-	s.Equal("customer-user-42", groupEvents[0].Data["group_key"])
-	s.Equal("tag-customer", groupEvents[0].StepID)
+	events := groupEvents.snapshot()
+	s.Require().NotEmpty(events)
+	s.Equal("customer-user-42", events[0].Data["group_key"])
+	s.Equal("tag-customer", events[0].StepID)
 }
 
 func (s *EngineTestSuite) TestExecute_ResolvesIdempotencyKey() {
 	exec, bus := newTestExecutor()
 	defer bus.Close()
 
-	var capturedKey string
-	var found atomic.Int32
+	var capturedKeys eventCollector[string]
 
 	ch := bus.Subscribe(100)
 	go func() {
@@ -1854,8 +1925,7 @@ func (s *EngineTestSuite) TestExecute_ResolvesIdempotencyKey() {
 			}
 
 			key, _ := ev.Data["idempotency_key"].(string)
-			capturedKey = key
-			found.Add(1)
+			capturedKeys.add(key)
 		}
 	}()
 
@@ -1883,25 +1953,24 @@ func (s *EngineTestSuite) TestExecute_ResolvesIdempotencyKey() {
 	s.Require().NoError(err)
 
 	s.Eventually(func() bool {
-		return found.Load() >= 1
+		return capturedKeys.load() >= 1
 	}, 2*time.Second, 10*time.Millisecond)
 
-	s.Equal("user-42", capturedKey)
+	keys := capturedKeys.snapshot()
+	s.Equal("user-42", keys[len(keys)-1])
 }
 
 func (s *EngineTestSuite) TestExecute_NoIdempotencyKeyWhenNotConfigured() {
 	exec, bus := newTestExecutor()
 	defer bus.Close()
 
-	var stateEvents []event.Event
-	var count atomic.Int32
+	var stateEvents eventCollector[event.Event]
 
 	ch := bus.Subscribe(100)
 	go func() {
 		for ev := range ch {
 			if ev.Type == event.ExecutionState {
-				stateEvents = append(stateEvents, ev)
-				count.Add(1)
+				stateEvents.add(ev)
 			}
 		}
 	}()
@@ -1918,26 +1987,25 @@ func (s *EngineTestSuite) TestExecute_NoIdempotencyKeyWhenNotConfigured() {
 	s.Require().NoError(err)
 
 	s.Eventually(func() bool {
-		return count.Load() >= 1
+		return stateEvents.load() >= 1
 	}, 2*time.Second, 10*time.Millisecond)
 
-	s.NotEmpty(stateEvents)
-	s.Empty(stateEvents[0].Data["idempotency_key"])
+	events := stateEvents.snapshot()
+	s.NotEmpty(events)
+	s.Empty(events[0].Data["idempotency_key"])
 }
 
 func (s *EngineTestSuite) TestExecute_RecoveryNonRunningStepIgnored() {
 	exec, bus := newTestExecutor()
 	defer bus.Close()
 
-	var executedSteps []string
-	var count atomic.Int32
+	var executedSteps eventCollector[string]
 
 	ch := bus.Subscribe(100)
 	go func() {
 		for ev := range ch {
 			if ev.Type == event.StepStarted {
-				executedSteps = append(executedSteps, ev.StepID)
-				count.Add(1)
+				executedSteps.add(ev.StepID)
 			}
 		}
 	}()
@@ -1966,9 +2034,9 @@ func (s *EngineTestSuite) TestExecute_RecoveryNonRunningStepIgnored() {
 	s.Equal(runtime.StatusSuccess, result.Status)
 
 	s.Eventually(func() bool {
-		return count.Load() >= 1
+		return executedSteps.load() >= 1
 	}, 2*time.Second, 10*time.Millisecond)
 
-	s.Contains(executedSteps, "step1")
+	s.Contains(executedSteps.snapshot(), "step1")
 }
 
