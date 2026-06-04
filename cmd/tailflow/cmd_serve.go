@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"os"
 	"os/signal"
 	"syscall"
 
@@ -10,6 +12,7 @@ import (
 
 	agentfx "github.com/tailflow/tailflow/internal/fx"
 	tfotel "github.com/tailflow/tailflow/internal/otel"
+	"github.com/tailflow/tailflow/internal/parser"
 )
 
 func serveCmd(otelEndpoint, otelServiceName *string) *cobra.Command {
@@ -39,6 +42,15 @@ func serveCmd(otelEndpoint, otelServiceName *string) *cobra.Command {
 }
 
 func executeServe(path string, port, maxExecs int, unsafe, editor bool, otelCfg tfotel.Config) error {
+	// Validate the workflow at the CLI boundary so a content error surfaces as
+	// a clear, comprehensive message instead of an opaque fx dependency-graph
+	// wiring dump.
+	_, parseErr := parser.Parse(path)
+	if parseErr != nil {
+		renderWorkflowErrors(path, parseErr)
+		os.Exit(1)
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
@@ -52,4 +64,16 @@ func executeServe(path string, port, maxExecs int, unsafe, editor bool, otelCfg 
 		OTel:         otelCfg,
 		LogLevel:     slog.LevelInfo,
 	})
+}
+
+// renderWorkflowErrors prints every workflow validation error on its own line
+// so the operator sees all problems at once rather than an fx wiring dump.
+func renderWorkflowErrors(path string, err error) {
+	r := &cliRenderer{}
+
+	fmt.Printf("  %s %s\n", r.c("31", "✗"), r.c("31", fmt.Sprintf("Cannot start %q — the workflow is invalid:", path)))
+
+	for _, message := range parser.Messages(err) {
+		fmt.Printf("      %s\n", r.c("31", "• "+message))
+	}
 }
