@@ -6,11 +6,17 @@ import (
 	"errors"
 	"fmt"
 
+	mysqldriver "github.com/go-sql-driver/mysql"
+
 	"github.com/tailflow/tailflow/internal/runtime"
 	"github.com/tailflow/tailflow/internal/store"
 )
 
 // Add inserts a new execution. Steps and Params are JSON-encoded.
+//
+// The keyed-trigger claimer already INSERTs the execution row, so a subsequent
+// Add for the same id collides on the primary key. That duplicate is tolerated
+// (the row exists, the claim won) instead of being surfaced as an error.
 func (s *Store) Add(ctx context.Context, exec *store.Execution) error {
 	params, err := encodeJSON(exec.Params)
 	if err != nil {
@@ -31,11 +37,32 @@ func (s *Store) Add(ctx context.Context, exec *store.Execution) error {
 		nullableJSON(params), nullableJSON(steps),
 		exec.StartedAt, nullableTime(exec.FinishedAt), nullableString(exec.Error),
 	)
+	if isDuplicateEntryErr(err) {
+		return nil
+	}
+
 	if err != nil {
 		return fmt.Errorf("mariadb add: %w", err)
 	}
 
 	return nil
+}
+
+// isDuplicateEntryErr reports whether err is a MySQL/MariaDB duplicate-entry
+// error (1062), meaning the row already exists from the idempotency claim.
+func isDuplicateEntryErr(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var myErr *mysqldriver.MySQLError
+
+	ok := errors.As(err, &myErr)
+	if !ok {
+		return false
+	}
+
+	return myErr.Number == mysqlErrDuplicateEntry
 }
 
 // Get returns the stored execution. Wraps store.ErrNotFound when absent.

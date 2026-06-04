@@ -66,6 +66,8 @@ func (s *StoreTestSuite) TestSchemaStatements_ContainsExpectedTables() {
 	stmts := schemaStatements("tf_")
 	s.Require().Len(stmts, 3)
 	s.Contains(stmts[0], "CREATE TABLE IF NOT EXISTS tf_executions")
+	s.Contains(stmts[0], "idempotency_key")
+	s.Contains(stmts[0], "uk_tf_exec_idem")
 	s.Contains(stmts[1], "CREATE TABLE IF NOT EXISTS tf_events")
 	s.Contains(stmts[2], "CREATE TABLE IF NOT EXISTS tf_step_exec_counts")
 }

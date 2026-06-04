@@ -29,4 +29,19 @@ func (r *stubRecoverer) RecoverExecutions(_ context.Context, _ string) ([]export
 	return r.executions, r.err
 }
 
+// recordingClaimer captures the executionID passed to ClaimExecution so a test
+// can assert it matches the persisted execution row id.
+type recordingClaimer struct {
+	result        *export.ClaimResult
+	capturedID    string
+	capturedCalls int
+}
+
+func (c *recordingClaimer) ClaimExecution(_ context.Context, executionID, _, _ string) (*export.ClaimResult, error) {
+	c.capturedID = executionID
+	c.capturedCalls++
+
+	return c.result, nil
+}
+
 var errStubClaim = errors.New("stub claim failure")

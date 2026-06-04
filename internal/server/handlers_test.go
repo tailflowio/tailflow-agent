@@ -2298,6 +2298,69 @@ func (s *HandlersTestSuite) TestPublicTrigger_IdempotencyClaimed() {
 	s.NotEmpty(resp["execution_id"])
 }
 
+func (s *HandlersTestSuite) TestPublicTrigger_ClaimAndExecutionShareSameID() {
+	claimer := &recordingClaimer{result: &export.ClaimResult{Claimed: true}}
+	srv := newTestServerIdempotent(s.T(), claimer)
+
+	req := httptest.NewRequest("POST", "/api/public/submit", strings.NewReader(`{"order_id":"ord-share"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	s.Equal(http.StatusOK, w.Code)
+	s.Equal(1, claimer.capturedCalls)
+	s.NotEmpty(claimer.capturedID)
+
+	exec, err := srv.config.ExecutionStore.Get(context.Background(), claimer.capturedID)
+	s.Require().NoError(err)
+	s.Equal(claimer.capturedID, exec.ID)
+}
+
+func (s *HandlersTestSuite) TestPublicTrigger_SameKeyTwiceSingleExecution() {
+	srv := newTestServerIdempotent(s.T(), export.NewMemoryClaimer())
+
+	firstID := s.publicTriggerExecutionID(srv, `{"order_id":"ord-e2e"}`)
+	s.NotEmpty(firstID)
+
+	req := httptest.NewRequest("POST", "/api/public/submit", strings.NewReader(`{"order_id":"ord-e2e"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	s.Equal(http.StatusOK, w.Code)
+
+	var resp map[string]any
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	s.Require().NoError(err)
+	s.Equal(true, resp["deduplicated"])
+	s.Equal(firstID, resp["execution_id"])
+
+	count, err := srv.config.ExecutionStore.Count(context.Background())
+	s.Require().NoError(err)
+	s.Equal(1, count)
+}
+
+func (s *HandlersTestSuite) publicTriggerExecutionID(srv *Server, body string) string {
+	s.T().Helper()
+
+	req := httptest.NewRequest("POST", "/api/public/submit", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	s.Equal(http.StatusOK, w.Code)
+
+	var resp map[string]any
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	s.Require().NoError(err)
+	s.Nil(resp["deduplicated"])
+
+	id, ok := resp["execution_id"].(string)
+	s.Require().True(ok)
+
+	return id
+}
+
 func (s *HandlersTestSuite) TestPublicTrigger_NoIdempotencyKeyNoExportURL() {
 	srv := newTestServerHTTPTrigger(s.T())
 

@@ -39,11 +39,13 @@ func (s *Server) handlePublicTrigger(w http.ResponseWriter, r *http.Request) {
 func (s *Server) executeTriggerWorkflow(w http.ResponseWriter, r *http.Request, wf *parser.Workflow) {
 	triggerData, params := s.buildTriggerData(r)
 
-	if s.handleIdempotencyCheck(w, r, wf, triggerData, params) {
+	executionID := uuid.New().String()
+
+	if s.handleIdempotencyCheck(w, r, wf, executionID, triggerData, params) {
 		return
 	}
 
-	executionID, opts, stopCapture := s.prepareTriggerExecution(wf, triggerData, params)
+	opts, stopCapture := s.prepareTriggerExecution(wf, executionID, triggerData, params)
 
 	execCtx, cancel := context.WithCancel(s.ctx)
 	s.registerCancel(executionID, cancel)
@@ -63,7 +65,7 @@ func (s *Server) executeTriggerWorkflow(w http.ResponseWriter, r *http.Request, 
 
 func (s *Server) handleIdempotencyCheck(
 	w http.ResponseWriter, r *http.Request,
-	wf *parser.Workflow, triggerData, params map[string]any,
+	wf *parser.Workflow, executionID string, triggerData, params map[string]any,
 ) bool {
 	if wf.Trigger == nil || wf.Trigger.HTTP == nil || wf.Trigger.HTTP.IdempotencyKey == "" {
 		return false
@@ -80,7 +82,7 @@ func (s *Server) handleIdempotencyCheck(
 		return false
 	}
 
-	claimResult, claimErr := s.config.Claimer.ClaimExecution(r.Context(), uuid.New().String(), wf.Name, resolvedKey)
+	claimResult, claimErr := s.config.Claimer.ClaimExecution(r.Context(), executionID, wf.Name, resolvedKey)
 	if claimErr != nil {
 		s.config.Logger.Warn("idempotency claim failed, proceeding with execution", "error", claimErr)
 		return false
@@ -121,9 +123,8 @@ func (s *Server) buildTriggerData(r *http.Request) (map[string]any, map[string]a
 }
 
 func (s *Server) prepareTriggerExecution(
-	wf *parser.Workflow, triggerData, params map[string]any,
-) (string, engine.ExecuteOptions, func()) {
-	executionID := uuid.New().String()
+	wf *parser.Workflow, executionID string, triggerData, params map[string]any,
+) (engine.ExecuteOptions, func()) {
 	exec := &store.Execution{
 		ID:           executionID,
 		WorkflowName: wf.Name,
@@ -146,7 +147,7 @@ func (s *Server) prepareTriggerExecution(
 		Services:    services,
 	}
 
-	return executionID, opts, stopCapture
+	return opts, stopCapture
 }
 
 func (s *Server) runTriggerAsync(
