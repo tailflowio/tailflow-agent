@@ -28,7 +28,10 @@ func executeValidate(path string, noColor bool) error {
 
 	wf, err := parser.Parse(path)
 	if err != nil {
-		fmt.Printf("  %s %s\n", r.c("31", "✗"), r.c("31", "Validation failed: "+err.Error()))
+		for _, message := range parser.Messages(err) {
+			fmt.Printf("  %s %s\n", r.c("31", "✗"), r.c("31", "Validation failed: "+message))
+		}
+
 		os.Exit(1)
 	}
 

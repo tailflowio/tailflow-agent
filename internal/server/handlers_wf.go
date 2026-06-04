@@ -85,7 +85,7 @@ func (s *Server) handlePutWorkflowRaw(w http.ResponseWriter, r *http.Request) {
 
 	wf, parseErr := parser.ParseBytes(body)
 	if parseErr != nil {
-		s.writeJSON(r.Context(), w, http.StatusBadRequest, api.ValidateResponse{Valid: false, Errors: []string{parseErr.Error()}})
+		s.writeJSON(r.Context(), w, http.StatusBadRequest, api.ValidateResponse{Valid: false, Errors: parser.Messages(parseErr)})
 		return
 	}
 
@@ -113,7 +113,7 @@ func (s *Server) handleGetWorkflowGraph(w http.ResponseWriter, r *http.Request) 
 func (s *Server) handleValidateWorkflow(w http.ResponseWriter, r *http.Request) {
 	err := parser.Validate(s.config.Workflow)
 	if err != nil {
-		s.writeJSON(r.Context(), w, http.StatusOK, api.ValidateResponse{Valid: false, Errors: []string{err.Error()}})
+		s.writeJSON(r.Context(), w, http.StatusOK, api.ValidateResponse{Valid: false, Errors: parser.Messages(err)})
 		return
 	}
 

@@ -1,5 +1,7 @@
 package parser
 
+import "errors"
+
 func (s *ParserTestSuite) TestValidate_MissingVersion() {
 	w := &Workflow{Name: "test", Steps: []Step{{ID: "s1", Action: "log"}}}
 	err := Validate(w)
@@ -263,4 +265,73 @@ func (s *ParserTestSuite) TestValidate_StepReferencesUnknownStage() {
 	}
 	err := Validate(w)
 	s.ErrorContains(err, "references unknown stage")
+}
+
+func (s *ParserTestSuite) TestValidate_AccumulatesMultipleErrors() {
+	w := &Workflow{
+		Version: "1.0",
+		Steps: []Step{
+			{ID: "a", Action: "log"},
+		},
+	}
+	err := Validate(w)
+	messages := Messages(err)
+
+	s.GreaterOrEqual(len(messages), 4)
+	s.ErrorContains(err, "unsupported version")
+	s.ErrorContains(err, "name is required")
+	s.ErrorContains(err, "at least one stage is required")
+	s.ErrorContains(err, "must have a stage")
+}
+
+func (s *ParserTestSuite) TestValidate_DuplicateStepAndParamErrorsBothReported() {
+	w := &Workflow{
+		Version: "2.0",
+		Name:    "test",
+		Params: []Param{
+			{Name: "p1", Type: "bad"},
+			{Type: "string"},
+		},
+		Stages: []Stage{{Name: "default"}, {Name: "default"}, {Name: ""}},
+		Steps: []Step{
+			{ID: "s1", Stage: "default", Action: "log"},
+			{ID: "s1", Stage: "default", Action: "exec"},
+		},
+	}
+	err := Validate(w)
+
+	s.ErrorContains(err, "unsupported type")
+	s.ErrorContains(err, "param[1] must have a name")
+	s.ErrorContains(err, "duplicate stage name")
+	s.ErrorContains(err, "must have a name")
+	s.ErrorContains(err, "duplicate step id")
+}
+
+func (s *ParserTestSuite) TestValidate_ValidVersionMissingNameDoesNotReportVersionError() {
+	w := &Workflow{
+		Version: "2.0",
+		Stages:  []Stage{{Name: "default"}},
+		Steps:   []Step{{ID: "s1", Stage: "default", Action: "log"}},
+	}
+	err := Validate(w)
+
+	s.ErrorContains(err, "name is required")
+	s.NotContains(err.Error(), "unsupported version")
+}
+
+func (s *ParserTestSuite) TestMessages_Nil() {
+	s.Nil(Messages(nil))
+}
+
+func (s *ParserTestSuite) TestMessages_SingleError() {
+	messages := Messages(errors.New("boom"))
+
+	s.Equal([]string{"boom"}, messages)
+}
+
+func (s *ParserTestSuite) TestMessages_JoinedErrors() {
+	joined := errors.Join(errors.New("first"), errors.New("second"))
+	messages := Messages(joined)
+
+	s.Equal([]string{"first", "second"}, messages)
 }
