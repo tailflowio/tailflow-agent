@@ -15,6 +15,9 @@ import (
 	"github.com/tailflow/tailflow/internal/store"
 )
 
+// sqlOpen is the sql.Open seam overridden in tests to inject a sqlmock *sql.DB.
+var sqlOpen = sql.Open
+
 // Store is the MariaDB / MySQL backed implementation of store.ExecutionStore.
 // It is safe for concurrent use; *sql.DB handles its own connection pool.
 type Store struct {
@@ -37,7 +40,7 @@ func New(ctx context.Context, dsn, tablePrefix string) (*Store, error) {
 
 	expanded := os.ExpandEnv(dsn)
 
-	db, err := sql.Open("mysql", expanded)
+	db, err := sqlOpen("mysql", expanded)
 	if err != nil {
 		return nil, fmt.Errorf("mariadb open: %w", err)
 	}
