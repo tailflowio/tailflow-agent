@@ -8,6 +8,16 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// lineErr formats a validation message, appending the 1-based source line
+// when it is known (line > 0).
+func lineErr(line int, msg string) error {
+	if line > 0 {
+		return fmt.Errorf("validation: %s (line %d)", msg, line)
+	}
+
+	return fmt.Errorf("validation: %s", msg)
+}
+
 func Parse(path string) (*Workflow, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -140,12 +150,12 @@ func validateStages(w *Workflow) []error {
 
 	for i, s := range w.Stages {
 		if s.Name == "" {
-			errs = append(errs, fmt.Errorf("validation: stage[%d] must have a name", i))
+			errs = append(errs, lineErr(s.Line, fmt.Sprintf("stage[%d] must have a name", i)))
 			continue
 		}
 
 		if stageNames[s.Name] {
-			errs = append(errs, fmt.Errorf("validation: duplicate stage name %q", s.Name))
+			errs = append(errs, lineErr(s.Line, fmt.Sprintf("duplicate stage name %q", s.Name)))
 			continue
 		}
 
@@ -154,12 +164,12 @@ func validateStages(w *Workflow) []error {
 
 	for _, s := range w.Steps {
 		if s.Stage == "" {
-			errs = append(errs, fmt.Errorf("validation: step %q must have a stage", s.ID))
+			errs = append(errs, lineErr(s.Line, fmt.Sprintf("step %q must have a stage", s.ID)))
 			continue
 		}
 
 		if !stageNames[s.Stage] {
-			errs = append(errs, fmt.Errorf("validation: step %q references unknown stage %q", s.ID, s.Stage))
+			errs = append(errs, lineErr(s.Line, fmt.Sprintf("step %q references unknown stage %q", s.ID, s.Stage)))
 		}
 	}
 
@@ -173,39 +183,39 @@ func validateSteps(w *Workflow) []error {
 
 	for i, s := range w.Steps {
 		if s.ID == "" {
-			errs = append(errs, fmt.Errorf("validation: step[%d] must have an id", i))
+			errs = append(errs, lineErr(s.Line, fmt.Sprintf("step[%d] must have an id", i)))
 			continue
 		}
 
 		if ids[s.ID] {
-			errs = append(errs, fmt.Errorf("validation: duplicate step id %q", s.ID))
+			errs = append(errs, lineErr(s.Line, fmt.Sprintf("duplicate step id %q", s.ID)))
 			continue
 		}
 
 		ids[s.ID] = true
 
 		if s.Action == "" {
-			errs = append(errs, fmt.Errorf("validation: step %q must have an action", s.ID))
+			errs = append(errs, lineErr(s.Line, fmt.Sprintf("step %q must have an action", s.ID)))
 		}
 
 		if s.ErrorPolicy != "" && s.ErrorPolicy != "stop" && s.ErrorPolicy != "continue" && s.ErrorPolicy != "ignore" {
-			errs = append(errs, fmt.Errorf("validation: step %q has invalid error_policy %q", s.ID, s.ErrorPolicy))
+			errs = append(errs, lineErr(s.Line, fmt.Sprintf("step %q has invalid error_policy %q", s.ID, s.ErrorPolicy)))
 		}
 
 		if s.OnRecovery != "" && s.OnRecovery != "retry" && s.OnRecovery != "skip" && s.OnRecovery != "fail" {
-			errs = append(errs, fmt.Errorf("validation: step %q: on_recovery must be retry, skip, or fail", s.ID))
+			errs = append(errs, lineErr(s.Line, fmt.Sprintf("step %q: on_recovery must be retry, skip, or fail", s.ID)))
 		}
 	}
 
 	for _, s := range w.Steps {
 		for _, dep := range s.DependsOn {
 			if dep == s.ID {
-				errs = append(errs, fmt.Errorf("validation: step %q cannot depend on itself", s.ID))
+				errs = append(errs, lineErr(s.Line, fmt.Sprintf("step %q cannot depend on itself", s.ID)))
 				continue
 			}
 
 			if !ids[dep] {
-				errs = append(errs, fmt.Errorf("validation: step %q depends_on unknown step %q", s.ID, dep))
+				errs = append(errs, lineErr(s.Line, fmt.Sprintf("step %q depends_on unknown step %q", s.ID, dep)))
 			}
 		}
 	}
@@ -218,19 +228,19 @@ func validateParams(w *Workflow) []error {
 
 	for i, p := range w.Params {
 		if p.Name == "" {
-			errs = append(errs, fmt.Errorf("validation: param[%d] must have a name", i))
+			errs = append(errs, lineErr(p.Line, fmt.Sprintf("param[%d] must have a name", i)))
 			continue
 		}
 
 		if p.Type == "" {
-			errs = append(errs, fmt.Errorf("validation: param %q must have a type", p.Name))
+			errs = append(errs, lineErr(p.Line, fmt.Sprintf("param %q must have a type", p.Name)))
 			continue
 		}
 
 		switch p.Type {
 		case "string", "bool", "int", "float":
 		default:
-			errs = append(errs, fmt.Errorf("validation: param %q has unsupported type %q", p.Name, p.Type))
+			errs = append(errs, lineErr(p.Line, fmt.Sprintf("param %q has unsupported type %q", p.Name, p.Type)))
 		}
 	}
 
@@ -299,26 +309,26 @@ func validateTesting(w *Workflow) []error {
 
 		for i, tc := range s.Testing {
 			if tc.Name == "" {
-				errs = append(errs, fmt.Errorf("validation: step %q testing[%d] must have a name", s.ID, i))
+				errs = append(errs, lineErr(s.Line, fmt.Sprintf("step %q testing[%d] must have a name", s.ID, i)))
 				continue
 			}
 
 			if names[tc.Name] {
-				errs = append(errs, fmt.Errorf("validation: step %q has duplicate test case name %q", s.ID, tc.Name))
+				errs = append(errs, lineErr(s.Line, fmt.Sprintf("step %q has duplicate test case name %q", s.ID, tc.Name)))
 				continue
 			}
 
 			names[tc.Name] = true
 
 			if tc.Output != nil && tc.Error != nil {
-				errs = append(errs, fmt.Errorf("validation: step %q test case %q cannot have both output and error", s.ID, tc.Name))
+				errs = append(errs, lineErr(s.Line, fmt.Sprintf("step %q test case %q cannot have both output and error", s.ID, tc.Name)))
 			}
 
 			if tc.Expect != nil && tc.Expect.Status != "" {
 				switch tc.Expect.Status {
 				case "success", "failed", "skipped":
 				default:
-					errs = append(errs, fmt.Errorf("validation: step %q test case %q has invalid expect status %q", s.ID, tc.Name, tc.Expect.Status))
+					errs = append(errs, lineErr(s.Line, fmt.Sprintf("step %q test case %q has invalid expect status %q", s.ID, tc.Name, tc.Expect.Status)))
 				}
 			}
 		}

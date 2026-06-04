@@ -52,6 +52,7 @@ type MariaDBPersistence struct {
 type Stage struct {
 	Name        string `json:"name"                  yaml:"name"`
 	Description string `json:"description,omitempty" yaml:"description,omitempty"`
+	Line        int    `json:"-"                     yaml:"-"` // 1-based source line, populated during decode
 }
 
 // Param defines an input parameter for a workflow.
@@ -61,6 +62,7 @@ type Param struct {
 	Required bool   `json:"required,omitempty" yaml:"required,omitempty"`
 	Default  any    `json:"default,omitempty"  yaml:"default,omitempty"`
 	Pattern  string `json:"pattern,omitempty"  yaml:"pattern,omitempty"`
+	Line     int    `json:"-"                  yaml:"-"` // 1-based source line, populated during decode
 }
 
 // GotoConfig defines a conditional jump to re-execute a subset of the DAG.
@@ -86,6 +88,7 @@ type Step struct {
 	ErrorPolicy string         `json:"error_policy,omitempty" yaml:"error_policy,omitempty"`
 	OnRecovery  string         `json:"on_recovery,omitempty"  yaml:"on_recovery,omitempty"`
 	Testing     []TestCase     `json:"testing,omitempty"      yaml:"testing,omitempty"`
+	Line        int            `json:"-"                      yaml:"-"` // 1-based source line, populated during decode
 }
 
 type TestCase struct {

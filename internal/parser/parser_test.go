@@ -182,6 +182,36 @@ steps:
 	s.Equal("customer-{{ params.customer_id }}", wf.Steps[0].Config["key"])
 }
 
+func (s *ParserTestSuite) TestLineErr_WithLine() {
+	err := lineErr(7, "step \"a\" must have a stage")
+	s.Require().Error(err)
+	s.Equal("validation: step \"a\" must have a stage (line 7)", err.Error())
+}
+
+func (s *ParserTestSuite) TestLineErr_WithoutLine() {
+	err := lineErr(0, "step \"a\" must have a stage")
+	s.Require().Error(err)
+	s.Equal("validation: step \"a\" must have a stage", err.Error())
+}
+
+func (s *ParserTestSuite) TestValidate_StepErrorsCarrySourceLine() {
+	yaml := `version: "2.0"
+name: "demo"
+stages:
+  - name: main
+steps:
+  - id: a
+    action: log
+  - id: b
+    action: log
+    stage: nope
+`
+	_, err := ParseBytes([]byte(yaml))
+	s.Require().Error(err)
+	s.Contains(err.Error(), "step \"a\" must have a stage (line 6)")
+	s.Contains(err.Error(), "step \"b\" references unknown stage \"nope\" (line 8)")
+}
+
 func newValidPersistenceWorkflow() *Workflow {
 	return &Workflow{
 		Version: "2.0",
