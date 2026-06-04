@@ -260,6 +260,8 @@ export function useSSE(executionId: string, options?: SSEOptions) {
         const body = (event.data?.body as string[]) || []
         for (const bid of body) {
           pendingIterations[bid] = iteration
+          // Reset the stale 'success' badge so flushBatch overwrites it.
+          pendingStatuses[bid] = 'pending'
         }
       }
       scheduleFlush()
