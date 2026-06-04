@@ -4,12 +4,14 @@ package engine
 
 import (
 	"context"
+	"sort"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/suite"
 	"github.com/tailflow/tailflow/internal/event"
 	"github.com/tailflow/tailflow/internal/parser"
+	"github.com/tailflow/tailflow/internal/runtime"
 )
 
 type GotoTestSuite struct {
@@ -225,5 +227,136 @@ func (s *GotoTestSuite) TestGotoConditionFalse() {
 
 	for _, e := range collected {
 		s.NotEqual(event.StepGoto, e.Type, "should not have any step.goto events")
+	}
+}
+
+func (s *GotoTestSuite) gotoLoopWorkflow() *parser.Workflow {
+	return &parser.Workflow{
+		Version: "2.0",
+		Name:    "goto-body",
+		Steps: []parser.Step{
+			{
+				ID:     "init",
+				Action: "set",
+				Config: map[string]any{"x": 0},
+			},
+			{
+				ID:        "work",
+				Action:    "js",
+				DependsOn: []string{"init"},
+				Config:    map[string]any{"script": `return { x: vars.x + 1 };`},
+			},
+			{
+				ID:        "save",
+				Action:    "set",
+				DependsOn: []string{"work"},
+				Config:    map[string]any{"x": "{{ steps.work.output.x }}"},
+			},
+			{
+				ID:        "loop",
+				Action:    "log",
+				DependsOn: []string{"save"},
+				Config:    map[string]any{"message": "looping"},
+				Goto: &parser.GotoConfig{
+					Target:        "work",
+					When:          "vars.x < 2",
+					MaxIterations: 10,
+				},
+			},
+			{
+				ID:        "end",
+				Action:    "log",
+				DependsOn: []string{"loop"},
+				Config:    map[string]any{"message": "end"},
+			},
+		},
+	}
+}
+
+func (s *GotoTestSuite) TestGotoEvent_BodyIsResetList() {
+	exec, bus := newTestExecutor()
+	defer bus.Close()
+
+	ch := bus.Subscribe(200)
+
+	result, err := exec.Execute(context.Background(), s.gotoLoopWorkflow(), nil)
+	s.Require().NoError(err)
+	s.Equal("success", result.Status)
+
+	var collected []event.Event
+
+	s.Eventually(func() bool {
+		for {
+			select {
+			case e := <-ch:
+				collected = append(collected, e)
+			default:
+				for _, e := range collected {
+					if e.Type == event.WorkflowCompleted {
+						return true
+					}
+				}
+
+				return false
+			}
+		}
+	}, 2*time.Second, 10*time.Millisecond)
+
+	var firstGoto *event.Event
+
+	workStartedCount := 0
+	gotoBeforeSecondWorkStart := false
+
+	for i := range collected {
+		e := collected[i]
+
+		if e.Type == event.StepStarted && e.StepID == "work" {
+			workStartedCount++
+			if workStartedCount == 2 && firstGoto != nil {
+				gotoBeforeSecondWorkStart = true
+			}
+		}
+
+		if e.Type == event.StepGoto && firstGoto == nil {
+			firstGoto = &collected[i]
+		}
+	}
+
+	s.Require().NotNil(firstGoto, "expected at least one step.goto event")
+
+	body, ok := firstGoto.Data["body"].([]any)
+	s.Require().True(ok, "step.goto Data[body] must be a list")
+
+	sorted := make([]string, 0, len(body))
+
+	for _, bid := range body {
+		id, isString := bid.(string)
+		s.Require().True(isString, "each body entry must be a step id string")
+
+		sorted = append(sorted, id)
+	}
+
+	sort.Strings(sorted)
+	s.Equal([]string{"loop", "save", "work"}, sorted)
+	s.True(gotoBeforeSecondWorkStart, "step.goto must precede the 2nd iteration step.started of work")
+}
+
+func (s *GotoTestSuite) TestGotoEvent_BodyNeverNil() {
+	exec, bus := newTestExecutor()
+	defer bus.Close()
+
+	ch := bus.Subscribe(10)
+
+	node := &DAGNode{Step: parser.Step{ID: "loop", Goto: &parser.GotoConfig{Target: "work", MaxIterations: 1}}}
+	execCtx := runtime.NewExecutionContext("exec-1", "wf", nil, nil)
+
+	exec.publishGotoEvent(execCtx, node, 0, 1, nil)
+	exec.publishGotoEvent(execCtx, node, 0, 1, []string{})
+
+	for i := 0; i < 2; i++ {
+		e := <-ch
+		body, ok := e.Data["body"].([]any)
+		s.Require().True(ok, "step.goto Data[body] must always be a list")
+		s.NotNil(body, "step.goto Data[body] must never be nil")
 	}
 }

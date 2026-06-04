@@ -126,9 +126,18 @@ func collectReadyLoopNodes(dag *DAG, li loopInfo, inDegree map[string]int) []*DA
 	return ready
 }
 
+// publishGotoEvent emits a StepGoto event whose Data["body"] is the
+// authoritative, non-nil list of step ids reset by the loop. Consumers (SSE
+// frontend, capture, recovery) rely on this list to clear stale step statuses;
+// it is guaranteed non-nil so a nil body never silently skips the reset.
 func (e *Executor) publishGotoEvent(
 	execCtx *runtime.ExecutionContext, n *DAGNode, iter, maxIter int, body []string,
 ) {
+	resetBody := body
+	if resetBody == nil {
+		resetBody = []string{}
+	}
+
 	e.bus.Publish(event.Event{
 		Type:        event.StepGoto,
 		Timestamp:   time.Now(),
@@ -139,7 +148,7 @@ func (e *Executor) publishGotoEvent(
 			"target":         n.Step.Goto.Target,
 			"iteration":      iter + 1,
 			"max_iterations": maxIter,
-			"body":           body,
+			"body":           resetBody,
 		},
 	})
 }
