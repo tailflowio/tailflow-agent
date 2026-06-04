@@ -12,9 +12,18 @@ trigger:
     method: POST
     path: /users
 
+stages:
+  - name: validate
+    description: "Validate and sanitize the incoming request"
+  - name: process
+    description: "Create the user entity"
+  - name: respond
+    description: "Return the HTTP response"
+
 steps:
   - id: validate
     action: js
+    stage: validate
     title: "Validate input"
     config:
       script: |
@@ -24,6 +33,7 @@ steps:
 
   - id: process
     action: js
+    stage: process
     title: "Process user"
     depends_on: [validate]
     config:
@@ -37,6 +47,7 @@ steps:
 
   - id: respond
     action: response
+    stage: respond
     title: "Send response"
     depends_on: [process]
     config:

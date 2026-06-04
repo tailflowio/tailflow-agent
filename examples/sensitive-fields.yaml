@@ -13,9 +13,18 @@ trigger:
     method: POST
     path: /api/data
 
+stages:
+  - name: auth
+    description: Obtain OAuth token via client credentials exchange
+  - name: fetch
+    description: Call the external API using the obtained token
+  - name: respond
+    description: Return the fetched data to the caller
+
 steps:
   - id: authenticate
     action: js
+    stage: auth
     title: "Exchange credentials for token"
     config:
       script: |
@@ -30,6 +39,7 @@ steps:
 
   - id: fetch-data
     action: js
+    stage: fetch
     title: "Call external API with token"
     depends_on: [authenticate]
     config:
@@ -47,6 +57,7 @@ steps:
 
   - id: respond
     action: response
+    stage: respond
     title: "Return data"
     depends_on: [fetch-data]
     config:

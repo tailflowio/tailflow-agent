@@ -8,9 +8,18 @@ trigger:
     method: POST
     path: /orders
 
+stages:
+  - name: intake
+    description: Validate and create the order
+  - name: confirmation
+    description: Wait for payment confirmation via RabbitMQ
+  - name: respond
+    description: Return the final response to the caller
+
 steps:
   - id: validate-input
     action: validate
+    stage: intake
     title: "Validate request"
     config:
       data: "{{ trigger.body }}"
@@ -19,6 +28,7 @@ steps:
 
   - id: create-order
     action: set
+    stage: intake
     title: "Create order"
     depends_on: [validate-input]
     config:
@@ -29,6 +39,7 @@ steps:
 
   - id: wait-confirmation
     action: wait.rabbitmq
+    stage: confirmation
     title: "Wait for confirmation"
     depends_on: [create-order]
     config:
@@ -40,6 +51,7 @@ steps:
 
   - id: respond
     action: response
+    stage: respond
     title: "Send response"
     depends_on: [wait-confirmation]
     config:

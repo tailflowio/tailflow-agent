@@ -16,15 +16,27 @@ params:
 env:
   API_BASE: "https://api.{{ params.environment }}.example.com"
 
+stages:
+  - name: build
+    description: "Checkout and compile the service"
+  - name: test
+    description: "Run the test suite"
+  - name: deploy
+    description: "Deploy the binary to the target environment"
+  - name: notify
+    description: "Notify the team of deployment completion"
+
 steps:
   - id: checkout
     action: log
+    stage: build
     title: "Checkout code"
     config:
       message: "Checking out code..."
 
   - id: build
     action: log
+    stage: build
     title: "Build binary"
     depends_on: [checkout]
     config:
@@ -32,6 +44,7 @@ steps:
 
   - id: test
     action: log
+    stage: test
     title: "Run tests"
     depends_on: [checkout]
     config:
@@ -39,6 +52,7 @@ steps:
 
   - id: deploy
     action: log
+    stage: deploy
     title: "Deploy to {{ params.environment }}"
     when: "params.dry_run == false"
     depends_on: [build, test]
@@ -47,6 +61,7 @@ steps:
 
   - id: notify
     action: log
+    stage: notify
     title: "Notify team"
     depends_on: [deploy]
     config:

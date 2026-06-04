@@ -1,15 +1,25 @@
 version: "2.0"
 name: parallel-exec
 
+stages:
+  - name: init
+    description: Initialize and announce parallel execution
+  - name: process
+    description: Run the two parallel tasks
+  - name: done
+    description: Report completion
+
 steps:
   - id: start
     action: log
+    stage: init
     title: Start
     config:
       message: "Launching two parallel tasks..."
 
   - id: task_a
     action: exec
+    stage: process
     title: Task A (5s)
     depends_on: [start]
     config:
@@ -17,6 +27,7 @@ steps:
 
   - id: task_b
     action: exec
+    stage: process
     title: Task B (5s)
     depends_on: [start]
     config:
@@ -24,6 +35,7 @@ steps:
 
   - id: finish
     action: log
+    stage: done
     title: Finish
     depends_on: [task_a, task_b]
     config:

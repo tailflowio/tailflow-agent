@@ -9,9 +9,18 @@ trigger:
     path: /reports/generate
     async: true
 
+stages:
+  - name: init
+    description: "Validate the request and create the report identifier"
+  - name: process
+    description: "Simulate report generation and build the result"
+  - name: finalize
+    description: "Persist the final report status"
+
 steps:
   - id: init
     action: js
+    stage: init
     title: "Initialize report"
     config:
       script: |
@@ -25,6 +34,7 @@ steps:
 
   - id: save-status
     action: kv.set
+    stage: init
     title: "Save initial status"
     depends_on: [init]
     config:
@@ -34,6 +44,7 @@ steps:
 
   - id: generate
     action: delay
+    stage: process
     title: "Simulate report generation"
     depends_on: [save-status]
     config:
@@ -41,6 +52,7 @@ steps:
 
   - id: build-result
     action: js
+    stage: process
     title: "Build report data"
     depends_on: [generate]
     config:
@@ -55,6 +67,7 @@ steps:
 
   - id: update-status
     action: kv.set
+    stage: finalize
     title: "Mark report as completed"
     depends_on: [build-result]
     config:

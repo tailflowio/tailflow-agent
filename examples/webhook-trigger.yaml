@@ -9,9 +9,16 @@ trigger:
     secret: "{{ env.GITHUB_WEBHOOK_SECRET }}"
     filter: "body.ref == 'refs/heads/main'"
 
+stages:
+  - name: receive
+    description: "Extract and log the incoming push event"
+  - name: store
+    description: "Persist the push metadata for later use"
+
 steps:
   - id: extract
     action: js
+    stage: receive
     title: "Extract push details"
     config:
       script: |
@@ -26,6 +33,7 @@ steps:
 
   - id: log-event
     action: log
+    stage: receive
     title: "Log push event"
     depends_on: [extract]
     config:
@@ -33,6 +41,7 @@ steps:
 
   - id: save-latest
     action: kv.set
+    stage: store
     title: "Store latest push metadata"
     depends_on: [extract]
     config:

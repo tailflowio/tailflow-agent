@@ -8,9 +8,18 @@ trigger:
     method: POST
     path: /users/register
 
+stages:
+  - name: validate
+    description: "Validate the registration input"
+  - name: process
+    description: "Hash the password and prepare the user record"
+  - name: respond
+    description: "Return the created user"
+
 steps:
   - id: validate
     action: validate
+    stage: validate
     title: "Validate registration data"
     config:
       data: "{{ trigger.body }}"
@@ -34,6 +43,7 @@ steps:
 
   - id: hash-password
     action: js
+    stage: process
     title: "Hash password"
     depends_on: [validate]
     config:
@@ -59,6 +69,7 @@ steps:
 
   - id: respond
     action: response
+    stage: respond
     title: "Return user"
     depends_on: [hash-password]
     config:

@@ -8,9 +8,16 @@ trigger:
     method: GET
     path: /api/public/users
 
+stages:
+  - name: query
+    description: "Fetch data from the database"
+  - name: respond
+    description: "Return the HTTP response"
+
 steps:
   - id: fetch
     action: sql.query
+    stage: query
     title: "Fetch active users"
     config:
       dsn: "{{ env.DATABASE_URL }}"
@@ -19,6 +26,7 @@ steps:
 
   - id: respond
     action: response
+    stage: respond
     title: "Return users"
     depends_on: [fetch]
     config:

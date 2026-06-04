@@ -8,8 +8,17 @@ trigger:
     method: POST
     path: /stock/reserve
 
+stages:
+  - name: lock
+    description: "Acquire distributed lock"
+  - name: transaction
+    description: "Check stock, compute and persist reservation, release lock"
+  - name: response
+    description: "Return reservation result"
+
 steps:
   - id: acquire
+    stage: lock
     action: lock
     title: "Acquire stock lock"
     config:
@@ -17,6 +26,7 @@ steps:
       timeout: "10s"
 
   - id: check-stock
+    stage: transaction
     action: kv.get
     title: "Read current stock"
     depends_on: [acquire]
@@ -24,6 +34,7 @@ steps:
       key: "stock:{{ trigger.body.sku }}"
 
   - id: evaluate
+    stage: transaction
     action: condition
     title: "Check availability"
     depends_on: [check-stock]
@@ -31,6 +42,7 @@ steps:
       expression: "{{ steps.check-stock.output.value ?? 0 }} >= {{ trigger.body.quantity ?? 1 }}"
 
   - id: decrement
+    stage: transaction
     action: js
     title: "Compute new stock level"
     depends_on: [evaluate]
@@ -42,6 +54,7 @@ steps:
         return { new_stock: current - qty };
 
   - id: save-stock
+    stage: transaction
     action: kv.set
     title: "Update stock"
     depends_on: [decrement]
@@ -51,6 +64,7 @@ steps:
       value: "{{ steps.decrement.output.new_stock }}"
 
   - id: release
+    stage: transaction
     action: unlock
     title: "Release stock lock"
     depends_on: [evaluate, save-stock]
@@ -58,6 +72,7 @@ steps:
       key: "stock-{{ trigger.body.sku }}"
 
   - id: respond
+    stage: response
     action: response
     title: "Return result"
     depends_on: [release]

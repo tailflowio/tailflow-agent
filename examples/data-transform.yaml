@@ -14,9 +14,20 @@ params:
     type: string
     default: "EUR"
 
+stages:
+  - name: build
+    description: "Assemble the order from input parameters"
+  - name: compute
+    description: "Calculate totals and taxes"
+  - name: encode
+    description: "Serialize and deserialize the order payload"
+  - name: render
+    description: "Generate and output the receipt"
+
 steps:
   - id: build_order
     action: object
+    stage: build
     title: "Build order object"
     config:
       product: "Widget Pro"
@@ -26,6 +37,7 @@ steps:
 
   - id: compute_total
     action: math
+    stage: compute
     title: "Compute total price"
     depends_on: [build_order]
     config:
@@ -33,6 +45,7 @@ steps:
 
   - id: compute_tax
     action: math
+    stage: compute
     title: "Compute tax (20%)"
     depends_on: [compute_total]
     config:
@@ -40,6 +53,7 @@ steps:
 
   - id: encode_payload
     action: json.encode
+    stage: encode
     title: "Encode order as JSON"
     depends_on: [build_order, compute_total, compute_tax]
     config:
@@ -52,6 +66,7 @@ steps:
 
   - id: decode_payload
     action: json.decode
+    stage: encode
     title: "Decode JSON back to object"
     depends_on: [encode_payload]
     config:
@@ -59,6 +74,7 @@ steps:
 
   - id: render_receipt
     action: template
+    stage: render
     title: "Render receipt from template"
     depends_on: [decode_payload]
     config:
@@ -78,6 +94,7 @@ steps:
 
   - id: done
     action: log
+    stage: render
     title: "Print receipt"
     depends_on: [render_receipt]
     config:

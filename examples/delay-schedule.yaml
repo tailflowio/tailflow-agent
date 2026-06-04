@@ -8,15 +8,25 @@ trigger:
     method: POST
     path: /delayed-task
 
+stages:
+  - name: receive
+    description: "Acknowledge the incoming request and wait before processing"
+  - name: process
+    description: "Execute the task and schedule a follow-up"
+  - name: respond
+    description: "Return the result to the caller"
+
 steps:
   - id: ack
     action: log
+    stage: receive
     title: "Acknowledge request"
     config:
       message: "Task received, processing in 2 seconds..."
 
   - id: wait
     action: delay
+    stage: receive
     title: "Wait before processing"
     depends_on: [ack]
     config:
@@ -24,6 +34,7 @@ steps:
 
   - id: process
     action: set
+    stage: process
     title: "Process the task"
     depends_on: [wait]
     config:
@@ -34,6 +45,7 @@ steps:
   # not the recurring `schedule` cron trigger.
   - id: schedule_followup
     action: schedule
+    stage: process
     title: "Schedule a follow-up in 1 minute"
     depends_on: [process]
     config:
@@ -44,6 +56,7 @@ steps:
 
   - id: respond
     action: response
+    stage: respond
     title: "Return result"
     depends_on: [schedule_followup]
     config:

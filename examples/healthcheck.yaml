@@ -7,14 +7,24 @@ trigger:
   schedule:
     cron: "*/1 * * * *"
 
+stages:
+  - name: setup
+    description: "Initialize counters and state"
+  - name: check
+    description: "Probe server and evaluate health"
+  - name: alert
+    description: "Send alert and reset counter on threshold breach"
+
 steps:
   - id: init
+    stage: setup
     action: set
     title: "Initialize failure counter"
     config:
       failures: 0
 
   - id: check_server
+    stage: check
     action: http
     title: "Check free.fr"
     depends_on: [init]
@@ -28,6 +38,7 @@ steps:
       method: GET
 
   - id: evaluate
+    stage: check
     action: js
     title: "Evaluate health status"
     depends_on: [check_server]
@@ -42,6 +53,7 @@ steps:
         return { healthy: true, failures: 0, message: "free.fr is UP" };
 
   - id: update_counter
+    stage: check
     action: set
     title: "Update failure counter"
     depends_on: [evaluate]
@@ -49,6 +61,7 @@ steps:
       failures: "{{ steps.evaluate.output.failures }}"
 
   - id: log_status
+    stage: check
     action: log
     title: "Log health status"
     depends_on: [update_counter]
@@ -56,6 +69,7 @@ steps:
       message: "{{ steps.evaluate.output.message }}"
 
   - id: send_alert
+    stage: alert
     action: http
     title: "Send alert email (via Mailgun)"
     depends_on: [log_status]
@@ -70,6 +84,7 @@ steps:
       body: "from=healthcheck@{{ env.MAILGUN_DOMAIN }}&to={{ env.ALERT_EMAIL }}&subject=ALERT: free.fr is DOWN&text=free.fr has been down for {{ vars.failures }} consecutive checks."
 
   - id: reset_after_alert
+    stage: alert
     action: set
     title: "Reset counter after alert"
     depends_on: [send_alert]
@@ -78,6 +93,7 @@ steps:
       failures: 0
 
   - id: done
+    stage: alert
     action: log
     title: "Check complete"
     depends_on: [log_status, reset_after_alert]

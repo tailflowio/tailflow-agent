@@ -13,11 +13,18 @@ trigger:
     method: POST
     path: /shovel
 
+stages:
+  - name: shovel
+    description: Move messages between queues (DLQ replay and cross-server forward)
+  - name: respond
+    description: Return aggregated shovel results to the caller
+
 steps:
   # --- Use case 1: replay failed messages from DLQ on the same server ---
 
   - id: replay-dlq
     action: rabbitmq.shovel
+    stage: shovel
     title: "Replay dead-letter messages"
     config:
       source_url: "{{ env.RABBITMQ_URL }}"
@@ -32,6 +39,7 @@ steps:
 
   - id: forward-cross-server
     action: rabbitmq.shovel
+    stage: shovel
     title: "Forward messages to remote server"
     depends_on: [replay-dlq]
     config:
@@ -45,6 +53,7 @@ steps:
 
   - id: respond
     action: response
+    stage: respond
     title: "Return results"
     depends_on: [replay-dlq, forward-cross-server]
     config:

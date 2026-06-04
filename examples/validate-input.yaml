@@ -8,9 +8,16 @@ trigger:
     method: POST
     path: /api/public/register
 
+stages:
+  - name: validate
+    description: "Validate the incoming request body"
+  - name: respond
+    description: "Return the appropriate HTTP response"
+
 steps:
   - id: check
     action: validate
+    stage: validate
     title: "Validate request body"
     config:
       data: "{{ trigger.body }}"
@@ -20,6 +27,7 @@ steps:
 
   - id: fail
     action: response
+    stage: respond
     title: "Return validation errors"
     depends_on: [check]
     condition: "{{ steps.check.output.valid == false }}"
@@ -31,6 +39,7 @@ steps:
 
   - id: ok
     action: response
+    stage: respond
     title: "Return success"
     depends_on: [check]
     condition: "{{ steps.check.output.valid == true }}"

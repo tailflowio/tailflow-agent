@@ -8,14 +8,20 @@ params:
     type: string
     default: "World"
 
+stages:
+  - name: main
+    description: "Greeting workflow"
+
 steps:
   - id: greet
+    stage: main
     action: log
     title: "Say hello"
     config:
       message: "Hello, {{ params.name }}!"
 
   - id: set_result
+    stage: main
     action: set
     title: "Set result"
     depends_on: [greet]
@@ -23,6 +29,7 @@ steps:
       greeting: "Hello, {{ params.name }}!"
 
   - id: done
+    stage: main
     action: log
     title: "Done"
     depends_on: [set_result]

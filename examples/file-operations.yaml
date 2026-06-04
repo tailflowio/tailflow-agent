@@ -9,8 +9,15 @@ params:
     default: "output.json"
     pattern: "[a-zA-Z0-9._-]+"
 
+stages:
+  - name: build
+    description: "Prepare and encode data"
+  - name: io
+    description: "Write, read back, and verify file"
+
 steps:
   - id: build_data
+    stage: build
     action: set
     title: "Build data to write"
     config:
@@ -25,6 +32,7 @@ steps:
             status: "ok"
 
   - id: encode
+    stage: build
     action: json.encode
     title: "Encode report as JSON"
     depends_on: [build_data]
@@ -32,6 +40,7 @@ steps:
       data: "{{ vars.report }}"
 
   - id: write_file
+    stage: io
     action: file.write
     title: "Write report to file"
     depends_on: [encode]
@@ -40,6 +49,7 @@ steps:
       content: "{{ steps.encode.output.json }}"
 
   - id: read_back
+    stage: io
     action: file.read
     title: "Read file back"
     depends_on: [write_file]
@@ -47,6 +57,7 @@ steps:
       path: "/tmp/{{ params.filename }}"
 
   - id: decode
+    stage: io
     action: json.decode
     title: "Decode file content"
     depends_on: [read_back]
@@ -54,6 +65,7 @@ steps:
       data: "{{ steps.read_back.output.content }}"
 
   - id: done
+    stage: io
     action: log
     title: "Verify round-trip"
     depends_on: [decode]

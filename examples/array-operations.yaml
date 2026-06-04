@@ -3,9 +3,20 @@ name: "array-operations"
 description: "Demonstrates array actions: sort, filter, map, uniq, pick, and concat"
 tags: ["example", "array"]
 
+stages:
+  - name: prepare
+    description: "Initialize sample data"
+  - name: transform
+    description: "Apply individual array operations"
+  - name: aggregate
+    description: "Combine and reduce results"
+  - name: report
+    description: "Log the final summary"
+
 steps:
   - id: prepare
     action: set
+    stage: prepare
     title: "Prepare sample data"
     config:
       products:
@@ -33,6 +44,7 @@ steps:
 
   - id: sort_by_price
     action: array.sort
+    stage: transform
     title: "Sort products by price (ascending)"
     depends_on: [prepare]
     config:
@@ -42,6 +54,7 @@ steps:
 
   - id: filter_electronics
     action: array.filter
+    stage: transform
     title: "Filter electronics only"
     depends_on: [prepare]
     config:
@@ -50,6 +63,7 @@ steps:
 
   - id: map_names
     action: array.map
+    stage: transform
     title: "Extract product names"
     depends_on: [prepare]
     config:
@@ -58,6 +72,7 @@ steps:
 
   - id: unique_tags
     action: array.uniq
+    stage: transform
     title: "Deduplicate tags"
     depends_on: [prepare]
     config:
@@ -65,6 +80,7 @@ steps:
 
   - id: pick_top3
     action: array.pick
+    stage: aggregate
     title: "Pick top 3 cheapest"
     depends_on: [sort_by_price]
     config:
@@ -73,6 +89,7 @@ steps:
 
   - id: concat_lists
     action: array.concat
+    stage: aggregate
     title: "Concat electronics + unique tags"
     depends_on: [map_names, unique_tags]
     config:
@@ -82,6 +99,7 @@ steps:
 
   - id: summary
     action: log
+    stage: report
     title: "Summary"
     depends_on: [sort_by_price, filter_electronics, map_names, unique_tags, pick_top3, concat_lists]
     config:

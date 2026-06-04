@@ -3,8 +3,15 @@ name: "js-workflow"
 description: "Demonstrates JavaScript scripting with goja"
 tags: ["example", "js"]
 
+stages:
+  - name: compute
+    description: "JavaScript computation"
+  - name: report
+    description: "Log and evaluate results"
+
 steps:
   - id: compute
+    stage: compute
     action: js
     title: "Compute fibonacci"
     config:
@@ -16,6 +23,7 @@ steps:
         return { result: fib(10), message: "Fibonacci(10) = " + fib(10) };
 
   - id: log_result
+    stage: report
     action: log
     title: "Log result"
     depends_on: [compute]
@@ -23,6 +31,7 @@ steps:
       message: "{{ steps.compute.output.message }}"
 
   - id: condition_check
+    stage: report
     action: condition
     title: "Check if result > 50"
     depends_on: [compute]
@@ -32,6 +41,7 @@ steps:
       else: "Result is 50 or less"
 
   - id: final
+    stage: report
     action: log
     title: "Final log"
     depends_on: [log_result, condition_check]

@@ -8,9 +8,18 @@ params:
     type: string
     default: "engineering"
 
+stages:
+  - name: prepare
+    description: Build the user list
+  - name: iterate
+    description: Loop and process each user
+  - name: report
+    description: Summarize and log results
+
 steps:
   - id: prepare_users
     action: set
+    stage: prepare
     title: "Prepare user list"
     config:
       users:
@@ -23,6 +32,7 @@ steps:
 
   - id: loop_users
     action: loop
+    stage: iterate
     title: "Iterate over users"
     depends_on: [prepare_users]
     config:
@@ -32,6 +42,7 @@ steps:
 
   - id: process_users
     action: loop
+    stage: iterate
     title: "Process users"
     depends_on: [prepare_users]
     config:
@@ -45,6 +56,7 @@ steps:
 
   - id: pipeline_users
     action: loop
+    stage: iterate
     title: "Pipeline over users"
     depends_on: [loop_users]
     config:
@@ -65,6 +77,7 @@ steps:
 
   - id: log_last
     action: log
+    stage: report
     title: "Log last user"
     depends_on: [loop_users]
     config:
@@ -72,6 +85,7 @@ steps:
 
   - id: summary
     action: js
+    stage: report
     title: "Build summary"
     depends_on: [loop_users]
     config:
@@ -82,6 +96,7 @@ steps:
 
   - id: done
     action: log
+    stage: report
     title: "Done"
     depends_on: [summary, process_users, pipeline_users]
     config:

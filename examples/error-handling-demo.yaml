@@ -22,9 +22,18 @@ on_error:
     config:
       workflow_failed: true
 
+stages:
+  - name: ingest
+    description: "Process all incoming orders with error tolerance"
+  - name: summarize
+    description: "Aggregate results and call external services"
+  - name: respond
+    description: "Return the final response to the caller"
+
 steps:
   - id: process_orders
     action: loop
+    stage: ingest
     title: "Process each order"
     config:
       items: "{{ trigger.body.orders }}"
@@ -46,6 +55,7 @@ steps:
 
   - id: build_summary
     action: set
+    stage: summarize
     title: "Build results summary"
     depends_on: [process_orders]
     config:
@@ -55,6 +65,7 @@ steps:
 
   - id: call_unreachable_api
     action: http
+    stage: summarize
     title: "Call unreachable API"
     depends_on: [build_summary]
     timeout: "1s"
@@ -80,6 +91,7 @@ steps:
 
   - id: respond
     action: response
+    stage: respond
     title: "Send response"
     depends_on: [build_summary, call_unreachable_api]
     config:

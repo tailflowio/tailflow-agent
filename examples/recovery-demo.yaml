@@ -20,14 +20,24 @@ trigger:
     path: /api/onboard
     idempotency_key: "{{ trigger.body.customer_id }}"
 
+stages:
+  - name: intake
+    description: Tag and validate incoming customer data
+  - name: provisioning
+    description: Create account and set up billing
+  - name: activation
+    description: Send welcome email and activate the customer
+
 steps:
   - id: tag-customer
     action: group
+    stage: intake
     config:
       key: "customer-{{ params.customer_id }}"
 
   - id: validate
     action: js
+    stage: intake
     depends_on: [tag-customer]
     config:
       code: |
@@ -36,6 +46,7 @@ steps:
 
   - id: send-welcome-email
     action: http
+    stage: activation
     depends_on: [validate]
     on_recovery: skip
     config:
@@ -47,6 +58,7 @@ steps:
 
   - id: create-account
     action: http
+    stage: provisioning
     depends_on: [validate]
     on_recovery: retry
     config:
@@ -59,6 +71,7 @@ steps:
 
   - id: setup-billing
     action: http
+    stage: provisioning
     depends_on: [create-account]
     on_recovery: fail
     config:
@@ -70,6 +83,7 @@ steps:
 
   - id: activate
     action: http
+    stage: activation
     depends_on: [send-welcome-email, setup-billing]
     config:
       url: "https://api.accounts.com/users/{{ params.customer_id }}/activate"

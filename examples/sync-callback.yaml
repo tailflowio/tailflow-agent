@@ -8,9 +8,18 @@ trigger:
     method: POST
     path: /ocr/submit
 
+stages:
+  - name: submit
+    description: "Validate and submit the document to the OCR provider"
+  - name: wait
+    description: "Wait for the external OCR callback"
+  - name: respond
+    description: "Return the OCR result to the caller"
+
 steps:
   - id: validate
     action: js
+    stage: submit
     title: "Validate document"
     config:
       script: |
@@ -24,6 +33,7 @@ steps:
 
   - id: send-to-provider
     action: js
+    stage: submit
     title: "Send to OCR provider"
     depends_on: [validate]
     config:
@@ -39,6 +49,7 @@ steps:
 
   - id: wait-result
     action: wait.webhook
+    stage: wait
     title: "Wait for OCR callback"
     depends_on: [send-to-provider]
     config:
@@ -47,6 +58,7 @@ steps:
 
   - id: respond
     action: response
+    stage: respond
     title: "Return OCR result"
     depends_on: [wait-result]
     config:

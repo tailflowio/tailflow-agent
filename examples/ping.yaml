@@ -11,9 +11,14 @@ params:
     default: "google.fr"
     pattern: "[a-zA-Z0-9._-]+"
 
+stages:
+  - name: execute
+    description: Run the ping command
+
 steps:
   - id: ping
     action: exec
+    stage: execute
     title: "Ping {{ params.host }}"
     config:
       command: "ping {{ params.host }}"

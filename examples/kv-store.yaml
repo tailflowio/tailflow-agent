@@ -8,14 +8,22 @@ trigger:
     method: POST
     path: /counter
 
+stages:
+  - name: read
+    description: "Read current value and compute next"
+  - name: write
+    description: "Persist updated value and respond"
+
 steps:
   - id: get_current
+    stage: read
     action: kv.get
     title: "Get current counter value"
     config:
       key: "counter:{{ trigger.body.name ?? 'default' }}"
 
   - id: compute_next
+    stage: read
     action: math
     title: "Increment counter"
     depends_on: [get_current]
@@ -23,6 +31,7 @@ steps:
       expression: "{{ steps.get_current.output.value ?? 0 }} + 1"
 
   - id: save_counter
+    stage: write
     action: kv.set
     title: "Save new counter value"
     depends_on: [compute_next]
@@ -31,6 +40,7 @@ steps:
       value: "{{ steps.compute_next.output.result }}"
 
   - id: check_reset
+    stage: write
     action: condition
     title: "Check if reset requested"
     depends_on: [save_counter]
@@ -38,6 +48,7 @@ steps:
       expression: "{{ trigger.body.reset ?? false }} == true"
 
   - id: delete_counter
+    stage: write
     action: kv.delete
     title: "Reset counter"
     depends_on: [check_reset]
@@ -46,6 +57,7 @@ steps:
       key: "counter:{{ trigger.body.name ?? 'default' }}"
 
   - id: respond
+    stage: write
     action: response
     title: "Return counter value"
     depends_on: [check_reset, delete_counter]
