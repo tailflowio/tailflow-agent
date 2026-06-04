@@ -69,14 +69,15 @@ func RunApp(ctx context.Context, cfg Config) error {
 	startCtx, startCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer startCancel()
 
-	err = app.Start(startCtx)
+	err = app.Start(startCtx) //nolint:contextcheck // intentional: fx start uses a fresh context independent of the run context
 	if err != nil {
 		return fmt.Errorf("fx start: %w", err)
 	}
 
-	defer func() {
+	defer func() { //nolint:contextcheck // intentional: shutdown uses a fresh context because the run context is already cancelled
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer stopCancel()
+
 		_ = app.Stop(stopCtx)
 	}()
 

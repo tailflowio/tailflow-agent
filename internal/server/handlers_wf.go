@@ -48,11 +48,13 @@ func (s *Server) handleGetWorkflowRaw(w http.ResponseWriter, r *http.Request) {
 		s.writeError(r.Context(), w, http.StatusNotFound, "no workflow file path")
 		return
 	}
+
 	data, err := os.ReadFile(s.config.FilePath)
 	if err != nil {
 		s.writeError(r.Context(), w, http.StatusInternalServerError, "read failed: "+err.Error())
 		return
 	}
+
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write(data)
 }
@@ -62,16 +64,20 @@ func (s *Server) handlePutWorkflowRaw(w http.ResponseWriter, r *http.Request) {
 		s.writeError(r.Context(), w, http.StatusForbidden, "editor disabled — restart with --editor")
 		return
 	}
+
 	if s.config.FilePath == "" {
 		s.writeError(r.Context(), w, http.StatusNotFound, "no workflow file path")
 		return
 	}
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		s.writeError(r.Context(), w, http.StatusBadRequest, "read body: "+err.Error())
 		return
 	}
+
 	defer func() { _ = r.Body.Close() }()
+
 	if len(body) == 0 {
 		s.writeError(r.Context(), w, http.StatusBadRequest, "empty body")
 		return
@@ -82,6 +88,7 @@ func (s *Server) handlePutWorkflowRaw(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(r.Context(), w, http.StatusBadRequest, api.ValidateResponse{Valid: false, Errors: []string{parseErr.Error()}})
 		return
 	}
+
 	validateErr := parser.Validate(wf)
 	if validateErr != nil {
 		s.writeJSON(r.Context(), w, http.StatusBadRequest, api.ValidateResponse{Valid: false, Errors: []string{validateErr.Error()}})

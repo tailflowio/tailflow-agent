@@ -26,9 +26,11 @@ func buildTreeLines(wf *parser.Workflow, dag *engine.DAG) []workflow.TreeLine {
 		if visited[node.Step.ID] {
 			return
 		}
+
 		visited[node.Step.ID] = true
 
 		s := stepIndex[node.Step.ID]
+
 		title := s.Title
 		if title == "" {
 			title = s.ID
@@ -43,6 +45,7 @@ func buildTreeLines(wf *parser.Workflow, dag *engine.DAG) []workflow.TreeLine {
 			ts.gotoTarget = s.Goto.Target
 			ts.gotoMax = s.Goto.MaxIterations
 		}
+
 		if s.Action == "loop" {
 			ts.pipeline = extractLoopPipeline(s.Config)
 		}
@@ -110,17 +113,20 @@ func (r *treeBuilder) resolveConvergent(dag *engine.DAG) {
 
 			for i, p := range node.Parents {
 				pid := p.Step.ID
+
 				st := r.steps[pid]
 				if st == nil {
 					allSiblings = false
 					break
 				}
+
 				if i == 0 {
 					sharedParent = st.parentID
 				} else if st.parentID != sharedParent {
 					allSiblings = false
 					break
 				}
+
 				parentIDs = append(parentIDs, pid)
 			}
 
@@ -133,6 +139,7 @@ func (r *treeBuilder) resolveConvergent(dag *engine.DAG) {
 			for i, oid := range r.order {
 				orderIdx[oid] = i
 			}
+
 			sort.Slice(parentIDs, func(a, b int) bool {
 				return orderIdx[parentIDs[a]] < orderIdx[parentIDs[b]]
 			})
@@ -144,6 +151,7 @@ func (r *treeBuilder) resolveConvergent(dag *engine.DAG) {
 				if dn == nil {
 					return
 				}
+
 				for _, c := range dn.Children {
 					if !descSet[c.Step.ID] {
 						descSet[c.Step.ID] = true
@@ -154,6 +162,7 @@ func (r *treeBuilder) resolveConvergent(dag *engine.DAG) {
 			collect(id)
 
 			var subtree, remaining []string
+
 			for _, oid := range r.order {
 				if descSet[oid] {
 					subtree = append(subtree, oid)
@@ -164,18 +173,21 @@ func (r *treeBuilder) resolveConvergent(dag *engine.DAG) {
 
 			lastParentID := parentIDs[len(parentIDs)-1]
 			lastParentIdx := -1
+
 			for i, oid := range remaining {
 				if oid == lastParentID {
 					lastParentIdx = i
 					break
 				}
 			}
+
 			if lastParentIdx == -1 {
 				processed[id] = true
 				continue
 			}
 
 			lastParentDepth := r.steps[lastParentID].depth
+
 			insertIdx := lastParentIdx + 1
 			for insertIdx < len(remaining) && r.steps[remaining[insertIdx]].depth > lastParentDepth {
 				insertIdx++
@@ -200,6 +212,7 @@ func (r *treeBuilder) resolveConvergent(dag *engine.DAG) {
 
 			for i, pid := range parentIDs {
 				pst := r.steps[pid]
+
 				switch {
 				case i == 0:
 					pst.mergeMarker = "┐"
@@ -212,6 +225,7 @@ func (r *treeBuilder) resolveConvergent(dag *engine.DAG) {
 
 			processed[id] = true
 			changed = true
+
 			break
 		}
 	}
@@ -224,13 +238,16 @@ func (r *treeBuilder) buildLoops() {
 		if st.gotoTarget == "" {
 			continue
 		}
+
 		startIdx := -1
+
 		for j, oid := range r.order {
 			if oid == st.gotoTarget {
 				startIdx = j
 				break
 			}
 		}
+
 		if startIdx >= 0 {
 			r.loops = append(r.loops, loopDisplay{startIdx: startIdx, endIdx: i})
 		}
@@ -249,20 +266,25 @@ func (r *treeBuilder) bracketChar(idx int, isAnnotation bool) string {
 	if len(r.loops) == 0 {
 		return ""
 	}
+
 	for _, ld := range r.loops {
 		if idx == ld.startIdx {
 			return "╭ "
 		}
+
 		if idx == ld.endIdx {
 			if isAnnotation {
 				return "╰ "
 			}
+
 			return "│ "
 		}
+
 		if idx > ld.startIdx && idx < ld.endIdx {
 			return "│ "
 		}
 	}
+
 	return "  "
 }
 
@@ -278,6 +300,7 @@ func (r *treeBuilder) treePrefix(id string) string {
 	}
 
 	var parts []string
+
 	cur := st.parentID
 	for d := st.depth - 1; d > 0; d-- {
 		parent := r.steps[cur]
@@ -286,6 +309,7 @@ func (r *treeBuilder) treePrefix(id string) string {
 		} else {
 			parts = append(parts, "│   ")
 		}
+
 		cur = parent.parentID
 	}
 
@@ -332,6 +356,7 @@ func (r *treeBuilder) render() []workflow.TreeLine {
 
 			cont := r.treeContinuation(id)
 			paBracket := r.bracketChar(idx, false)
+
 			paLabel := pa.Action
 			if pa.Title != "" {
 				paLabel = pa.Title
@@ -348,6 +373,7 @@ func (r *treeBuilder) render() []workflow.TreeLine {
 
 		if st.gotoTarget != "" {
 			closeBracket := r.bracketChar(idx, true)
+
 			gotoLabel := "↻ goto " + st.gotoTarget
 			if st.gotoMax > 0 {
 				gotoLabel += fmt.Sprintf(" (max %d)", st.gotoMax)
@@ -377,6 +403,7 @@ func (r *treeBuilder) treeContinuation(id string) string {
 	}
 
 	var parts []string
+
 	cur := st.parentID
 	for d := st.depth - 1; d > 0; d-- {
 		parent := r.steps[cur]
@@ -385,6 +412,7 @@ func (r *treeBuilder) treeContinuation(id string) string {
 		} else {
 			parts = append(parts, "│   ")
 		}
+
 		cur = parent.parentID
 	}
 

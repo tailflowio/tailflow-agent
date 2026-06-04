@@ -41,6 +41,7 @@ func (s *Store) RecoverExecutions(
 	if err != nil {
 		return nil, fmt.Errorf("mariadb recover: %w", err)
 	}
+
 	defer func() { _ = rows.Close() }()
 
 	var out []export.RecoveredExecution

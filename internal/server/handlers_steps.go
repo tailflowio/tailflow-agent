@@ -45,6 +45,7 @@ func (s *Server) handleGetAllStepMetrics(w http.ResponseWriter, r *http.Request)
 	}
 
 	maxHistory := 20
+
 	start := 0
 	if len(execs) > maxHistory {
 		start = len(execs) - maxHistory
@@ -152,8 +153,8 @@ func buildHistoryEntry(exec *store.Execution, sr *runtime.StepResult) stepHistor
 	entry := stepHistoryEntry{
 		ExecutionID: exec.ID,
 		Status:      sr.Status,
-		Output:     sr.Output,
-		Error:      errStr,
+		Output:      sr.Output,
+		Error:       errStr,
 	}
 
 	entry.StartedAt = exec.StartedAt.Format(time.RFC3339)

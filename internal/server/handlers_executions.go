@@ -117,7 +117,9 @@ func (s *Server) handleGetExecution(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, store.ErrNotFound) {
 			status = http.StatusNotFound
 		}
+
 		s.writeError(r.Context(), w, status, err.Error())
+
 		return
 	}
 
@@ -186,7 +188,9 @@ func (s *Server) handleCancelExecution(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, store.ErrNotFound) {
 			status = http.StatusNotFound
 		}
+
 		s.writeError(r.Context(), w, status, err.Error())
+
 		return
 	}
 

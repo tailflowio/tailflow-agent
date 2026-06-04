@@ -123,6 +123,7 @@ func (s *Store) UpdateExecution(ctx context.Context, id string, fn func(exec *st
 	if err != nil {
 		return fmt.Errorf("mariadb update: begin: %w", err)
 	}
+
 	defer func() { _ = tx.Rollback() }()
 
 	exec, err := s.lockExecution(ctx, tx, id)
@@ -158,6 +159,7 @@ func (s *Store) UpdateStep(ctx context.Context, executionID, stepID string, fn f
 	if err != nil {
 		return fmt.Errorf("mariadb update step: begin: %w", err)
 	}
+
 	defer func() { _ = tx.Rollback() }()
 
 	exec, err := s.lockExecution(ctx, tx, executionID)
@@ -203,6 +205,7 @@ func (s *Store) List(ctx context.Context) ([]*store.Execution, error) {
 	if err != nil {
 		return nil, fmt.Errorf("mariadb list: %w", err)
 	}
+
 	defer func() { _ = rows.Close() }()
 
 	var out []*store.Execution

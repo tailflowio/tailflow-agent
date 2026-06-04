@@ -81,6 +81,7 @@ func (s *Store) queryEvents(ctx context.Context, executionID string, offset, lim
 	if err != nil {
 		return nil, 0, fmt.Errorf("mariadb events: %w", err)
 	}
+
 	defer func() { _ = rows.Close() }()
 
 	out := make([]event.Event, 0, total)
@@ -124,6 +125,7 @@ func (s *Store) StepExecCounts(ctx context.Context) (map[string]int, error) {
 	if err != nil {
 		return nil, fmt.Errorf("mariadb step counts: %w", err)
 	}
+
 	defer func() { _ = rows.Close() }()
 
 	out := map[string]int{}

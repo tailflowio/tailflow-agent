@@ -67,9 +67,11 @@ func New(config Config) *Server {
 	if config.Exporter == nil {
 		config.Exporter = export.NewNoopExporter()
 	}
+
 	if config.Claimer == nil {
 		config.Claimer = export.NewNoopClaimer()
 	}
+
 	if config.Recoverer == nil {
 		config.Recoverer = export.NewNoopRecoverer()
 	}

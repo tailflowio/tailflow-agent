@@ -157,6 +157,11 @@ func captureStreams(ctx *ActionContext, stdoutPipe, stderrPipe io.Reader) (strin
 
 			ctx.EmitLog(prefix + line)
 		}
+
+		scanErr := scanner.Err()
+		if scanErr != nil {
+			ctx.EmitLog(prefix + "stream error: " + scanErr.Error())
+		}
 	}
 
 	wg.Add(2) //nolint:mnd // stdout + stderr

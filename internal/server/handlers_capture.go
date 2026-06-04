@@ -181,6 +181,7 @@ func (s *Server) applyWorkflowCompleted(executionID string, ev event.Event) {
 	})
 }
 
+//nolint:contextcheck // intentional: finalization persists via s.ctx and must outlive a cancelled execCtx
 func (s *Server) finalizeExecution(
 	executionID string, result *engine.ExecuteResult, err error, execCtx context.Context,
 ) {

@@ -261,6 +261,7 @@ func (s *Server) runWorkflowAsync(params map[string]any, opts ...asyncRunOpts) s
 	return executionID
 }
 
+//nolint:contextcheck // intentional: event persistence uses s.ctx to outlive a cancelled execCtx
 func (s *Server) ensureWorkflowCompleted(
 	executionID string, result *engine.ExecuteResult, err error, execCtx context.Context,
 ) {

@@ -21,6 +21,7 @@ func buildGraph(wf *parser.Workflow, dag *engine.DAG) workflow.Graph {
 	}
 
 	loopTargets := make(map[string]bool)
+
 	for _, s := range wf.Steps {
 		if s.Goto != nil {
 			loopTargets[s.Goto.Target] = true
