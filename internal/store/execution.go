@@ -30,7 +30,7 @@ type Execution struct {
 }
 
 // ExecutionStore is the contract for execution persistence. Implementations
-// may be in-memory, SQL (MariaDB/MySQL/Postgres), or columnar (ClickHouse).
+// may be in-memory or SQL (MariaDB/MySQL).
 // All methods accept a context for cancellation, deadlines and tracing.
 //
 // Writes return error so backends backed by network/disk can propagate
@@ -363,7 +363,7 @@ func (s *MemoryExecutionStore) StepExecCounts(_ context.Context) (map[string]int
 // RefreshStepMetrics recomputes cached step metrics from all stored executions.
 // Designed to be called periodically by a background goroutine. It is not part
 // of the ExecutionStore interface — backends that compute metrics on demand
-// (SQL, ClickHouse) do not need it.
+// (SQL) do not need it.
 func (s *MemoryExecutionStore) RefreshStepMetrics() {
 	s.mu.RLock()
 
@@ -386,7 +386,7 @@ func (s *MemoryExecutionStore) RefreshStepMetrics() {
 }
 
 // ComputeStepMetrics aggregates StepMetrics from a slice of executions.
-// Exported so out-of-package backends (mariadb, clickhouse) can reuse it.
+// Exported so out-of-package backends (mariadb) can reuse it.
 func ComputeStepMetrics(execs []*Execution) map[string]*StepMetrics {
 	return computeStepMetrics(execs)
 }

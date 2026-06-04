@@ -206,7 +206,7 @@ func (s *Server) recoverExecutions(ctx context.Context) {
 }
 
 // stepMetricsRefresher is implemented by stores that maintain a precomputed
-// metrics cache (currently only the in-memory store). SQL/ClickHouse backends
+// metrics cache (currently only the in-memory store). SQL backends
 // compute metrics on demand and do not implement this interface.
 type stepMetricsRefresher interface {
 	RefreshStepMetrics()

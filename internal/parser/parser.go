@@ -77,7 +77,7 @@ func validatePersistence(w *Workflow) error {
 
 	switch p.Type {
 	case "", PersistenceMemory:
-		if p.MariaDB != nil || p.ClickHouse != nil {
+		if p.MariaDB != nil {
 			return fmt.Errorf("validation: persistence.type %q must not declare other backend sub-blocks", p.Type)
 		}
 
@@ -96,29 +96,14 @@ func validatePersistence(w *Workflow) error {
 			return errors.New("validation: persistence.mariadb.dsn is required")
 		}
 
-		if p.Memory != nil || p.ClickHouse != nil {
+		if p.Memory != nil {
 			return errors.New("validation: persistence.type \"mariadb\" must not declare other backend sub-blocks")
 		}
 
 		return nil
 
-	case PersistenceClickHouse:
-		if p.ClickHouse == nil {
-			return errors.New("validation: persistence.type \"clickhouse\" requires a persistence.clickhouse sub-block")
-		}
-
-		if p.ClickHouse.DSN == "" {
-			return errors.New("validation: persistence.clickhouse.dsn is required")
-		}
-
-		if p.Memory != nil || p.MariaDB != nil {
-			return errors.New("validation: persistence.type \"clickhouse\" must not declare other backend sub-blocks")
-		}
-
-		return nil
-
 	default:
-		return fmt.Errorf("validation: persistence.type %q is not supported (memory, mariadb, clickhouse)", p.Type)
+		return fmt.Errorf("validation: persistence.type %q is not supported (memory, mariadb)", p.Type)
 	}
 }
 

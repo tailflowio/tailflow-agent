@@ -23,19 +23,17 @@ type Workflow struct {
 
 // Supported persistence backend identifiers for Workflow.Persistence.Type.
 const (
-	PersistenceMemory     = "memory"
-	PersistenceMariaDB    = "mariadb"
-	PersistenceClickHouse = "clickhouse"
+	PersistenceMemory  = "memory"
+	PersistenceMariaDB = "mariadb"
 )
 
 // Persistence configures the execution-history backend. When omitted the
 // agent defaults to in-memory storage with the CLI --max-executions cap.
 // The Type discriminates which sub-block must be populated.
 type Persistence struct {
-	Type       string                 `json:"type"                 yaml:"type"`
-	Memory     *MemoryPersistence     `json:"memory,omitempty"     yaml:"memory,omitempty"`
-	MariaDB    *MariaDBPersistence    `json:"mariadb,omitempty"    yaml:"mariadb,omitempty"`
-	ClickHouse *ClickHousePersistence `json:"clickhouse,omitempty" yaml:"clickhouse,omitempty"`
+	Type    string              `json:"type"              yaml:"type"`
+	Memory  *MemoryPersistence  `json:"memory,omitempty"  yaml:"memory,omitempty"`
+	MariaDB *MariaDBPersistence `json:"mariadb,omitempty" yaml:"mariadb,omitempty"`
 }
 
 // MemoryPersistence configures the in-memory ring-buffer backend. When set,
@@ -49,13 +47,6 @@ type MemoryPersistence struct {
 type MariaDBPersistence struct {
 	DSN         string `json:"dsn"                     yaml:"dsn"`
 	TablePrefix string `json:"table_prefix,omitempty"  yaml:"table_prefix,omitempty"`
-}
-
-// ClickHousePersistence configures the ClickHouse backend. The DSN supports
-// ${VAR} env interpolation so secrets stay out of versioned YAML.
-type ClickHousePersistence struct {
-	DSN         string `json:"dsn"                    yaml:"dsn"`
-	TablePrefix string `json:"table_prefix,omitempty" yaml:"table_prefix,omitempty"`
 }
 
 type Stage struct {

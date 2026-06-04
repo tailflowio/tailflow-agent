@@ -848,34 +848,6 @@ func (s *ParserTestSuite) TestValidate_PersistenceMariaDBMissingDSN() {
 	s.Contains(err.Error(), "dsn is required")
 }
 
-func (s *ParserTestSuite) TestValidate_PersistenceClickHouse() {
-	w := newValidPersistenceWorkflow()
-	w.Persistence = &Persistence{
-		Type:       PersistenceClickHouse,
-		ClickHouse: &ClickHousePersistence{DSN: "clickhouse://localhost:9000/tailflow"},
-	}
-	s.NoError(Validate(w))
-}
-
-func (s *ParserTestSuite) TestValidate_PersistenceClickHouseMissingSubBlock() {
-	w := newValidPersistenceWorkflow()
-	w.Persistence = &Persistence{Type: PersistenceClickHouse}
-	err := Validate(w)
-	s.Require().Error(err)
-	s.Contains(err.Error(), "persistence.clickhouse")
-}
-
-func (s *ParserTestSuite) TestValidate_PersistenceClickHouseMissingDSN() {
-	w := newValidPersistenceWorkflow()
-	w.Persistence = &Persistence{
-		Type:       PersistenceClickHouse,
-		ClickHouse: &ClickHousePersistence{},
-	}
-	err := Validate(w)
-	s.Require().Error(err)
-	s.Contains(err.Error(), "dsn is required")
-}
-
 func (s *ParserTestSuite) TestValidate_PersistenceUnknownType() {
 	w := newValidPersistenceWorkflow()
 	w.Persistence = &Persistence{Type: "redis"}
@@ -887,9 +859,9 @@ func (s *ParserTestSuite) TestValidate_PersistenceUnknownType() {
 func (s *ParserTestSuite) TestValidate_PersistenceMariaDBWithExtraSubBlockRejected() {
 	w := newValidPersistenceWorkflow()
 	w.Persistence = &Persistence{
-		Type:       PersistenceMariaDB,
-		MariaDB:    &MariaDBPersistence{DSN: "user@/db"},
-		ClickHouse: &ClickHousePersistence{DSN: "clickhouse://x/y"},
+		Type:    PersistenceMariaDB,
+		MariaDB: &MariaDBPersistence{DSN: "user@/db"},
+		Memory:  &MemoryPersistence{MaxExecutions: 1},
 	}
 	err := Validate(w)
 	s.Require().Error(err)
