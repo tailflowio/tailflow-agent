@@ -30,6 +30,8 @@ steps:
       result: "completed"
       processed_at: "{{ now() }}"
 
+  # One-shot deferred execution (delay/at). This is the `schedule` action,
+  # not the recurring `schedule` cron trigger.
   - id: schedule_followup
     action: schedule
     title: "Schedule a follow-up in 1 minute"

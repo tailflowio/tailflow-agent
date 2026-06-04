@@ -128,7 +128,9 @@ type Trigger struct {
 	RabbitMQ *RabbitMQTrigger `json:"rabbitmq,omitempty" yaml:"rabbitmq,omitempty"`
 }
 
-// ScheduleTrigger triggers a workflow on a cron schedule.
+// ScheduleTrigger triggers a workflow on a recurring cron schedule.
+// It is distinct from the one-shot "schedule" action (delay/at), which defers
+// a single future execution from within a running workflow.
 type ScheduleTrigger struct {
 	Cron string `json:"cron" yaml:"cron"`
 }

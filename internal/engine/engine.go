@@ -1270,7 +1270,8 @@ func (e *Executor) checkTestExpect(step parser.Step, expect *parser.TestCaseExpe
 	}
 
 	if expect.Output != nil {
-		if err := partialMatch(step.ID, "output", expect.Output, result.Output); err != nil {
+		err := partialMatch(step.ID, "output", expect.Output, result.Output)
+		if err != nil {
 			return err
 		}
 	}
@@ -1306,7 +1307,8 @@ func partialMatch(stepID, path string, expected, actual any) error {
 				return fmt.Errorf("test expect: step %q %s.%s missing", stepID, path, k)
 			}
 
-			if err := partialMatch(stepID, path+"."+k, v, av); err != nil {
+			err := partialMatch(stepID, path+"."+k, v, av)
+			if err != nil {
 				return err
 			}
 		}
@@ -1322,7 +1324,8 @@ func partialMatch(stepID, path string, expected, actual any) error {
 		}
 
 		for i := range exp {
-			if err := partialMatch(stepID, fmt.Sprintf("%s[%d]", path, i), exp[i], actSlice[i]); err != nil {
+			err := partialMatch(stepID, fmt.Sprintf("%s[%d]", path, i), exp[i], actSlice[i])
+			if err != nil {
 				return err
 			}
 		}

@@ -368,7 +368,7 @@ TailFlow ships with **34 built-in actions**:
 |----------|---------|-------------|
 | **Core** | `set`, `log`, `response` | Variables, logging, HTTP responses |
 | **Scripting** | `js`, `template` | JavaScript (ES6 via Goja) execution, template rendering |
-| **Control** | `condition`, `loop`, `delay`, `schedule` | Branching, iteration, waiting, deferred execution |
+| **Control** | `condition`, `loop`, `delay`, `schedule` | Branching, iteration, waiting, one-shot deferred execution (the `schedule` action is one-shot via `delay`/`at`, distinct from the recurring `schedule` cron trigger below) |
 | **HTTP** | `http` | REST calls with full control (headers, auth, retries) |
 | **Database** | `sql.query`, `sql.exec`, `sql.begin`, `sql.commit`, `sql.rollback` | Full SQL with ACID transactions |
 | **Data** | `json.decode`, `json.encode`, `validate` | Data transformation and validation |
@@ -432,7 +432,7 @@ TailFlow supports 4 trigger types:
 |---------|-------------|---------|
 | **HTTP** | Expose workflow as REST endpoint | `trigger: { http: { method: POST, path: /api, async: false } }` |
 | **Webhook** | Listen for incoming webhooks with optional HMAC validation and filtering | `trigger: { webhook: { path: /hook, secret: "...", filter: "..." } }` |
-| **Schedule** | Cron-based execution | `trigger: { schedule: { cron: "*/5 * * * *" } }` |
+| **Schedule** | Cron-based recurring execution (distinct from the one-shot `schedule` action, which defers a single run via `delay`/`at`) | `trigger: { schedule: { cron: "*/5 * * * *" } }` |
 | **RabbitMQ** | Process messages from a queue | `trigger: { rabbitmq: { url: "...", queue: "orders" } }` |
 
 ---
@@ -623,7 +623,7 @@ trigger:                          # Trigger (server mode only)
     secret: "my-secret"           # Optional HMAC validation
     filter: "body.type == 'order'" # Optional JS filter expression
   # OR
-  schedule:                       # Cron trigger
+  schedule:                       # Recurring cron trigger (distinct from the one-shot `schedule` action)
     cron: "*/5 * * * *"
   # OR
   rabbitmq:                       # RabbitMQ consumer

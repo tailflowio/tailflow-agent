@@ -6,9 +6,13 @@ import (
 	"time"
 )
 
-// ScheduleAction schedules a future workflow execution.
+// ScheduleAction defers a single one-shot future workflow execution.
+// It is distinct from the recurring "schedule" cron trigger (ScheduleTrigger):
+// the action fires once via 'delay' or 'at' from within a running workflow,
+// whereas the trigger re-runs the whole workflow on a cron cadence.
 type ScheduleAction struct{}
 
+// NewScheduleAction returns the one-shot scheduling action (delay/at).
 func NewScheduleAction() Action { return &ScheduleAction{} }
 
 func (a *ScheduleAction) Validate(ctx *ActionContext) error {

@@ -82,12 +82,14 @@ func (s *Server) handlePutWorkflowRaw(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(r.Context(), w, http.StatusBadRequest, api.ValidateResponse{Valid: false, Errors: []string{parseErr.Error()}})
 		return
 	}
-	if validateErr := parser.Validate(wf); validateErr != nil {
+	validateErr := parser.Validate(wf)
+	if validateErr != nil {
 		s.writeJSON(r.Context(), w, http.StatusBadRequest, api.ValidateResponse{Valid: false, Errors: []string{validateErr.Error()}})
 		return
 	}
 
-	if writeErr := os.WriteFile(s.config.FilePath, body, 0o644); writeErr != nil {
+	writeErr := os.WriteFile(s.config.FilePath, body, 0o644)
+	if writeErr != nil {
 		s.writeError(r.Context(), w, http.StatusInternalServerError, "write failed: "+writeErr.Error())
 		return
 	}
