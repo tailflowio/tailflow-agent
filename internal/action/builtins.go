@@ -1,17 +1,6 @@
 package action
 
-// unsafeRegistration pairs a name with its factory.
-type unsafeRegistration struct {
-	name    string
-	factory ActionFactory
-}
-
-// unsafeRegistrations is populated by init() in builtins_unsafe.go (excluded in SaaS builds).
-var unsafeRegistrations []unsafeRegistration
-
 // RegisterBuiltins registers all built-in actions.
-// Actions guarded by the "saas" build tag (exec, js, file.*) are only
-// included when building without -tags saas.
 func RegisterBuiltins(reg *Registry) {
 	// Safe actions — always available
 	reg.Register("set", NewSetAction)
@@ -53,8 +42,10 @@ func RegisterBuiltins(reg *Registry) {
 	reg.Register("kv.delete", NewKVDeleteAction)
 	reg.Register("group", NewGroupAction)
 
-	// Unsafe actions — excluded from SaaS builds
-	for _, r := range unsafeRegistrations {
-		reg.Register(r.name, r.factory)
-	}
+	// Powerful actions (exec, js, file.*): direct code/filesystem access,
+	// blocked by the default allowlist unless the operator passes --unsafe.
+	reg.Register("exec", NewExecAction)
+	reg.Register("js", NewJSAction)
+	reg.Register("file.read", NewFileReadAction)
+	reg.Register("file.write", NewFileWriteAction)
 }

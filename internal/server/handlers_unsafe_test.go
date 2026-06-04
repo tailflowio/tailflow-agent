@@ -1,5 +1,3 @@
-//go:build !saas
-
 package server
 
 import (
