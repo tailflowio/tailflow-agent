@@ -46,8 +46,13 @@ type shovelAMQPConn interface {
 	Close() error
 }
 
+// shovelRawDialFn is the low-level AMQP dial — replaced in tests to avoid hitting a real broker.
+var shovelRawDialFn = func(url string) (shovelAMQPConn, error) {
+	return amqp.Dial(url)
+}
+
 var shovelDialFn = func(url string) (shovelConnector, error) {
-	c, err := amqp.Dial(url)
+	c, err := shovelRawDialFn(url)
 	if err != nil {
 		return nil, err
 	}

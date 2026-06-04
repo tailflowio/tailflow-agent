@@ -9,6 +9,8 @@ import (
 	uberfx "go.uber.org/fx"
 )
 
+var tfotelSetup = tfotel.Setup
+
 type OTelIn struct {
 	uberfx.In
 
@@ -23,7 +25,7 @@ type OTelOut struct {
 }
 
 func NewOTel(in OTelIn) (out OTelOut, err error) {
-	res, setupErr := tfotel.Setup(context.Background(), in.Config.OTel)
+	res, setupErr := tfotelSetup(context.Background(), in.Config.OTel)
 	if setupErr != nil {
 		return out, fmt.Errorf("otel setup: %w", setupErr)
 	}

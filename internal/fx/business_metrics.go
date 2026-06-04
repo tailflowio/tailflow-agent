@@ -7,6 +7,8 @@ import (
 	uberfx "go.uber.org/fx"
 )
 
+var tfotelNewBusinessMetrics = tfotel.NewBusinessMetrics
+
 type BusinessMetricsIn struct {
 	uberfx.In
 
@@ -20,7 +22,7 @@ type BusinessMetricsOut struct {
 }
 
 func NewBusinessMetrics(in BusinessMetricsIn) (out BusinessMetricsOut, err error) {
-	bm, bmErr := tfotel.NewBusinessMetrics(in.Result.MeterProvider)
+	bm, bmErr := tfotelNewBusinessMetrics(in.Result.MeterProvider)
 	if bmErr != nil {
 		return out, fmt.Errorf("otel business metrics: %w", bmErr)
 	}

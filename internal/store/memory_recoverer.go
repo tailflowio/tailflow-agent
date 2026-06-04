@@ -9,11 +9,17 @@ import (
 
 var _ export.ExecutionRecoverer = (*MemoryRecoverer)(nil)
 
+// executionLister is a subset of ExecutionStore used by MemoryRecoverer.
+// Kept unexported: external callers always pass *MemoryExecutionStore.
+type executionLister interface {
+	List(ctx context.Context) ([]*Execution, error)
+}
+
 // MemoryRecoverer scans a MemoryExecutionStore for executions left in a
 // non-terminal state. The agent is self-hosted mono-instance, so the scan is
 // lock-free and the agentID argument is ignored.
 type MemoryRecoverer struct {
-	store *MemoryExecutionStore
+	store executionLister
 }
 
 // NewMemoryRecoverer returns a MemoryRecoverer backed by the given store.

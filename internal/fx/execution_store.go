@@ -10,6 +10,8 @@ import (
 	uberfx "go.uber.org/fx"
 )
 
+var mariaDBNewFn = mariadb.New
+
 type ExecutionStoreIn struct {
 	uberfx.In
 
@@ -49,7 +51,7 @@ func NewExecutionStore(in ExecutionStoreIn) (ExecutionStoreOut, error) {
 func newMariaDBStore(in ExecutionStoreIn) (ExecutionStoreOut, error) {
 	cfg := in.Workflow.Persistence.MariaDB
 
-	s, err := mariadb.New(context.Background(), cfg.DSN, cfg.TablePrefix)
+	s, err := mariaDBNewFn(context.Background(), cfg.DSN, cfg.TablePrefix)
 	if err != nil {
 		return ExecutionStoreOut{}, err
 	}

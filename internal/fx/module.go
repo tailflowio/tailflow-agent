@@ -15,6 +15,10 @@ import (
 	uberfx "go.uber.org/fx"
 )
 
+var appStartFunc = func(app *uberfx.App, ctx context.Context) error {
+	return app.Start(ctx)
+}
+
 // Config carries every input the serve fx app needs. It is supplied to the
 // app via uberfx.Supply and consumed by the providers below.
 type Config struct {
@@ -69,7 +73,7 @@ func RunApp(ctx context.Context, cfg Config) error {
 	startCtx, startCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer startCancel()
 
-	err = app.Start(startCtx) //nolint:contextcheck // intentional: fx start uses a fresh context independent of the run context
+	err = appStartFunc(app, startCtx) //nolint:contextcheck // intentional: fx start uses a fresh context independent of the run context
 	if err != nil {
 		return fmt.Errorf("fx start: %w", err)
 	}
