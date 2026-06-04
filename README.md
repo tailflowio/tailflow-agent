@@ -88,8 +88,8 @@ tailflow run examples/hello.yaml -p name=World
 # Server mode - embedded UI + API + triggers
 tailflow serve examples/sync-callback.yaml --port 8080
 
-# Self-hosted mode - enables exec, js, file.* actions
-tailflow serve --selfhosted examples/ping.yaml
+# Unsafe mode - disables the default allowlist, enables exec, js, file.* actions
+tailflow serve --unsafe examples/ping.yaml
 ```
 
 ### `.env` support
@@ -522,7 +522,7 @@ tailflow serve <workflow.yaml> [flags]
 |------|---------|-------------|
 | `--port, -P` | `8080` | Server port |
 | `--max-executions` | `100` | Max executions kept in memory |
-| `--selfhosted` | `false` | Enable exec, js, file.* actions |
+| `--unsafe` | `false` | Disable the default allowlist: enable exec, js, file.* actions |
 
 ### `tailflow validate`
 

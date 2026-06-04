@@ -36,7 +36,7 @@ steps:
 		WorkflowPath: wfPath,
 		Port:         0,
 		MaxExecs:     10,
-		SelfHosted:   true,
+		Unsafe:       true,
 		Editor:       false,
 		Version:      "test",
 		LogLevel:     slog.LevelError + 1,

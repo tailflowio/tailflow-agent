@@ -21,11 +21,14 @@ type Config struct {
 	WorkflowPath string
 	Port         int
 	MaxExecs     int
-	SelfHosted   bool
-	Editor       bool
-	Version      string
-	OTel         tfotel.Config
-	LogLevel     slog.Level
+	// Unsafe disables the default action allowlist when true. Secure by
+	// default: when false (the default) the allowlist is active and dangerous
+	// actions (exec, js, file.*) are blocked.
+	Unsafe   bool
+	Editor   bool
+	Version  string
+	OTel     tfotel.Config
+	LogLevel slog.Level
 }
 
 // ServeModule bundles every provider required to run `tailflow serve`.

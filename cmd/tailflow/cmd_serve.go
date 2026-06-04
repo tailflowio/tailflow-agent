@@ -14,10 +14,10 @@ import (
 
 func serveCmd(otelEndpoint, otelServiceName *string) *cobra.Command {
 	var (
-		port       int
-		maxExecs   int
-		selfHosted bool
-		editor     bool
+		port     int
+		maxExecs int
+		unsafe   bool
+		editor   bool
 	)
 
 	cmd := &cobra.Command{
@@ -27,18 +27,18 @@ func serveCmd(otelEndpoint, otelServiceName *string) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			otelCfg := resolveOTelConfig(otelEndpoint, otelServiceName)
 
-			return executeServe(args[0], port, maxExecs, selfHosted, editor, otelCfg)
+			return executeServe(args[0], port, maxExecs, unsafe, editor, otelCfg)
 		},
 	}
 	cmd.Flags().IntVarP(&port, "port", "P", 8080, "Server port")
 	cmd.Flags().IntVar(&maxExecs, "max-executions", 100, "Max executions to keep in memory")
-	cmd.Flags().BoolVar(&selfHosted, "selfhosted", false, "Enable all actions (exec, js, file.*) for self-hosted deployments")
+	cmd.Flags().BoolVar(&unsafe, "unsafe", false, "Disable the default action allowlist: allow exec, js and file.* actions (use only on trusted self-hosted instances)")
 	cmd.Flags().BoolVar(&editor, "editor", false, "Enable workflow editor: persist YAML changes via PUT /api/workflow/raw")
 
 	return cmd
 }
 
-func executeServe(path string, port, maxExecs int, selfHosted, editor bool, otelCfg tfotel.Config) error {
+func executeServe(path string, port, maxExecs int, unsafe, editor bool, otelCfg tfotel.Config) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
@@ -46,7 +46,7 @@ func executeServe(path string, port, maxExecs int, selfHosted, editor bool, otel
 		WorkflowPath: path,
 		Port:         port,
 		MaxExecs:     maxExecs,
-		SelfHosted:   selfHosted,
+		Unsafe:       unsafe,
 		Editor:       editor,
 		Version:      version,
 		OTel:         otelCfg,

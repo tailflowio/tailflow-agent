@@ -21,16 +21,16 @@ func NewActionRegistry(in ActionRegistryIn) ActionRegistryOut {
 	reg := action.NewRegistry()
 	action.RegisterBuiltins(reg)
 
-	if !in.Config.SelfHosted {
-		reg.SetAllowlist(saasAllowedActions(reg.Names()))
+	if !in.Config.Unsafe {
+		reg.SetAllowlist(safeAllowedActions(reg.Names()))
 	}
 
 	return ActionRegistryOut{Registry: reg}
 }
 
-// saasAllowedActions filters out actions that should not be runnable on a
-// hosted SaaS deployment (raw exec / js / file IO).
-func saasAllowedActions(all []string) []string {
+// safeAllowedActions filters out actions that are unsafe to expose by default
+// (raw exec / js / file IO).
+func safeAllowedActions(all []string) []string {
 	blocked := map[string]bool{
 		"js":         true,
 		"exec":       true,
